@@ -105,6 +105,8 @@ def json_loads(value: str) -> Any:
 
 
 def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
+    if os.getenv("MGA_REQUIRE_API_KEY", "").strip().lower() not in {"1", "true", "yes", "si"}:
+        return
     expected = os.getenv("MGA_API_KEY", "").strip()
     if expected and x_mga_api_key != expected:
         raise HTTPException(status_code=401, detail="API key invalida.")
