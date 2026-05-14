@@ -286,3 +286,34 @@ async def desktop_ack(request: Request, _auth: str | None = Header(default=None,
             row.desktop_imported_at = now
         session.commit()
     return {"ok": True, "updated": len(clean_ids)}
+
+
+@app.post("/api/mobile/status")
+async def mobile_status(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    ids = payload.get("mobile_ids") if isinstance(payload, dict) else []
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="mobile_ids invalido.")
+    clean_ids = [str(item).strip() for item in ids if str(item).strip()]
+    if not clean_ids:
+        return {"ok": True, "statuses": []}
+    with SessionLocal() as session:
+        rows = session.scalars(select(MobileCapture).where(MobileCapture.mobile_id.in_(clean_ids))).all()
+        by_id = {row.mobile_id: row for row in rows}
+        statuses = []
+        for mobile_id in clean_ids:
+            row = by_id.get(mobile_id)
+            if row is None:
+                statuses.append({"mobile_id": mobile_id, "uploaded": False, "desktop_imported": False})
+                continue
+            statuses.append(
+                {
+                    "mobile_id": mobile_id,
+                    "uploaded": True,
+                    "capture_id": row.id,
+                    "desktop_imported": row.desktop_imported_at is not None,
+                    "desktop_imported_at": row.desktop_imported_at.isoformat(timespec="seconds") if row.desktop_imported_at else "",
+                }
+            )
+    return {"ok": True, "statuses": statuses}
