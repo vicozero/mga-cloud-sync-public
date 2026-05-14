@@ -25,6 +25,7 @@ Opcion recomendada: usar el `render.yaml`.
    - Base PostgreSQL `mga-cloud-sync-db`.
    - Variable `DATABASE_URL`.
    - Variable `MGA_API_KEY`.
+   - En este paquete esta configurado en plan gratis para prueba.
 4. Al terminar, abre:
    - `https://TU-SERVICIO.onrender.com/health`
    - Debe responder `service: mga-cloud-sync`.
@@ -37,6 +38,8 @@ Opcion manual si no usas Blueprint:
 - Variables:
   - `DATABASE_URL`: URL de PostgreSQL en Render.
   - `MGA_API_KEY`: una clave privada que tambien pondras en el escritorio.
+
+Nota: Render indica que las bases Postgres gratis expiran despues de 30 dias. Para uso diario real, cambia `plan: free` por un plan pagado vigente en `render.yaml`.
 
 Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$PORT`. Referencias oficiales:
 
