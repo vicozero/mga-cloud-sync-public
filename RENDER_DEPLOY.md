@@ -22,7 +22,6 @@ Opcion recomendada: usar el `render.yaml`.
 2. En Render, crea un Blueprint y selecciona el repositorio.
 3. Render detectara `render.yaml` y creara:
    - Web service `mga-cloud-sync`.
-   - Variable `MGA_API_KEY`.
    - En este paquete esta configurado en plan gratis para prueba.
    - Para evitar tarjeta, esta variante usa SQLite temporal dentro del servicio.
 4. Al terminar, abre:
@@ -34,8 +33,8 @@ Opcion manual si no usas Blueprint:
 - Runtime: Python.
 - Build command: `pip install -r requirements-cloud.txt`.
 - Start command: `uvicorn render_backend.main:app --host 0.0.0.0 --port $PORT`.
-- Variables:
-  - `MGA_API_KEY`: una clave privada que tambien pondras en el escritorio.
+- Variables opcionales:
+  - `MGA_API_KEY`: si la configuras en Render, tambien debes ponerla igual en el escritorio y en el APK.
 
 Nota: esta variante gratis no usa Postgres permanente. Para uso diario real, agrega una base Postgres en Render, configura `DATABASE_URL` y cambia a un plan vigente que conserve datos.
 
