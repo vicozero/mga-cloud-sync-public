@@ -18,4 +18,4 @@ services:
 
 databases:
   - name: mga-cloud-sync-db
-    plan: starter
+    plan: basic-256mb
