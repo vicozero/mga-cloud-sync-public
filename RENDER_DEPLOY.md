@@ -22,10 +22,9 @@ Opcion recomendada: usar el `render.yaml`.
 2. En Render, crea un Blueprint y selecciona el repositorio.
 3. Render detectara `render.yaml` y creara:
    - Web service `mga-cloud-sync`.
-   - Base PostgreSQL `mga-cloud-sync-db`.
-   - Variable `DATABASE_URL`.
    - Variable `MGA_API_KEY`.
    - En este paquete esta configurado en plan gratis para prueba.
+   - Para evitar tarjeta, esta variante usa SQLite temporal dentro del servicio.
 4. Al terminar, abre:
    - `https://TU-SERVICIO.onrender.com/health`
    - Debe responder `service: mga-cloud-sync`.
@@ -36,10 +35,9 @@ Opcion manual si no usas Blueprint:
 - Build command: `pip install -r requirements-cloud.txt`.
 - Start command: `uvicorn render_backend.main:app --host 0.0.0.0 --port $PORT`.
 - Variables:
-  - `DATABASE_URL`: URL de PostgreSQL en Render.
   - `MGA_API_KEY`: una clave privada que tambien pondras en el escritorio.
 
-Nota: Render indica que las bases Postgres gratis expiran despues de 30 dias. Para uso diario real, cambia `plan: free` por un plan pagado vigente en `render.yaml`.
+Nota: esta variante gratis no usa Postgres permanente. Para uso diario real, agrega una base Postgres en Render, configura `DATABASE_URL` y cambia a un plan vigente que conserve datos.
 
 Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$PORT`. Referencias oficiales:
 
