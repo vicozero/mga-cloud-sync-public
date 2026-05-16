@@ -12,19 +12,18 @@ Esta es la arquitectura ideal para que el APK no dependa de la IP de la computad
 
 - `render_backend/main.py`: API cloud FastAPI.
 - `requirements-cloud.txt`: dependencias del servicio cloud.
-- `render.yaml`: Blueprint para crear el servicio y la base PostgreSQL en Render.
+- `render.yaml`: Blueprint para crear el servicio. `DATABASE_URL` queda como secreto manual para poder reutilizar una base gratuita existente durante pruebas.
 - `mobile_app/cloud_config.json`: URL de nube que se empaca dentro del APK.
 
 ## Desplegar en Render
 
-Opcion recomendada: usar el `render.yaml`.
+Opcion recomendada: usar el `render.yaml` y configurar `DATABASE_URL` manualmente.
 
 1. Sube este proyecto a un repositorio GitHub privado.
 2. En Render, crea un Blueprint y selecciona el repositorio.
-3. Render detectara `render.yaml` y creara:
+3. Render detectara `render.yaml` y creara/configurara:
    - Web service `mga-cloud-sync`.
-   - Base PostgreSQL `mga-cloud-db`.
-   - Variable `DATABASE_URL` conectada automaticamente al servicio.
+   - Variable `DATABASE_URL` como secreto pendiente de captura manual.
    - Proteccion por `MGA_API_KEY`.
 4. Al terminar, abre:
    - `https://TU-SERVICIO.onrender.com/health`
@@ -43,7 +42,9 @@ Opcion manual si no usas Blueprint:
   - `MGA_REQUIRE_API_KEY=true`.
   - `MGA_API_KEY`: debe coincidir con el escritorio y con el APK.
 
-Nota importante: si `DATABASE_URL` no esta configurado, el backend usa `cloud_sync.db` dentro del servicio, que es temporal en Render y puede perderse en reinicios o redeploys. Para uso diario, usa PostgreSQL de Render o un disco persistente. El `render.yaml` incluido ya queda preparado con PostgreSQL.
+Nota importante: si `DATABASE_URL` no esta configurado, el backend usa `cloud_sync.db` dentro del servicio, que es temporal en Render y puede perderse en reinicios o redeploys. Para uso diario, usa PostgreSQL de Render o un disco persistente.
+
+Para la prueba gratuita actual, `mga-cloud-sync` puede reutilizar una base PostgreSQL gratuita existente. La informacion de MGA queda separada por tablas con prefijo `mga_`: `mga_mobile_capture`, `mga_mobile_photo` y `mga_catalog_snapshot`.
 
 Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$PORT`. Referencias oficiales:
 
