@@ -33,7 +33,7 @@ class Base(DeclarativeBase):
 
 
 class MobileCapture(Base):
-    __tablename__ = "mobile_capture"
+    __tablename__ = "mga_mobile_capture"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     mobile_id: Mapped[str] = mapped_column(String(140), unique=True, index=True)
@@ -55,10 +55,10 @@ class MobileCapture(Base):
 
 
 class MobilePhoto(Base):
-    __tablename__ = "mobile_photo"
+    __tablename__ = "mga_mobile_photo"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    capture_id: Mapped[int] = mapped_column(ForeignKey("mobile_capture.id", ondelete="CASCADE"), index=True)
+    capture_id: Mapped[int] = mapped_column(ForeignKey("mga_mobile_capture.id", ondelete="CASCADE"), index=True)
     file_name: Mapped[str] = mapped_column(String(260), default="")
     mime_type: Mapped[str] = mapped_column(String(120), default="image/jpeg")
     captured_at: Mapped[str] = mapped_column(String(40), default="")
@@ -68,7 +68,7 @@ class MobilePhoto(Base):
 
 
 class CatalogSnapshot(Base):
-    __tablename__ = "catalog_snapshot"
+    __tablename__ = "mga_catalog_snapshot"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(80), unique=True, default="default")
@@ -80,7 +80,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.1.0")
+app = FastAPI(title="MGA Cloud Sync", version="1.1.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -10,16 +10,8 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: DATABASE_URL
-        fromDatabase:
-          name: mga-cloud-db
-          property: connectionString
+        sync: false
       - key: MGA_REQUIRE_API_KEY
         value: "true"
       - key: MGA_API_KEY
         sync: false
-
-databases:
-  - name: mga-cloud-db
-    plan: free
-    databaseName: mga_cloud_sync
-    user: mga_cloud_user
