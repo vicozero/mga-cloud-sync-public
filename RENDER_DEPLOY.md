@@ -4,8 +4,9 @@ Esta es la arquitectura ideal para que el APK no dependa de la IP de la computad
 
 1. El APK guarda capturas y fotos offline en el celular.
 2. Cuando el celular tiene internet, sube pendientes a la nube Render.
-3. El programa de escritorio sigue siendo la bitacora central.
-4. Cuando el programa de escritorio tiene internet, importa desde Render y guarda en la base SQLite local.
+3. Render guarda las capturas en PostgreSQL para que no dependan de que la PC este encendida.
+4. El programa de escritorio sigue siendo la bitacora central.
+5. Cuando el programa de escritorio tiene internet, importa desde Render y guarda en la base SQLite local.
 
 ## Archivos agregados
 
@@ -22,11 +23,15 @@ Opcion recomendada: usar el `render.yaml`.
 2. En Render, crea un Blueprint y selecciona el repositorio.
 3. Render detectara `render.yaml` y creara:
    - Web service `mga-cloud-sync`.
-   - En este paquete esta configurado en plan gratis para prueba.
-   - Para evitar tarjeta, esta variante usa SQLite temporal dentro del servicio.
+   - Base PostgreSQL `mga-cloud-db`.
+   - Variable `DATABASE_URL` conectada automaticamente al servicio.
+   - Proteccion por `MGA_API_KEY`.
 4. Al terminar, abre:
    - `https://TU-SERVICIO.onrender.com/health`
    - Debe responder `service: mga-cloud-sync`.
+5. Para revisar capturas alojadas:
+   - Abre `MGA Mantenimiento > Nube > Ver Render`.
+   - Debe mostrar capturas alojadas, pendientes, importadas y si la base es persistente.
 
 Opcion manual si no usas Blueprint:
 
@@ -34,9 +39,11 @@ Opcion manual si no usas Blueprint:
 - Build command: `pip install -r requirements-cloud.txt`.
 - Start command: `uvicorn render_backend.main:app --host 0.0.0.0 --port $PORT`.
 - Variables opcionales:
-  - `MGA_API_KEY`: si la configuras en Render, tambien debes ponerla igual en el escritorio y en el APK.
+  - `DATABASE_URL`: conexion a PostgreSQL de Render.
+  - `MGA_REQUIRE_API_KEY=true`.
+  - `MGA_API_KEY`: debe coincidir con el escritorio y con el APK.
 
-Nota: esta variante gratis no usa Postgres permanente. Para uso diario real, agrega una base Postgres en Render, configura `DATABASE_URL` y cambia a un plan vigente que conserve datos.
+Nota importante: si `DATABASE_URL` no esta configurado, el backend usa `cloud_sync.db` dentro del servicio, que es temporal en Render y puede perderse en reinicios o redeploys. Para uso diario, usa PostgreSQL de Render o un disco persistente. El `render.yaml` incluido ya queda preparado con PostgreSQL.
 
 Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$PORT`. Referencias oficiales:
 

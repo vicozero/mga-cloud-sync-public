@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, select
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -80,7 +80,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.0.0")
+app = FastAPI(title="MGA Cloud Sync", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -108,8 +108,34 @@ def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
     if os.getenv("MGA_REQUIRE_API_KEY", "").strip().lower() not in {"1", "true", "yes", "si"}:
         return
     expected = os.getenv("MGA_API_KEY", "").strip()
-    if expected and x_mga_api_key != expected:
+    if not expected:
+        raise HTTPException(status_code=500, detail="MGA_API_KEY no configurada en Render.")
+    if x_mga_api_key != expected:
         raise HTTPException(status_code=401, detail="API key invalida.")
+
+
+def database_status() -> dict[str, Any]:
+    return {
+        "engine": engine.dialect.name,
+        "persistent": bool(os.getenv("DATABASE_URL", "").strip()),
+    }
+
+
+def capture_counts(session: Session) -> dict[str, int]:
+    total = session.scalar(select(func.count(MobileCapture.id))) or 0
+    pending = session.scalar(
+        select(func.count(MobileCapture.id)).where(MobileCapture.desktop_imported_at.is_(None))
+    ) or 0
+    imported = session.scalar(
+        select(func.count(MobileCapture.id)).where(MobileCapture.desktop_imported_at.is_not(None))
+    ) or 0
+    photos = session.scalar(select(func.count(MobilePhoto.id))) or 0
+    return {
+        "total": int(total),
+        "pending": int(pending),
+        "imported": int(imported),
+        "photos": int(photos),
+    }
 
 
 @app.get("/health")
@@ -117,8 +143,24 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "service": SERVICE_NAME,
+        "version": app.version,
+        "database": database_status(),
         "generated_at": utc_now().isoformat(timespec="seconds"),
     }
+
+
+@app.get("/api/stats")
+def cloud_stats(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    with SessionLocal() as session:
+        return {
+            "ok": True,
+            "service": SERVICE_NAME,
+            "version": app.version,
+            "database": database_status(),
+            "captures": capture_counts(session),
+            "generated_at": utc_now().isoformat(timespec="seconds"),
+        }
 
 
 @app.get("/api/catalog")
@@ -187,7 +229,15 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 existing = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == mobile_id))
                 if existing is not None:
                     skipped += 1
-                    results.append({"mobile_id": mobile_id, "capture_id": existing.id, "created": False})
+                    results.append(
+                        {
+                            "mobile_id": mobile_id,
+                            "capture_id": existing.id,
+                            "created": False,
+                            "stored": True,
+                            "desktop_imported": existing.desktop_imported_at is not None,
+                        }
+                    )
                     continue
 
                 photos = record.get("photos") or []
@@ -222,13 +272,32 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                     )
                     evidence_count += 1
                 created += 1
-                results.append({"mobile_id": mobile_id, "capture_id": capture.id, "created": True, "evidence": evidence_count})
+                results.append(
+                    {
+                        "mobile_id": mobile_id,
+                        "capture_id": capture.id,
+                        "created": True,
+                        "stored": True,
+                        "desktop_imported": False,
+                        "evidence": evidence_count,
+                    }
+                )
             except Exception as exc:
                 errors += 1
                 results.append({"mobile_id": str(record.get("mobile_id") or "") if isinstance(record, dict) else "", "created": False, "error": str(exc)})
         session.commit()
 
-    return {"ok": errors == 0, "created": created, "skipped": skipped, "errors": errors, "results": results}
+        counts = capture_counts(session)
+
+    return {
+        "ok": errors == 0,
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "stored": created + skipped,
+        "captures": counts,
+        "results": results,
+    }
 
 
 @app.get("/api/desktop/pending")
@@ -266,7 +335,8 @@ def desktop_pending(
                     "received_at": row.received_at.isoformat(timespec="seconds"),
                 }
             )
-        return {"ok": True, "records": records, "count": len(records)}
+        counts = capture_counts(session)
+        return {"ok": True, "records": records, "count": len(records), "captures": counts}
 
 
 @app.post("/api/desktop/ack")
@@ -285,7 +355,8 @@ async def desktop_ack(request: Request, _auth: str | None = Header(default=None,
         for row in rows:
             row.desktop_imported_at = now
         session.commit()
-    return {"ok": True, "updated": len(clean_ids)}
+        counts = capture_counts(session)
+    return {"ok": True, "updated": len(clean_ids), "captures": counts}
 
 
 @app.post("/api/mobile/status")
