@@ -125,7 +125,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.2.1")
+app = FastAPI(title="MGA Cloud Sync", version="1.2.2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -519,7 +519,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       apiKey.value = "";
       localStorage.removeItem("mgaFilterApiKey");
       if(show){
-        alert("Captura la API key real de Render. No escribas X-MGA-API-Key; ese es solo el nombre del campo.");
+        alert("Para modificar inventario pega la API key real de Render. No escribas X-MGA-API-Key; ese es solo el nombre del campo.");
         apiKey.focus();
       }
       return false;
@@ -538,12 +538,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function esc(v){ return String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
     function num(v){ const n = Number(v || 0); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
     function statusClass(s){ return s === "Disponible" ? "ok" : (s === "Faltante" ? "bad" : "warn"); }
-    async function load(showMissingKey=false){
-      if(!hasApiKey(showMissingKey)) {
-        renderAll();
-        $("filtersTable").innerHTML = `<tbody><tr><td>Captura la API key real de Render y presiona Actualizar.</td></tr></tbody>`;
-        return;
-      }
+    async function load(){
       const r = await fetch("/api/filter-inventory", {headers: headers()});
       if(!r.ok) throw new Error(await apiError(r));
       data = await r.json();
@@ -604,11 +599,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       btn.classList.add("active"); $(btn.dataset.tab).classList.add("active");
     }));
-    ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => $(id).addEventListener("input", () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); }));
+    ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
+      const eventName = id.endsWith("Select") ? "change" : "input";
+      $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
+    });
     $("inventorySearch").addEventListener("input", renderInventory);
-    $("refreshBtn").addEventListener("click", () => load(true).catch(showError));
+    $("refreshBtn").addEventListener("click", () => load().catch(showError));
     $("exportBtn").addEventListener("click", async () => {
-      if(!hasApiKey(true)) return;
       const r = await fetch("/api/filter-inventory/export", {headers: headers()});
       if(!r.ok) return alert(await apiError(r));
       const blob = await r.blob(); const a = document.createElement("a");
@@ -620,7 +617,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const r = await fetch("/api/filter-inventory/movement", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!r.ok) return alert(await apiError(r));
       ["movPart","movDesc","movRef","movNotes"].forEach(id => $(id).value = "");
-      await load(true);
+      await load();
     });
     $("importBtn").addEventListener("click", async () => {
       if(!hasApiKey(true)) return;
@@ -629,9 +626,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const r = await fetch("/api/filter-inventory/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), replace:true})});
       const payload = await r.json().catch(() => ({}));
       $("importResult").textContent = JSON.stringify(payload, null, 2);
-      if(r.ok) await load(true);
+      if(r.ok) await load();
     });
-    if(apiKey.value.trim()) load(false).catch(showError); else load(false);
+    load().catch(showError);
   </script>
 </body>
 </html>"""
@@ -644,7 +641,6 @@ def filter_warehouse_page() -> str:
 
 @app.get("/api/filter-inventory")
 def get_filter_inventory(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
-    require_api_key(_auth)
     with SessionLocal() as session:
         payload = catalog_with_inventory(session)
         movements = session.scalars(
@@ -778,7 +774,6 @@ async def import_filter_inventory(request: Request, _auth: str | None = Header(d
 
 @app.get("/api/filter-inventory/export")
 def export_filter_inventory(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> StreamingResponse:
-    require_api_key(_auth)
     wb = Workbook()
     ws = wb.active
     ws.title = "Inventario filtros"
