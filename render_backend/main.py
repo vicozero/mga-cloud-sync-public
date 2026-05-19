@@ -4,11 +4,13 @@ import base64
 import os
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select
 from sqlalchemy import Float
@@ -125,7 +127,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.2.3")
+app = FastAPI(title="MGA Cloud Sync", version="1.2.4")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -133,6 +135,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def json_dumps(value: Any) -> str:
@@ -403,32 +408,46 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MGA Almacen de filtros</title>
   <style>
-    :root { --blue:#071f49; --teal:#009c9a; --red:#c81e1e; --muted:#667085; --line:#d8dee8; --bg:#f4f6f9; }
+    :root { --blue:#071f49; --blue2:#0d3272; --teal:#009c9a; --red:#c81e1e; --muted:#667085; --line:#d8dee8; --bg:#f4f6f9; --panel:#ffffff; --shadow:0 16px 40px rgba(7,31,73,.12); }
     * { box-sizing:border-box; }
-    body { margin:0; font-family:Segoe UI, Arial, sans-serif; color:#1f2937; background:var(--bg); }
-    header { background:var(--blue); color:white; padding:14px 22px; display:flex; justify-content:space-between; gap:18px; align-items:center; }
-    header h1 { margin:0; font-size:22px; }
-    header p { margin:3px 0 0; color:#cbd5e1; font-size:13px; }
-    header input { min-width:260px; padding:9px 10px; border:1px solid #31527f; border-radius:4px; }
-    main { padding:16px; display:grid; gap:14px; }
-    .tabs { display:flex; gap:8px; flex-wrap:wrap; }
-    .tabs button, .btn { border:0; background:var(--blue); color:white; padding:9px 13px; border-radius:4px; font-weight:700; cursor:pointer; }
-    .tabs button.active { background:var(--teal); }
+    body { margin:0; font-family:Segoe UI, Arial, sans-serif; color:#1f2937; background:linear-gradient(180deg,#eef3fa 0%,#f7f9fc 42%,#eef3fa 100%); }
+    body::before { content:""; position:fixed; inset:0; pointer-events:none; background-image:url('/static/mga-logo.png'); background-size:260px auto; background-repeat:repeat; opacity:.025; transform:rotate(-7deg) scale(1.12); transform-origin:center; z-index:-1; }
+    .hero { position:relative; overflow:hidden; color:white; padding:18px 28px 24px; display:flex; justify-content:space-between; gap:22px; align-items:center; background:radial-gradient(circle at 15% 0%, rgba(255,255,255,.18), transparent 28%), linear-gradient(135deg,#050b18 0%, var(--blue) 56%, #0b1735 100%); box-shadow:0 18px 44px rgba(7,31,73,.24); }
+    .hero::after { content:""; position:absolute; right:40px; bottom:-52px; width:430px; height:190px; background:url('/static/mga-logo.png') center/contain no-repeat; opacity:.08; pointer-events:none; }
+    .brand { position:relative; z-index:1; display:flex; align-items:center; gap:18px; min-width:0; }
+    .brand-logo { width:190px; max-width:36vw; height:auto; border-radius:8px; box-shadow:0 14px 34px rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.18); background:#000; }
+    header h1 { margin:0; font-size:28px; line-height:1.05; letter-spacing:0; }
+    header p { margin:7px 0 0; color:#dbeafe; font-size:14px; }
+    .key-card { position:relative; z-index:1; min-width:280px; padding:12px; border:1px solid rgba(255,255,255,.16); border-radius:8px; background:rgba(255,255,255,.08); backdrop-filter:blur(10px); }
+    .key-card label { color:#dbeafe; }
+    header input { min-width:260px; padding:10px 11px; border:1px solid rgba(255,255,255,.28); border-radius:6px; color:white; background:rgba(255,255,255,.1); outline:none; }
+    header input::placeholder { color:#cbd5e1; }
+    main { width:min(1480px, 100%); margin:0 auto; padding:18px; display:grid; gap:14px; }
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; padding:6px; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.78); box-shadow:0 8px 28px rgba(7,31,73,.08); }
+    .tabs button, .btn { border:0; background:var(--blue); color:white; padding:10px 14px; border-radius:6px; font-weight:700; cursor:pointer; transition:transform .15s ease, box-shadow .15s ease, background .15s ease; }
+    .tabs button:hover, .btn:hover { transform:translateY(-1px); box-shadow:0 10px 20px rgba(7,31,73,.16); }
+    .tabs button.active { background:linear-gradient(135deg,var(--teal),#0b7877); }
     .btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
-    .btn.danger { background:var(--red); }
-    .panel { background:white; border:1px solid var(--line); border-radius:6px; padding:14px; }
+    .btn.danger { background:linear-gradient(135deg,#b31212,var(--red)); }
+    .logo-ribbon { display:grid; grid-template-columns:repeat(4, minmax(140px, 1fr)); gap:10px; opacity:.9; }
+    .logo-ribbon span { min-height:34px; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.72) url('/static/mga-logo.png') center/130px auto no-repeat; box-shadow:0 8px 22px rgba(7,31,73,.06); }
+    .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.92); border:1px solid rgba(216,222,232,.9); border-radius:8px; padding:16px; box-shadow:var(--shadow); }
+    .panel::after { content:""; position:absolute; right:18px; bottom:14px; width:160px; height:54px; background:url('/static/mga-logo.png') center/contain no-repeat; opacity:.035; pointer-events:none; }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
-    input, select, textarea { width:100%; padding:8px 9px; border:1px solid #cbd5e1; border-radius:4px; font:inherit; background:white; }
+    input, select, textarea { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; background:white; outline:none; transition:border .15s ease, box-shadow .15s ease; }
+    input:focus, select:focus, textarea:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(0,156,154,.14); }
     .stats { display:grid; grid-template-columns:repeat(5, 1fr); gap:10px; }
-    .stat { background:#f8fafc; border:1px solid var(--line); padding:12px; border-radius:6px; }
-    .stat strong { display:block; color:var(--blue); font-size:24px; }
+    .stat { position:relative; overflow:hidden; background:linear-gradient(180deg,#fff,#f8fbff); border:1px solid var(--line); padding:14px 15px; border-radius:8px; box-shadow:0 10px 26px rgba(7,31,73,.08); }
+    .stat::after { content:""; position:absolute; right:10px; top:10px; width:78px; height:26px; background:url('/static/mga-logo.png') center/contain no-repeat; opacity:.07; }
+    .stat strong { display:block; color:var(--blue); font-size:30px; line-height:1; margin-bottom:5px; }
     .view { display:none; }
     .view.active { display:grid; gap:14px; }
-    table { width:100%; border-collapse:collapse; background:white; }
-    th, td { border:1px solid var(--line); padding:7px 8px; font-size:13px; vertical-align:top; }
-    th { background:#e9eef6; color:#243042; position:sticky; top:0; z-index:1; }
-    .table-wrap { max-height:620px; overflow:auto; border:1px solid var(--line); }
+    table { width:100%; border-collapse:separate; border-spacing:0; background:white; }
+    th, td { border-bottom:1px solid var(--line); padding:9px 10px; font-size:13px; vertical-align:top; }
+    th { background:linear-gradient(180deg,#eef3fb,#e4ebf6); color:#243042; position:sticky; top:0; z-index:1; text-transform:uppercase; font-size:12px; }
+    tbody tr:hover { background:#f8fbff; }
+    .table-wrap { max-height:620px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:white; }
     .pill { display:inline-block; padding:2px 7px; border-radius:999px; font-weight:700; font-size:12px; }
     .ok { color:#047857; background:#d1fae5; }
     .bad { color:#b91c1c; background:#fee2e2; }
@@ -437,13 +456,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .wide { grid-column:1 / -1; }
-    @media (max-width: 900px) { header, .grid2 { display:block; } .toolbar, .movement-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .brand-logo { width:145px; margin-bottom:10px; } .toolbar, .movement-grid, .stats, .logo-ribbon { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
   </style>
 </head>
 <body>
-  <header>
-    <div><h1>MGA Almacen de filtros</h1><p>Inventario ligado a FS Filtros servicio</p></div>
-    <label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label>
+  <header class="hero">
+    <div class="brand">
+      <img class="brand-logo" src="/static/mga-logo.png" alt="MGA Contratista Minera">
+      <div><h1>Inventario de filtros</h1><p>Almacen conectado a FS Filtros servicio</p></div>
+    </div>
+    <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
   <main>
     <nav class="tabs">
@@ -451,6 +473,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="inventario">Concentrado / movimientos</button>
       <button data-tab="importar">Importar / exportar</button>
     </nav>
+    <div class="logo-ribbon" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
     <section class="stats" id="stats"></section>
     <section id="equipos" class="view active">
       <div class="panel toolbar">
