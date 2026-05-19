@@ -4,11 +4,13 @@ import base64
 import os
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select
 from sqlalchemy import Float
@@ -125,7 +127,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.2.5")
+app = FastAPI(title="MGA Cloud Sync", version="1.2.6")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -133,6 +135,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def json_dumps(value: Any) -> str:
@@ -409,6 +414,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .hero { position:relative; overflow:hidden; color:white; padding:18px 28px 24px; display:flex; justify-content:space-between; gap:22px; align-items:center; background:radial-gradient(circle at 15% 0%, rgba(255,255,255,.18), transparent 28%), linear-gradient(135deg,#050b18 0%, var(--blue) 56%, #0b1735 100%); box-shadow:0 18px 44px rgba(7,31,73,.24); }
     .hero::after { content:""; position:absolute; right:-60px; bottom:-90px; width:360px; height:220px; border-radius:999px; background:radial-gradient(circle, rgba(0,156,154,.26), transparent 68%); pointer-events:none; }
     .brand { position:relative; z-index:1; display:flex; align-items:center; gap:18px; min-width:0; }
+    .corner-logo { width:118px; height:78px; object-fit:contain; flex:0 0 auto; padding:8px 10px; border-radius:8px; background:white; border:1px solid rgba(255,255,255,.55); box-shadow:0 16px 34px rgba(0,0,0,.24); }
     header h1 { margin:0; font-size:28px; line-height:1.05; letter-spacing:0; }
     header p { margin:7px 0 0; color:#dbeafe; font-size:14px; }
     .key-card { position:relative; z-index:1; min-width:280px; padding:12px; border:1px solid rgba(255,255,255,.16); border-radius:8px; background:rgba(255,255,255,.08); backdrop-filter:blur(10px); }
@@ -446,12 +452,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .wide { grid-column:1 / -1; }
-    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .toolbar, .movement-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
   </style>
 </head>
 <body>
   <header class="hero">
     <div class="brand">
+      <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
       <div><h1>Inventario de filtros</h1><p>Almacen conectado a FS Filtros servicio</p></div>
     </div>
     <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
