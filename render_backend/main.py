@@ -125,7 +125,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.2.2")
+app = FastAPI(title="MGA Cloud Sync", version="1.2.3")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -443,7 +443,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
 <body>
   <header>
     <div><h1>MGA Almacen de filtros</h1><p>Inventario ligado a FS Filtros servicio</p></div>
-    <label>API key Render<input id="apiKey" type="password" placeholder="X-MGA-API-Key"></label>
+    <label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label>
   </header>
   <main>
     <nav class="tabs">
@@ -519,7 +519,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       apiKey.value = "";
       localStorage.removeItem("mgaFilterApiKey");
       if(show){
-        alert("Para modificar inventario pega la API key real de Render. No escribas X-MGA-API-Key; ese es solo el nombre del campo.");
+        alert("Para modificar inventario pega la clave real. Esta en MGA Mantenimiento > Red > API key cloud.");
         apiKey.focus();
       }
       return false;
@@ -620,8 +620,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       await load();
     });
     $("importBtn").addEventListener("click", async () => {
-      if(!hasApiKey(true)) return;
       const file = $("importFile").files[0]; if(!file) return alert("Selecciona un Excel.");
+      if(!hasApiKey(true)) return;
       const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
       const r = await fetch("/api/filter-inventory/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), replace:true})});
       const payload = await r.json().catch(() => ({}));
