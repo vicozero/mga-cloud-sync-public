@@ -127,7 +127,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.2.6")
+app = FastAPI(title="MGA Cloud Sync", version="1.2.7")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -208,12 +208,25 @@ def inventory_field_for(header: Any) -> str | None:
     return mapping.get(text)
 
 
-def inventory_item_payload(item: FilterInventoryItem) -> dict[str, Any]:
+def add_unique(values: list[str], value: Any) -> None:
+    text = str(value or "").strip()
+    if text and text not in values:
+        values.append(text)
+
+
+def inventory_item_payload(item: FilterInventoryItem, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    details = details or {}
+    description = item.description or str(details.get("description") or "")
     return {
         "id": item.id,
         "part_key": item.part_key,
         "part_number": item.part_number,
-        "description": item.description,
+        "description": description,
+        "catalog_description": str(details.get("description") or ""),
+        "equipment": str(details.get("equipment") or ""),
+        "equipment_codes": str(details.get("equipment_codes") or ""),
+        "item_type": str(details.get("item_type") or ""),
+        "service_interval": str(details.get("service_interval") or ""),
         "quantity": item.quantity,
         "unit": item.unit,
         "min_stock": item.min_stock,
@@ -276,13 +289,50 @@ def filter_match_keys(item: dict[str, Any]) -> list[str]:
     return keys
 
 
+def inventory_catalog_details(equipment: list[Any]) -> dict[str, dict[str, str]]:
+    raw: dict[str, dict[str, list[str]]] = {}
+    for equipment_item in equipment:
+        if not isinstance(equipment_item, dict):
+            continue
+        code = str(equipment_item.get("code") or "").strip()
+        description = str(equipment_item.get("description") or equipment_item.get("family") or "").strip()
+        equipment_label = f"{code} - {description}" if code and description else code or description
+        filters = equipment_item.get("filters")
+        if not isinstance(filters, list):
+            continue
+        for filter_item in filters:
+            if not isinstance(filter_item, dict):
+                continue
+            for key in filter_match_keys(filter_item):
+                bucket = raw.setdefault(
+                    key,
+                    {
+                        "equipment": [],
+                        "equipment_codes": [],
+                        "item_type": [],
+                        "description": [],
+                        "service_interval": [],
+                    },
+                )
+                add_unique(bucket["equipment"], equipment_label)
+                add_unique(bucket["equipment_codes"], code)
+                add_unique(bucket["item_type"], filter_item.get("item_type"))
+                add_unique(bucket["description"], filter_item.get("description"))
+                add_unique(bucket["service_interval"], filter_item.get("service_interval"))
+    return {key: {field: "; ".join(values) for field, values in bucket.items()} for key, bucket in raw.items()}
+
+
 def catalog_with_inventory(session: Session) -> dict[str, Any]:
     catalog = latest_catalog_payload(session)
     equipment = catalog.get("equipment") if isinstance(catalog, dict) else []
     if not isinstance(equipment, list):
         equipment = []
     inventory = {item.part_key: item for item in session.scalars(select(FilterInventoryItem)).all()}
-    inventory_list = [inventory_item_payload(item) for item in sorted(inventory.values(), key=lambda row: row.part_number)]
+    inventory_details = inventory_catalog_details(equipment)
+    inventory_list = [
+        inventory_item_payload(item, inventory_details.get(item.part_key))
+        for item in sorted(inventory.values(), key=lambda row: row.part_number)
+    ]
     matched = shortages = unknown = 0
     for equipment_item in equipment:
         if not isinstance(equipment_item, dict):
@@ -309,7 +359,7 @@ def catalog_with_inventory(session: Session) -> dict[str, Any]:
             filter_item["shortage"] = shortage
             filter_item["inventory_status"] = "Faltante" if shortage > 0 else "Disponible"
             filter_item["stock_part"] = stock.part_number
-            filter_item["stock_description"] = stock.description
+            filter_item["stock_description"] = stock.description or inventory_details.get(stock.part_key, {}).get("description", "")
             filter_item["location"] = stock.location
             matched += 1
             if shortage > 0:
@@ -600,9 +650,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function renderInventory(){
       const search = ($("inventorySearch").value || "").toUpperCase();
-      const rows = (data.inventory || []).filter(i => !search || [i.part_number,i.description,i.location].join(" ").toUpperCase().includes(search));
-      $("inventoryTable").innerHTML = `<thead><tr><th>No. parte</th><th>Descripcion</th><th>Exist.</th><th>Unidad</th><th>Min.</th><th>Ubicacion</th><th>Actualizado</th></tr></thead><tbody>` +
-        rows.map(i => `<tr><td>${esc(i.part_number)}</td><td>${esc(i.description)}</td><td>${num(i.quantity)}</td><td>${esc(i.unit||"PZA")}</td><td>${num(i.min_stock)}</td><td>${esc(i.location)}</td><td>${esc(i.updated_at)}</td></tr>`).join("") +
+      const rows = (data.inventory || []).filter(i => !search || [i.equipment,i.item_type,i.part_number,i.description,i.location].join(" ").toUpperCase().includes(search));
+      $("inventoryTable").innerHTML = `<thead><tr><th>Equipo</th><th>Tipo</th><th>No. parte</th><th>Descripcion</th><th>Exist.</th><th>Unidad</th><th>Min.</th><th>Ubicacion</th><th>Actualizado</th></tr></thead><tbody>` +
+        rows.map(i => `<tr><td>${esc(i.equipment || i.equipment_codes)}</td><td>${esc(i.item_type)}</td><td>${esc(i.part_number)}</td><td>${esc(i.description)}</td><td>${num(i.quantity)}</td><td>${esc(i.unit||"PZA")}</td><td>${num(i.min_stock)}</td><td>${esc(i.location)}</td><td>${esc(i.updated_at)}</td></tr>`).join("") +
         `</tbody>`;
     }
     function renderMovements(){
@@ -795,10 +845,22 @@ def export_filter_inventory(_auth: str | None = Header(default=None, alias="X-MG
     wb = Workbook()
     ws = wb.active
     ws.title = "Inventario filtros"
-    ws.append(["No. parte", "Descripcion", "Cantidad", "Unidad", "Minimo", "Ubicacion", "Actualizado"])
+    ws.append(["Equipo", "Tipo", "No. parte", "Descripcion", "Cantidad", "Unidad", "Minimo", "Ubicacion", "Actualizado"])
     with SessionLocal() as session:
-        for item in session.scalars(select(FilterInventoryItem).order_by(FilterInventoryItem.part_number.asc())).all():
-            ws.append([item.part_number, item.description, item.quantity, item.unit, item.min_stock, item.location, item.updated_at.isoformat(timespec="seconds")])
+        for item in catalog_with_inventory(session)["inventory"]:
+            ws.append(
+                [
+                    item.get("equipment") or item.get("equipment_codes") or "",
+                    item.get("item_type") or "",
+                    item.get("part_number") or "",
+                    item.get("description") or "",
+                    item.get("quantity") or 0,
+                    item.get("unit") or "PZA",
+                    item.get("min_stock") or 0,
+                    item.get("location") or "",
+                    item.get("updated_at") or "",
+                ]
+            )
     stream = BytesIO()
     wb.save(stream)
     stream.seek(0)
