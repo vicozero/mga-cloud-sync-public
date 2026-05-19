@@ -31,6 +31,10 @@ Opcion recomendada: usar el `render.yaml` y configurar `DATABASE_URL` manualment
 5. Para revisar capturas alojadas:
    - Abre `MGA Mantenimiento > Nube > Ver Render`.
    - Debe mostrar capturas alojadas, pendientes, importadas y si la base es persistente.
+6. Para inventario de filtros del almacen:
+   - Abre `https://TU-SERVICIO.onrender.com/almacen-filtros`.
+   - Captura la misma API key configurada en Render.
+   - El almacenista puede importar Excel, exportar Excel, revisar filtros por equipo y registrar entradas/salidas en el concentrado.
 
 Opcion manual si no usas Blueprint:
 
@@ -44,7 +48,7 @@ Opcion manual si no usas Blueprint:
 
 Nota importante: si `DATABASE_URL` no esta configurado, el backend usa `cloud_sync.db` dentro del servicio, que es temporal en Render y puede perderse en reinicios o redeploys. Para uso diario, usa PostgreSQL de Render o un disco persistente.
 
-Para la prueba gratuita actual, `mga-cloud-sync` puede reutilizar una base PostgreSQL gratuita existente. La informacion de MGA queda separada por tablas con prefijo `mga_`: `mga_mobile_capture`, `mga_mobile_photo` y `mga_catalog_snapshot`.
+Para la prueba gratuita actual, `mga-cloud-sync` puede reutilizar una base PostgreSQL gratuita existente. La informacion de MGA queda separada por tablas con prefijo `mga_`: `mga_mobile_capture`, `mga_mobile_photo`, `mga_catalog_snapshot`, `mga_filter_inventory_item` y `mga_filter_inventory_movement`.
 
 Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$PORT`. Referencias oficiales:
 
@@ -63,6 +67,7 @@ Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$P
 5. En el boton `Nube`, usa:
    - `Publicar equipos`: sube el catalogo para que el APK tenga equipos actualizados.
    - `Importar capturas`: baja capturas pendientes de la nube a la bitacora local.
+   - `Sync inventario`: baja al escritorio el concentrado de filtros actualizado en Render.
 
 ## Generar APK con nube
 
