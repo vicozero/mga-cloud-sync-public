@@ -125,7 +125,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.2.0")
+app = FastAPI(title="MGA Cloud Sync", version="1.2.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -507,14 +507,45 @@ WAREHOUSE_HTML = r"""<!doctype html>
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
     apiKey.value = localStorage.getItem("mgaFilterApiKey") || "";
-    apiKey.addEventListener("input", () => localStorage.setItem("mgaFilterApiKey", apiKey.value));
-    function headers(json=false){ const h = {"X-MGA-API-Key": apiKey.value}; if(json) h["Content-Type"]="application/json"; return h; }
+    if(apiKey.value.trim() === "X-MGA-API-Key"){
+      apiKey.value = "";
+      localStorage.removeItem("mgaFilterApiKey");
+    }
+    apiKey.addEventListener("input", () => localStorage.setItem("mgaFilterApiKey", apiKey.value.trim()));
+    apiKey.addEventListener("keydown", (ev) => { if(ev.key === "Enter") load(true).catch(showError); });
+    function hasApiKey(show=true){
+      const value = apiKey.value.trim();
+      if(value && value !== "X-MGA-API-Key") return true;
+      apiKey.value = "";
+      localStorage.removeItem("mgaFilterApiKey");
+      if(show){
+        alert("Captura la API key real de Render. No escribas X-MGA-API-Key; ese es solo el nombre del campo.");
+        apiKey.focus();
+      }
+      return false;
+    }
+    function headers(json=false){ const h = {}; if(apiKey.value.trim()) h["X-MGA-API-Key"] = apiKey.value.trim(); if(json) h["Content-Type"]="application/json"; return h; }
+    async function apiError(response){
+      const text = await response.text();
+      try {
+        const payload = JSON.parse(text);
+        return payload.detail || text;
+      } catch {
+        return text;
+      }
+    }
+    function showError(error){ alert(error.message || String(error)); }
     function esc(v){ return String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
     function num(v){ const n = Number(v || 0); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
     function statusClass(s){ return s === "Disponible" ? "ok" : (s === "Faltante" ? "bad" : "warn"); }
-    async function load(){
+    async function load(showMissingKey=false){
+      if(!hasApiKey(showMissingKey)) {
+        renderAll();
+        $("filtersTable").innerHTML = `<tbody><tr><td>Captura la API key real de Render y presiona Actualizar.</td></tr></tbody>`;
+        return;
+      }
       const r = await fetch("/api/filter-inventory", {headers: headers()});
-      if(!r.ok) throw new Error(await r.text());
+      if(!r.ok) throw new Error(await apiError(r));
       data = await r.json();
       renderAll();
     }
@@ -575,29 +606,32 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }));
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => $(id).addEventListener("input", () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); }));
     $("inventorySearch").addEventListener("input", renderInventory);
-    $("refreshBtn").addEventListener("click", () => load().catch(e => alert(e.message)));
+    $("refreshBtn").addEventListener("click", () => load(true).catch(showError));
     $("exportBtn").addEventListener("click", async () => {
+      if(!hasApiKey(true)) return;
       const r = await fetch("/api/filter-inventory/export", {headers: headers()});
-      if(!r.ok) return alert(await r.text());
+      if(!r.ok) return alert(await apiError(r));
       const blob = await r.blob(); const a = document.createElement("a");
       a.href = URL.createObjectURL(blob); a.download = "Inventario_Filtros_MGA.xlsx"; a.click();
     });
     $("movementBtn").addEventListener("click", async () => {
+      if(!hasApiKey(true)) return;
       const payload = { part_number:$("movPart").value, description:$("movDesc").value, movement_type:$("movType").value, quantity:$("movQty").value, unit:$("movUnit").value, equipment_code:$("movEquipment").value, service_interval:$("movService").value, reference:$("movRef").value, created_by:$("movUser").value, notes:$("movNotes").value };
       const r = await fetch("/api/filter-inventory/movement", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
-      if(!r.ok) return alert(await r.text());
+      if(!r.ok) return alert(await apiError(r));
       ["movPart","movDesc","movRef","movNotes"].forEach(id => $(id).value = "");
-      await load();
+      await load(true);
     });
     $("importBtn").addEventListener("click", async () => {
+      if(!hasApiKey(true)) return;
       const file = $("importFile").files[0]; if(!file) return alert("Selecciona un Excel.");
       const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
       const r = await fetch("/api/filter-inventory/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), replace:true})});
       const payload = await r.json().catch(() => ({}));
       $("importResult").textContent = JSON.stringify(payload, null, 2);
-      if(r.ok) await load();
+      if(r.ok) await load(true);
     });
-    load().catch(e => alert("No se pudo cargar. Revisa API key. " + e.message));
+    if(apiKey.value.trim()) load(false).catch(showError); else load(false);
   </script>
 </body>
 </html>"""
