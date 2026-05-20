@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select
@@ -507,6 +507,14 @@ def health() -> dict[str, Any]:
         "database": database_status(),
         "generated_at": utc_now().isoformat(timespec="seconds"),
     }
+
+
+@app.get("/favicon.ico")
+def favicon():
+    logo = STATIC_DIR / "mga-corner-logo.jfif"
+    if logo.exists():
+        return FileResponse(logo, media_type="image/jpeg")
+    return Response(status_code=204)
 
 
 @app.get("/api/stats")
