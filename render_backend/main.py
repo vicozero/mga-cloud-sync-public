@@ -136,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.4")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.5")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -585,6 +585,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .tabs { display:flex; gap:8px; flex-wrap:wrap; padding:6px; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.78); box-shadow:0 8px 28px rgba(7,31,73,.08); }
     .tabs button, .btn { border:0; background:var(--blue); color:white; padding:10px 14px; border-radius:6px; font-weight:700; cursor:pointer; transition:transform .15s ease, box-shadow .15s ease, background .15s ease; }
     .tabs button:hover, .btn:hover { transform:translateY(-1px); box-shadow:0 10px 20px rgba(7,31,73,.16); }
+    .tabs button:disabled, .btn:disabled { opacity:.65; cursor:wait; transform:none; box-shadow:none; }
     .tabs button.active { background:linear-gradient(135deg,var(--teal),#0b7877); }
     .btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
     .btn.danger { background:linear-gradient(135deg,#b31212,var(--red)); }
@@ -955,6 +956,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
       document.body.appendChild(a);
       a.click();
       a.remove();
+    }
+    async function runButtonTask(buttonId, busyText, task){
+      const button = $(buttonId);
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = busyText;
+      try {
+        await task();
+      } finally {
+        button.textContent = originalText;
+        button.disabled = false;
+      }
     }
     async function downloadElementImage(elementId, fileName, minWidth=1120){
       const {wrapper, clone} = await makeExportClone(elementId, minWidth);
@@ -1451,8 +1464,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     $("renderKpiBtn").addEventListener("click", renderDashboard);
-    $("printKpiBtn").addEventListener("click", () => printElementReport("kpiPrintArea", $("kpiTitle").textContent || "Reporte KPI").catch(showError));
-    $("downloadKpiImageBtn").addEventListener("click", () => downloadElementImage("kpiPrintArea", `${cleanFileName($("kpiTitle").textContent)}_${fileStamp()}.png`, 1260).catch(showError));
+    $("printKpiBtn").addEventListener("click", () => runButtonTask("printKpiBtn", "Preparando PDF...", () => printElementReport("kpiPrintArea", $("kpiTitle").textContent || "Reporte KPI")).catch(showError));
+    $("downloadKpiImageBtn").addEventListener("click", () => runButtonTask("downloadKpiImageBtn", "Generando imagen...", () => downloadElementImage("kpiPrintArea", `${cleanFileName($("kpiTitle").textContent)}_${fileStamp()}.png`, 1260)).catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
@@ -1462,7 +1475,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dispSearch").addEventListener("input", renderDisponibilidad);
     $("dispStatus").addEventListener("change", renderDisponibilidad);
     $("renderDispBtn").addEventListener("click", renderDisponibilidad);
-    $("downloadDispImageBtn").addEventListener("click", () => downloadElementImage("dispPrintArea", `Disponibilidad_MGA_${fileStamp()}.png`, 1180).catch(showError));
+    $("downloadDispImageBtn").addEventListener("click", () => runButtonTask("downloadDispImageBtn", "Generando imagen...", () => downloadElementImage("dispPrintArea", `Disponibilidad_MGA_${fileStamp()}.png`, 1180)).catch(showError));
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
