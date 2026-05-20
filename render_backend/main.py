@@ -136,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.5")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.6")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -969,7 +969,311 @@ WAREHOUSE_HTML = r"""<!doctype html>
         button.disabled = false;
       }
     }
+    function createHiResCanvas(width, height){
+      const scale = Math.min(window.devicePixelRatio || 2, 2);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(width * scale);
+      canvas.height = Math.ceil(height * scale);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+      return {canvas, ctx};
+    }
+    function downloadCanvas(canvas, fileName){
+      triggerDownload(canvas.toDataURL("image/png"), fileName);
+    }
+    function textLines(ctx, text, maxWidth, maxLines=4){
+      const words = String(text || "").split(/\s+/).filter(Boolean);
+      const lines = [];
+      let line = "";
+      words.forEach(word => {
+        const test = line ? `${line} ${word}` : word;
+        if(ctx.measureText(test).width <= maxWidth || !line){
+          line = test;
+        } else {
+          lines.push(line);
+          line = word;
+        }
+      });
+      if(line) lines.push(line);
+      if(lines.length > maxLines){
+        const cut = lines.slice(0, maxLines);
+        cut[maxLines - 1] = `${cut[maxLines - 1].replace(/\.*$/, "")}...`;
+        return cut;
+      }
+      return lines.length ? lines : [""];
+    }
+    function drawWrapped(ctx, text, x, y, maxWidth, lineHeight, maxLines=4){
+      const lines = textLines(ctx, text, maxWidth, maxLines);
+      lines.forEach((line, idx) => ctx.fillText(line, x, y + idx * lineHeight));
+      return lines.length * lineHeight;
+    }
+    function drawBox(ctx, x, y, w, h, fill="#ffffff", stroke="#d8dee8"){
+      ctx.fillStyle = fill;
+      ctx.fillRect(x, y, w, h);
+      if(stroke){
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, w, h);
+      }
+    }
+    function drawReportHeader(ctx, title, subtitle, width){
+      drawBox(ctx, 0, 0, width, 86, "#071f49", null);
+      drawBox(ctx, 28, 18, 92, 50, "#ffffff", "#d8dee8");
+      ctx.fillStyle = "#0b2f6f";
+      ctx.font = "900 24px Segoe UI, Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("MGA", 74, 43);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "800 27px Segoe UI, Arial";
+      ctx.fillText(title, width / 2, 34);
+      ctx.font = "600 13px Segoe UI, Arial";
+      ctx.fillStyle = "#dbeafe";
+      ctx.fillText(subtitle || "", width / 2, 61);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+    }
+    function drawMetricCanvasCard(ctx, card, x, y, w, h){
+      drawBox(ctx, x, y, w, h, "#ffffff", "#d8dee8");
+      ctx.fillStyle = "#667085";
+      ctx.font = "800 13px Segoe UI, Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(String(card.label || "").toUpperCase(), x + w / 2, y + 28);
+      ctx.fillStyle = "#5f6671";
+      ctx.font = "800 30px Segoe UI, Arial";
+      ctx.fillText(card.value || "", x + w / 2, y + 72);
+      ctx.fillStyle = "#667085";
+      ctx.font = "12px Segoe UI, Arial";
+      ctx.fillText(card.note || "", x + w / 2, y + 100);
+      const barX = x + 18;
+      const barY = y + h - 24;
+      const barW = w - 36;
+      drawBox(ctx, barX, barY, barW, 8, "#e5e7eb", null);
+      ctx.fillStyle = card.bad ? "#e11d48" : "#009c9a";
+      ctx.fillRect(barX, barY, Math.max(Math.min(Number(card.width || 0), 100), 0) / 100 * barW, 8);
+      ctx.textAlign = "left";
+    }
+    function metricCardsFrom(containerId){
+      return [...$(containerId).querySelectorAll(".metric-card")].map(card => {
+        const bar = card.querySelector(".bar-fill");
+        return {
+          label: card.querySelector("span")?.textContent?.trim() || "",
+          value: card.querySelector("strong")?.textContent?.trim() || "",
+          note: card.querySelector("small")?.textContent?.trim() || "",
+          width: parseFloat((bar && bar.style.width) || "0"),
+          bad: card.classList.contains("bad"),
+        };
+      });
+    }
+    function tableMatrix(tableId){
+      const table = $(tableId);
+      const headers = [...table.querySelectorAll("thead th")].map(cell => cell.textContent.trim());
+      const rows = [...table.querySelectorAll("tbody tr")].map(tr => [...tr.children].map(cell => cell.textContent.trim()));
+      return {headers, rows};
+    }
+    function drawTableCanvas(ctx, matrix, x, y, w, rowH=30, maxRows=null){
+      const headers = matrix.headers || [];
+      const rows = maxRows ? (matrix.rows || []).slice(0, maxRows) : (matrix.rows || []);
+      if(!headers.length) return y;
+      const colW = w / headers.length;
+      drawBox(ctx, x, y, w, rowH, "#0b2f6f", "#0b2f6f");
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "800 11px Segoe UI, Arial";
+      ctx.textAlign = "center";
+      headers.forEach((header, idx) => {
+        const cx = x + idx * colW;
+        ctx.strokeStyle = "#203b6f";
+        ctx.strokeRect(cx, y, colW, rowH);
+        drawWrapped(ctx, header, cx + 5, y + 19, colW - 10, 12, 2);
+      });
+      let cy = y + rowH;
+      ctx.textAlign = "center";
+      ctx.font = "12px Segoe UI, Arial";
+      rows.forEach((row, ridx) => {
+        const fill = ridx % 2 ? "#f8fafc" : "#ffffff";
+        drawBox(ctx, x, cy, w, rowH, fill, "#d8dee8");
+        row.forEach((value, idx) => {
+          const cx = x + idx * colW;
+          ctx.strokeStyle = "#d8dee8";
+          ctx.strokeRect(cx, cy, colW, rowH);
+          ctx.fillStyle = String(value).toUpperCase() === "FUERA" ? "#c81e1e" : "#1f2937";
+          drawWrapped(ctx, value, cx + 5, cy + 19, colW - 10, 12, 2);
+        });
+        cy += rowH;
+      });
+      ctx.textAlign = "left";
+      return cy;
+    }
+    function chartBarsFromDom(){
+      return [...$("kpiChart").querySelectorAll(".chart-bar")].map(bar => {
+        const stem = bar.querySelector("i");
+        const rawHeight = (stem && (stem.style.getPropertyValue("--h") || getComputedStyle(stem).height)) || "0";
+        return {
+          label: bar.querySelector("b")?.textContent?.trim() || "",
+          value: bar.querySelector("span")?.textContent?.trim() || "",
+          h: parseFloat(rawHeight) || 0,
+          out: bar.classList.contains("out"),
+        };
+      });
+    }
+    function drawChartCanvas(ctx, bars, x, y, w, h){
+      drawBox(ctx, x, y, w, h, "#ffffff", "#d8dee8");
+      ctx.fillStyle = "#111827";
+      ctx.font = "800 12px Segoe UI, Arial";
+      ctx.fillText("KPI", x + 16, y + 26);
+      const tabs = ["% Disponibilidad", "% Utilizacion", "TMEF", "TMPR"];
+      const tabW = Math.min(130, (w - 70) / 4);
+      tabs.forEach((tab, idx) => {
+        drawBox(ctx, x + 48 + idx * (tabW + 5), y + 10, tabW, 30, idx === 0 ? "#009c9a" : "#ffffff", "#111111");
+        ctx.fillStyle = "#111111";
+        ctx.font = "12px Segoe UI, Arial";
+        ctx.fillText(tab, x + 58 + idx * (tabW + 5), y + 30);
+      });
+      const plotX = x + 34;
+      const plotY = y + 64;
+      const plotW = w - 62;
+      const plotH = h - 104;
+      ctx.strokeStyle = "#d8dee8";
+      ctx.lineWidth = 1;
+      for(let i=0;i<=4;i++){
+        const gy = plotY + plotH - (plotH * i / 4);
+        ctx.beginPath();
+        ctx.moveTo(plotX, gy);
+        ctx.lineTo(plotX + plotW, gy);
+        ctx.stroke();
+      }
+      if(!bars.length){
+        ctx.fillStyle = "#667085";
+        ctx.font = "14px Segoe UI, Arial";
+        ctx.fillText("Sin datos KPI para el periodo.", plotX + 20, plotY + 60);
+        return;
+      }
+      const maxRaw = Math.max(...bars.map(b => b.h), 1);
+      const gap = Math.max(10, Math.min(28, plotW / Math.max(bars.length, 1) * 0.18));
+      const barW = Math.max(24, Math.min(64, (plotW - gap * (bars.length + 1)) / bars.length));
+      bars.forEach((bar, idx) => {
+        const bx = plotX + gap + idx * (barW + gap);
+        const bh = Math.max(4, (bar.h / maxRaw) * (plotH - 22));
+        const by = plotY + plotH - bh;
+        ctx.fillStyle = bar.out ? "#e11d48" : "#10a7a5";
+        ctx.fillRect(bx, by, barW, bh);
+        ctx.fillStyle = "#1f2937";
+        ctx.font = "11px Segoe UI, Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(bar.value, bx + barW / 2, by - 6);
+        ctx.fillText(bar.label, bx + barW / 2, plotY + plotH + 18);
+      });
+      ctx.textAlign = "left";
+    }
+    function downloadKpiCanvasImage(fileName){
+      const special = $("kpiPrintArea").classList.contains("kpi-special-mode");
+      const table = tableMatrix("kpiTable");
+      const tableRows = table.rows || [];
+      const width = 1500;
+      const topH = special ? 520 : 390;
+      const height = 120 + topH + 40 + Math.max(tableRows.length + 1, 3) * 32 + 40;
+      const {canvas, ctx} = createHiResCanvas(width, height);
+      drawReportHeader(ctx, $("kpiTitle").textContent || "Reporte KPI", $("portalUpdated").textContent || "", width);
+      const margin = 30;
+      const y = 110;
+      const cards = metricCardsFrom("kpiCards");
+      const side = metricCardsFrom("kpiSideCards");
+      const bars = chartBarsFromDom();
+      if(special){
+        const cardW = (width - margin * 2 - 30) / 4;
+        cards.slice(0, 4).forEach((card, idx) => drawMetricCanvasCard(ctx, card, margin + idx * (cardW + 10), y, cardW, 112));
+        drawChartCanvas(ctx, bars, margin, y + 135, width - margin * 2, 330);
+      } else {
+        const cardW = 205;
+        const cardH = 150;
+        cards.slice(0, 4).forEach((card, idx) => drawMetricCanvasCard(ctx, card, margin + (idx % 2) * cardW, y + Math.floor(idx / 2) * cardH, cardW, cardH));
+        drawChartCanvas(ctx, bars, margin + cardW * 2 + 25, y, 690, 300);
+        side.slice(0, 4).forEach((card, idx) => drawMetricCanvasCard(ctx, card, width - margin - cardW * 2 + (idx % 2) * cardW, y + Math.floor(idx / 2) * cardH, cardW, cardH));
+      }
+      drawTableCanvas(ctx, table, margin, y + topH, width - margin * 2, 32);
+      downloadCanvas(canvas, fileName);
+    }
+    function availabilityRowsForCurrentFilters(){
+      const search = ($("dispSearch").value || "").toUpperCase();
+      const status = $("dispStatus").value;
+      return (portal.availability || []).filter(row => {
+        const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
+        return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
+      });
+    }
+    function conditionFill(condition){
+      const text = String(condition || "").toUpperCase();
+      if(text.includes("FUERA") || text.includes("NO DISP")) return "#ff1616";
+      if(text.includes("OPERATIVA") || text.includes("REPARACION") || text.includes("STAND")) return "#fff37a";
+      if(text.includes("DISPONIBLE")) return "#35f235";
+      return "#ffffff";
+    }
+    function downloadAvailabilityCanvasImage(fileName){
+      const rows = availabilityRowsForCurrentFilters();
+      const width = 1500;
+      const margin = 28;
+      const cols = [170, 230, 120, 190, width - margin * 2 - 170 - 230 - 120 - 190];
+      const measure = createHiResCanvas(10, 10).ctx;
+      measure.font = "13px Segoe UI, Arial";
+      const heights = rows.map(row => Math.max(34, textLines(measure, row.observations || "", cols[4] - 16, 5).length * 16 + 16));
+      const height = 150 + 36 + heights.reduce((a,b) => a + b, 0) + 35;
+      const {canvas, ctx} = createHiResCanvas(width, height);
+      drawReportHeader(ctx, "DISPONIBILIDAD DE EQUIPOS", $("dispExportDate").textContent || "", width);
+      ctx.fillStyle = "#071f49";
+      ctx.font = "800 20px Segoe UI, Arial";
+      ctx.fillText($("dispTitle").textContent || "Disponibilidad", margin, 118);
+      ctx.fillStyle = "#667085";
+      ctx.font = "13px Segoe UI, Arial";
+      ctx.fillText($("dispCount").textContent || "", width - margin - 180, 118);
+      let y = 142;
+      const headers = ["CATEGORIA", "EQUIPO", "NO ECO", "CONDICION", "OBSERVACIONES"];
+      let x = margin;
+      ctx.textAlign = "center";
+      headers.forEach((header, idx) => {
+        drawBox(ctx, x, y, cols[idx], 36, "#0b2f6f", "#111827");
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "800 13px Segoe UI, Arial";
+        ctx.fillText(header, x + cols[idx] / 2, y + 23);
+        x += cols[idx];
+      });
+      y += 36;
+      ctx.textAlign = "left";
+      rows.forEach((row, ridx) => {
+        const rowH = heights[ridx];
+        x = margin;
+        const values = [row.category, row.equipment, row.eco, row.condition, row.observations];
+        values.forEach((value, idx) => {
+          const fill = idx === 3 ? conditionFill(value) : (idx === 4 && Number(row.highlight_observation || 0) ? "#fff9b1" : (ridx % 2 ? "#f8fafc" : "#ffffff"));
+          drawBox(ctx, x, y, cols[idx], rowH, fill, "#d8dee8");
+          ctx.fillStyle = idx === 3 ? "#000000" : "#1f2937";
+          ctx.font = idx === 3 ? "800 13px Segoe UI, Arial" : "13px Segoe UI, Arial";
+          if(idx === 3 || idx === 2){
+            ctx.textAlign = "center";
+            drawWrapped(ctx, value, x + 6, y + 22, cols[idx] - 12, 15, 2);
+          } else {
+            ctx.textAlign = "left";
+            drawWrapped(ctx, value, x + 8, y + 22, cols[idx] - 16, 16, 5);
+          }
+          x += cols[idx];
+        });
+        y += rowH;
+      });
+      ctx.textAlign = "left";
+      downloadCanvas(canvas, fileName);
+    }
     async function downloadElementImage(elementId, fileName, minWidth=1120){
+      if(elementId === "kpiPrintArea"){
+        downloadKpiCanvasImage(fileName);
+        return;
+      }
+      if(elementId === "dispPrintArea"){
+        downloadAvailabilityCanvasImage(fileName);
+        return;
+      }
       const {wrapper, clone} = await makeExportClone(elementId, minWidth);
       try {
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -1431,12 +1735,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return "";
     }
     function renderDisponibilidad(){
-      const search = ($("dispSearch").value || "").toUpperCase();
       const status = $("dispStatus").value;
-      const rows = (portal.availability || []).filter(row => {
-        const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
-        return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
-      });
+      const rows = availabilityRowsForCurrentFilters();
       const statusLabel = status || "Todas";
       $("dispTitle").textContent = `Disponibilidad | ${statusLabel}`;
       $("dispCount").textContent = `${rows.length} renglon(es)`;
