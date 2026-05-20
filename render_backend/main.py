@@ -604,8 +604,26 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .metric-card .bar-track { height:8px; border-radius:999px; background:#e5e7eb; margin-top:10px; overflow:hidden; }
     .metric-card .bar-fill { display:block; height:100%; background:var(--teal); }
     .metric-card.bad .bar-fill { background:var(--red); }
-    .kpi-layout { display:grid; grid-template-columns:minmax(320px,.95fr) minmax(420px,1.45fr); gap:14px; margin-top:14px; align-items:stretch; }
+    .kpi-format-board { display:grid; grid-template-columns:minmax(260px,.82fr) minmax(430px,1.36fr) minmax(260px,.82fr); gap:12px; align-items:stretch; }
+    .kpi-side { display:grid; grid-template-columns:1fr 1fr; gap:0; align-self:stretch; border:1px solid var(--line); background:white; }
+    .kpi-side .metric-card { min-height:126px; border-radius:0; border:0; border-right:1px solid var(--line); border-bottom:1px solid var(--line); box-shadow:none; background:#fff; }
+    .kpi-side .metric-card:nth-child(2n) { border-right:0; }
+    .kpi-side .metric-card:nth-last-child(-n+2) { border-bottom:0; }
+    .kpi-side .metric-card strong { color:#5f6671; font-size:30px; text-align:center; }
+    .kpi-side .metric-card span { text-align:center; color:#667085; font-size:13px; }
+    .kpi-side .metric-card small { display:flex; justify-content:space-between; gap:8px; margin-top:10px; color:#5f6671; }
+    .kpi-special-mode .kpi-format-board { display:block; }
+    .kpi-special-mode .kpi-side { border:0; background:transparent; }
+    .kpi-special-mode #kpiCards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+    .kpi-special-mode #kpiSideCards { display:none; }
+    .kpi-report-table { margin-top:14px; max-height:420px; }
     .chart { display:flex; align-items:end; gap:12px; min-height:270px; padding:20px 16px 28px; border:1px solid var(--line); border-radius:8px; background:linear-gradient(180deg,#fff,#f8fbff); overflow:auto; }
+    .kpi-format-mode .chart { display:block; min-height:330px; padding:12px 14px 18px; }
+    .kpi-chart-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; color:#111827; font-size:11px; }
+    .kpi-mini-tabs { display:grid; grid-template-columns:repeat(4, minmax(96px, 1fr)); gap:4px; flex:1; }
+    .kpi-mini-tabs span { border:1px solid #111; padding:7px 9px; background:white; color:#111; font-size:12px; }
+    .kpi-mini-tabs span.active { background:var(--teal); color:#031b1b; }
+    .chart-plot { min-height:258px; display:flex; align-items:end; gap:12px; overflow:auto; padding:18px 6px 8px; background:repeating-linear-gradient(to top, transparent 0, transparent 51px, rgba(100,116,139,.25) 52px); }
     .chart-bar { min-width:54px; display:grid; align-content:end; gap:6px; text-align:center; color:#344054; font-size:11px; }
     .chart-bar i { display:block; height:var(--h); min-height:4px; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#12b7b6,#078080); box-shadow:0 9px 18px rgba(0,156,154,.18); }
     .chart-bar.out i { background:linear-gradient(180deg,#e11d48,#b31212); }
@@ -636,7 +654,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       .print-only { display:block; }
     }
     @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
-    @media (max-width: 1050px) { .dashboard-grid, .kpi-layout { grid-template-columns:1fr; } }
+    @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -668,11 +686,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
       <div class="panel" id="kpiPrintArea">
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
-        <div class="dashboard-grid" id="kpiCards"></div>
-        <div class="kpi-layout">
-          <div class="table-wrap"><table id="kpiTable"></table></div>
+        <div class="kpi-format-board">
+          <div class="kpi-side" id="kpiCards"></div>
           <div class="chart" id="kpiChart"></div>
+          <div class="kpi-side" id="kpiSideCards"></div>
         </div>
+        <div class="table-wrap kpi-report-table"><table id="kpiTable"></table></div>
       </div>
     </section>
     <section id="preventivos" class="view">
@@ -796,6 +815,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function one(v){ return `${Number(v || 0).toFixed(1)}`; }
     function pct(v){ return `${one(v)}%`; }
     function statusClass(s){ return s === "Disponible" ? "ok" : (s === "Faltante" ? "bad" : "warn"); }
+    function setDashboardMode(mode){
+      const area = $("kpiPrintArea");
+      area.classList.toggle("kpi-format-mode", mode === "format");
+      area.classList.toggle("kpi-special-mode", mode !== "format");
+      $("kpiSideCards").innerHTML = "";
+    }
+    function metricCardHtml(label, value, note, width, bad=false){
+      return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
+    }
     async function load(){
       const [r, p] = await Promise.all([
         fetch("/api/filter-inventory", {headers: headers()}),
@@ -1042,6 +1070,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return {start, end, cols, rows, totals};
     }
     function renderOilDashboard(){
+      setDashboardMode("special");
       const report = oilRowsForPeriod();
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
       $("kpiTitle").textContent = `KPI Aceites | ${report.start} a ${report.end}`;
@@ -1052,7 +1081,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Litros total", `${one(report.totals.total_liters)} L`, "acumulado periodo", Math.min(report.totals.total_liters / 10, 100), false],
         ["Hrs trabajadas", `${one(report.totals.worked_hours)} h`, "capturas", Math.min(report.totals.worked_hours / 10, 100), false],
         ["L / hora", `${one(litersPerHour)}`, "consumo promedio", Math.min(litersPerHour * 20, 100), litersPerHour > 1.5],
-      ].map(([label, value, note, width, bad]) => `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(width,100),0)}%"></i></div></div>`).join("");
+      ].map(([label, value, note, width, bad]) => metricCardHtml(label, value, note, width, bad)).join("");
       const chartRows = [...report.rows].filter(row => row.total_liters > 0).sort((a,b) => b.total_liters - a.total_liters).slice(0,18);
       const maxValue = Math.max(...chartRows.map(row => row.total_liters), 1);
       $("kpiChart").innerHTML = chartRows.map(row => {
@@ -1065,6 +1094,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         `<tr><td><b>Total</b></td><td></td><td><b>${one(report.totals.worked_hours)}</b></td>${report.cols.map(col => `<td><b>${one(report.totals[col.key])}</b></td>`).join("")}<td><b>${one(report.totals.total_liters)}</b></td></tr></tbody>`;
     }
     function renderTireDashboard(){
+      setDashboardMode("special");
       const tire = portal.tire_kpi || {};
       const rows = Array.isArray(tire.rows) ? tire.rows : [];
       const summary = tire.summary || {};
@@ -1075,7 +1105,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Vida prom.", pct(summary.avg_life || 0), "igual a % piso", Number(summary.avg_life || 0), false],
         ["Criticas", `${summary.critical || 0}`, "cambio requerido", Number(summary.critical || 0) ? 100 : 0, Number(summary.critical || 0) > 0],
         ["Proximas", `${summary.soon || 0}`, "seguimiento", Number(summary.soon || 0) ? 70 : 0, false],
-      ].map(([label, value, note, width, bad]) => `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`).join("");
+      ].map(([label, value, note, width, bad]) => metricCardHtml(label, value, note, width, bad)).join("");
       const chartRows = [...rows].sort((a,b) => Number(a.life_percent || 0) - Number(b.life_percent || 0)).slice(0,24);
       $("kpiChart").innerHTML = chartRows.map(row => {
         const value = Math.max(Math.min(Number(row.life_percent || row.tread_remaining_percent || 0), 100), 0);
@@ -1100,28 +1130,35 @@ WAREHOUSE_HTML = r"""<!doctype html>
         renderTireDashboard();
         return;
       }
+      setDashboardMode("format");
       const report = calculateKpiRows();
       const settings = portal.settings || {};
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
       $("kpiTitle").textContent = `${report.group} | ${report.start} a ${report.end}`;
-      const cards = [
-        ["% Disponibilidad", pct(report.totals.availability), settings.meta_availability || 85, report.totals.availability],
-        ["% Utilizacion", pct(report.totals.utilization), settings.meta_utilization || 75, report.totals.utilization],
-        ["TMEF", `${one(report.totals.tmef)} h`, settings.meta_tmef || 8, report.totals.tmef],
-        ["TMPR", `${one(report.totals.tmpr)} h`, settings.meta_tmpr || 4, report.totals.tmpr],
-      ];
-      $("kpiCards").innerHTML = cards.map(([label, value, target, actual]) => {
-        const width = Math.max(Math.min((Number(actual || 0) / Math.max(Number(target || 1), 1)) * 100, 100), 0);
-        const bad = label === "TMPR" ? Number(actual || 0) > Number(target || 0) : Number(actual || 0) < Number(target || 0);
-        return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">Meta ${esc(label.includes("%") ? pct(target) : `${one(target)} h`)}</small><div class="bar-track"><i class="bar-fill" style="width:${width}%"></i></div></div>`;
-      }).join("");
-      $("kpiChart").innerHTML = report.rows.map(row => {
+      const metaAvailability = Number(settings.meta_availability || 85);
+      const metaUtilization = Number(settings.meta_utilization || 75);
+      const metaTmef = Number(settings.meta_tmef || 8);
+      const metaTmpr = Number(settings.meta_tmpr || 4);
+      $("kpiCards").innerHTML = [
+        metricCardHtml("% Disponibilidad", pct(report.totals.availability), `Meta ${pct(metaAvailability)}`, report.totals.availability, report.totals.availability < metaAvailability),
+        metricCardHtml("Meta", pct(metaAvailability), `${one(report.totals.availability - metaAvailability)}%`, metaAvailability, false),
+        metricCardHtml("% Utilizacion", pct(report.totals.utilization), `Meta ${pct(metaUtilization)}`, report.totals.utilization, report.totals.utilization < metaUtilization),
+        metricCardHtml("Meta", pct(metaUtilization), `${one(report.totals.utilization - metaUtilization)}%`, metaUtilization, report.totals.utilization < metaUtilization),
+      ].join("");
+      $("kpiSideCards").innerHTML = [
+        metricCardHtml("TMEF", `${one(report.totals.tmef)} h`, `Meta ${one(metaTmef)} h`, Math.min((report.totals.tmef / Math.max(metaTmef, 1)) * 100, 100), report.totals.tmef < metaTmef),
+        metricCardHtml("Meta", `${one(metaTmef)} h`, `${one(report.totals.tmef - metaTmef)} h`, 100, false),
+        metricCardHtml("TMPR", `${one(report.totals.tmpr)} h`, `Meta ${one(metaTmpr)} h`, Math.min((report.totals.tmpr / Math.max(metaTmpr, 1)) * 100, 100), report.totals.tmpr > metaTmpr),
+        metricCardHtml("Meta", `${one(metaTmpr)} h`, `${one(metaTmpr - report.totals.tmpr)} h`, 100, report.totals.tmpr > metaTmpr),
+      ].join("");
+      const chartBars = report.rows.map(row => {
         const h = Math.max(Math.min(row.availability, 100), 0);
         return `<div class="chart-bar ${row.out ? "out" : ""}" title="${esc(row.code)} ${esc(row.availabilityText)}"><span>${esc(row.availabilityText)}</span><i style="--h:${h * 2.1}px"></i><b>${esc(row.code)}</b></div>`;
       }).join("") || `<p class="muted">Sin datos KPI para el periodo.</p>`;
+      $("kpiChart").innerHTML = `<div class="kpi-chart-head"><b>KPI</b><div class="kpi-mini-tabs"><span class="active">% Disponibilidad</span><span>% Utilizacion</span><span>TMEF</span><span>TMPR</span></div></div><div class="chart-plot">${chartBars}</div>`;
       $("kpiTable").innerHTML = `<thead><tr><th># Eco</th><th>Equipo</th><th>Hrs periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>` +
         report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td>${esc(row.availabilityText)}</td><td>${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("") +
-        `</tbody>`;
+        `<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody>`;
     }
     function filteredPreventives(){
       const [start, end] = periodRange($("prPeriod").value, $("prBase").value);
