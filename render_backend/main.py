@@ -83,6 +83,15 @@ class CatalogSnapshot(Base):
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class PortalSnapshot(Base):
+    __tablename__ = "mga_portal_snapshot"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, default="default")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class FilterInventoryItem(Base):
     __tablename__ = "mga_filter_inventory_item"
 
@@ -127,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.2.7")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -278,6 +287,76 @@ def latest_catalog_payload(session: Session) -> dict[str, Any]:
         return {"ok": True, "source": "cloud-empty", "equipment": []}
     payload = json_loads(snapshot.payload_json)
     return payload if isinstance(payload, dict) else {"ok": True, "source": "cloud", "equipment": []}
+
+
+def portal_fallback_payload(session: Session) -> dict[str, Any]:
+    catalog = latest_catalog_payload(session)
+    equipment = catalog.get("equipment") if isinstance(catalog, dict) else []
+    if not isinstance(equipment, list):
+        equipment = []
+    captures: list[dict[str, Any]] = []
+    for row in session.scalars(select(MobileCapture).order_by(MobileCapture.work_date.desc(), MobileCapture.id.desc()).limit(1000)).all():
+        payload = json_loads(row.payload_json)
+        if not isinstance(payload, dict):
+            payload = {}
+        captures.append(
+            {
+                "id": row.id,
+                "work_date": row.work_date or str(payload.get("work_date") or ""),
+                "shift": str(payload.get("shift") or payload.get("turno") or "General"),
+                "equipment_code": row.equipment_code or str(payload.get("equipment_code") or payload.get("equipment") or ""),
+                "equipment_description": "",
+                "component": row.component_name or str(payload.get("component_name") or payload.get("component") or ""),
+                "hi": parse_float(payload.get("hi"), 0),
+                "hf": parse_float(payload.get("hf"), 0),
+                "worked_hours": parse_float(payload.get("worked_hours"), 0),
+                "mp_hours": parse_float(payload.get("mp_hours"), 0),
+                "mc_hours": parse_float(payload.get("mc_hours"), 0),
+                "standby_hours": parse_float(payload.get("standby_hours"), 0),
+                "stops": int(parse_float(payload.get("stops"), 0)),
+                "oil_liters": parse_float(payload.get("oil_liters"), 0),
+                "fault": str(payload.get("fault") or ""),
+                "wear": str(payload.get("wear") or ""),
+                "status": str(payload.get("status") or "Disponible"),
+                "observations": str(payload.get("observations") or payload.get("details") or ""),
+                "evidence_count": len(row.photos or []),
+            }
+        )
+    now = utc_now()
+    start = now.replace(day=1).date().isoformat()
+    return {
+        "ok": True,
+        "source": "cloud-fallback",
+        "generated_at": now.isoformat(timespec="seconds"),
+        "period": {"start": start, "end": now.date().isoformat(), "year": now.year, "month": now.month},
+        "settings": {
+            "shift_hours": 9,
+            "turns_per_day": 2,
+            "meta_availability": 85,
+            "meta_utilization": 75,
+            "meta_tmef": 8,
+            "meta_tmpr": 4,
+        },
+        "equipment": equipment,
+        "preventives": [],
+        "captures": captures,
+        "availability": [],
+        "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"],
+        "kpi_reports": {},
+    }
+
+
+def latest_portal_payload(session: Session) -> dict[str, Any]:
+    snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+    if snapshot is None:
+        return portal_fallback_payload(session)
+    payload = json_loads(snapshot.payload_json)
+    if not isinstance(payload, dict):
+        return portal_fallback_payload(session)
+    payload.setdefault("ok", True)
+    payload.setdefault("source", "cloud-portal")
+    payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
+    return payload
 
 
 def filter_match_keys(item: dict[str, Any]) -> list[str]:
@@ -451,6 +530,12 @@ def get_catalog(_auth: str | None = Header(default=None, alias="X-MGA-API-Key"))
         return catalog_with_inventory(session)
 
 
+@app.get("/api/portal")
+def get_portal() -> dict[str, Any]:
+    with SessionLocal() as session:
+        return latest_portal_payload(session)
+
+
 WAREHOUSE_HTML = r"""<!doctype html>
 <html lang="es">
 <head>
@@ -502,25 +587,117 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .wide { grid-column:1 / -1; }
+    .dashboard-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
+    .metric-card { border:1px solid var(--line); border-radius:8px; padding:13px; background:linear-gradient(180deg,#fff,#f8fbff); }
+    .metric-card span { display:block; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }
+    .metric-card strong { display:block; color:var(--blue); font-size:30px; margin-top:5px; }
+    .metric-card .bar-track { height:8px; border-radius:999px; background:#e5e7eb; margin-top:10px; overflow:hidden; }
+    .metric-card .bar-fill { display:block; height:100%; background:var(--teal); }
+    .metric-card.bad .bar-fill { background:var(--red); }
+    .kpi-layout { display:grid; grid-template-columns:minmax(320px,.95fr) minmax(420px,1.45fr); gap:14px; margin-top:14px; align-items:stretch; }
+    .chart { display:flex; align-items:end; gap:12px; min-height:270px; padding:20px 16px 28px; border:1px solid var(--line); border-radius:8px; background:linear-gradient(180deg,#fff,#f8fbff); overflow:auto; }
+    .chart-bar { min-width:54px; display:grid; align-content:end; gap:6px; text-align:center; color:#344054; font-size:11px; }
+    .chart-bar i { display:block; height:var(--h); min-height:4px; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#12b7b6,#078080); box-shadow:0 9px 18px rgba(0,156,154,.18); }
+    .chart-bar.out i { background:linear-gradient(180deg,#e11d48,#b31212); }
+    .schedule-strip { display:flex; gap:8px; min-height:92px; padding:10px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
+    .schedule-cell { min-width:74px; border:1px solid #dbe3ef; border-radius:7px; background:white; padding:7px; display:grid; align-content:start; gap:6px; }
+    .schedule-cell strong { color:var(--blue); font-size:12px; }
+    .schedule-cell em { font-style:normal; font-size:11px; color:var(--muted); }
+    .schedule-chip { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; border-radius:5px; padding:3px 5px; color:white; background:var(--blue); font-size:11px; }
+    .schedule-chip.late { background:var(--red); }
+    .schedule-chip.near { background:#b45309; }
+    .condition-cell { font-weight:800; text-align:center; }
+    .cond-ok { background:#35f235; color:#063b16; }
+    .cond-out { background:#ff1616; color:#210000; }
+    .cond-warn { background:#fff37a; color:#3f3300; }
+    .highlight { background:#fff9b1; }
+    .subtle-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+    .subtle-title h3 { margin:0; color:var(--blue); }
+    .print-only { display:none; }
+    @media print {
+      header, .tabs, #stats, .dashboard-controls, .no-print { display:none !important; }
+      main { width:100%; padding:0; }
+      body { background:white; }
+      .view { display:none !important; }
+      #dashboard { display:block !important; }
+      .panel { box-shadow:none; border:0; padding:0; }
+      .table-wrap { max-height:none; overflow:visible; border:0; }
+      th { position:static; }
+      .print-only { display:block; }
+    }
     @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
+    @media (max-width: 1050px) { .dashboard-grid, .kpi-layout { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
-      <div><h1>Inventario de filtros</h1><p>Almacen conectado a FS Filtros servicio</p></div>
+      <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad e inventario de filtros</p></div>
     </div>
     <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
   <main>
     <nav class="tabs">
-      <button class="active" data-tab="equipos">Filtros por equipo</button>
+      <button class="active" data-tab="dashboard">Dashboard KPI</button>
+      <button data-tab="preventivos">PR Preventivos</button>
+      <button data-tab="bitacora">Bitacora</button>
+      <button data-tab="disponibilidad">Disponibilidad</button>
+      <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
       <button data-tab="importar">Importar / exportar</button>
     </nav>
     <section class="stats" id="stats"></section>
-    <section id="equipos" class="view active">
+    <section id="dashboard" class="view active">
+      <div class="panel toolbar dashboard-controls">
+        <label>Grupo<select id="kpiGroup"></select></label>
+        <label>Desde<input id="kpiStart" type="date"></label>
+        <label>Hasta<input id="kpiEnd" type="date"></label>
+        <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
+        <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
+      </div>
+      <div class="panel" id="kpiPrintArea">
+        <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
+        <div class="dashboard-grid" id="kpiCards"></div>
+        <div class="kpi-layout">
+          <div class="table-wrap"><table id="kpiTable"></table></div>
+          <div class="chart" id="kpiChart"></div>
+        </div>
+      </div>
+    </section>
+    <section id="preventivos" class="view">
+      <div class="panel toolbar">
+        <label>Periodo<select id="prPeriod"><option>Mes</option><option>Semana</option><option>Año</option></select></label>
+        <label>Fecha base<input id="prBase" type="date"></label>
+        <label>Equipo<select id="prEquipment"></select></label>
+        <label>Buscar<input id="prSearch" placeholder="Equipo, componente, estado"></label>
+        <button class="btn" id="renderPrBtn">Consultar</button>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3 id="prTitle">Preventivos programados</h3><span class="muted" id="prCount"></span></div>
+        <div class="schedule-strip" id="prCalendar"></div>
+      </div>
+      <div class="table-wrap"><table id="prTable"></table></div>
+    </section>
+    <section id="bitacora" class="view">
+      <div class="panel toolbar">
+        <label>Equipo<select id="bitEquipment"></select></label>
+        <label>Desde<input id="bitStart" type="date"></label>
+        <label>Hasta<input id="bitEnd" type="date"></label>
+        <label>Buscar<input id="bitSearch" placeholder="Componente, falla, observacion"></label>
+        <button class="btn" id="renderBitBtn">Actualizar</button>
+      </div>
+      <div class="table-wrap"><table id="bitTable"></table></div>
+    </section>
+    <section id="disponibilidad" class="view">
+      <div class="panel toolbar">
+        <label>Categoria / equipo<input id="dispSearch" placeholder="Buscar"></label>
+        <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
+        <button class="btn" id="renderDispBtn">Actualizar</button>
+      </div>
+      <div class="table-wrap"><table id="dispTable"></table></div>
+    </section>
+    <section id="equipos" class="view">
       <div class="panel toolbar">
         <label>Equipo<select id="equipmentSelect"></select></label>
         <label>Servicio<select id="serviceSelect"><option value="">Todos</option></select></label>
@@ -572,6 +749,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
+    let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {} };
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
     apiKey.value = localStorage.getItem("mgaFilterApiKey") || "";
@@ -605,11 +783,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function showError(error){ alert(error.message || String(error)); }
     function esc(v){ return String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
     function num(v){ const n = Number(v || 0); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
+    function one(v){ return `${Number(v || 0).toFixed(1)}`; }
+    function pct(v){ return `${one(v)}%`; }
     function statusClass(s){ return s === "Disponible" ? "ok" : (s === "Faltante" ? "bad" : "warn"); }
     async function load(){
-      const r = await fetch("/api/filter-inventory", {headers: headers()});
+      const [r, p] = await Promise.all([
+        fetch("/api/filter-inventory", {headers: headers()}),
+        fetch("/api/portal", {headers: headers()})
+      ]);
       if(!r.ok) throw new Error(await apiError(r));
+      if(!p.ok) throw new Error(await apiError(p));
       data = await r.json();
+      portal = await p.json();
       renderAll();
     }
     function renderStats(){
@@ -661,12 +846,257 @@ WAREHOUSE_HTML = r"""<!doctype html>
         rows.map(m => `<tr><td>${esc(m.movement_date)}</td><td>${esc(m.part_number)}</td><td>${esc(m.movement_type)}</td><td>${num(m.quantity)}</td><td>${num(m.balance_after)}</td><td>${esc(m.reference)}</td></tr>`).join("") +
         `</tbody>`;
     }
-    function renderAll(){ renderStats(); renderSelectors(); renderFilters(); renderInventory(); renderMovements(); }
+    function parseIsoDate(value){
+      const parts = String(value || "").split("-").map(Number);
+      if(parts.length !== 3 || parts.some(Number.isNaN)) return new Date();
+      return new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+    function toIsoDate(date){
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+    function addDays(date, days){ const copy = new Date(date); copy.setDate(copy.getDate() + days); return copy; }
+    function periodRange(period, baseValue){
+      const base = parseIsoDate(baseValue || (portal.period || {}).start || toIsoDate(new Date()));
+      const key = String(period || "Mes").toLowerCase();
+      if(key.startsWith("sem")){
+        const start = addDays(base, -((base.getDay() + 6) % 7));
+        return [toIsoDate(start), toIsoDate(addDays(start, 6))];
+      }
+      if(key.startsWith("a")){
+        return [`${base.getFullYear()}-01-01`, `${base.getFullYear()}-12-31`];
+      }
+      const start = new Date(base.getFullYear(), base.getMonth(), 1);
+      const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+      return [toIsoDate(start), toIsoDate(end)];
+    }
+    function inRange(value, start, end){ return value && value >= start && value <= end; }
+    function dateList(start, end, limit=45){
+      const rows = [];
+      let cursor = parseIsoDate(start);
+      const stop = parseIsoDate(end);
+      while(cursor <= stop && rows.length < limit){ rows.push(toIsoDate(cursor)); cursor = addDays(cursor, 1); }
+      return rows;
+    }
+    function unavailable(status){
+      const text = String(status || "").toUpperCase();
+      return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP");
+    }
+    function groupMatches(eq, group){
+      const key = String(group || "Todos").toUpperCase();
+      const code = String(eq.code || eq.equipment_code || "").toUpperCase();
+      const text = `${code} ${eq.description || ""} ${eq.family || ""}`.toUpperCase();
+      if(key.includes("TODOS")) return true;
+      if(key.includes("BARRENACION")) return code.startsWith("JL") || code.startsWith("JA") || text.includes("JUMBO") || text.includes("BARREN") || text.includes("ANCLADOR");
+      if(key.includes("REZAGADO")) return code.startsWith("ST") || text.includes("SCOOP") || text.includes("CATERPILLAR") || text.includes("EPROC") || text.includes("R1300") || text.includes("R1600") || text.includes("REZAG");
+      return true;
+    }
+    function metric(period, worked, mp, mc, stops){
+      const available = Math.max(Number(period || 0) - Number(mp || 0) - Number(mc || 0), 0);
+      const availability = period > 0 ? Math.max(Math.min((available / period) * 100, 100), 0) : 0;
+      const utilization = available > 0 ? Math.max(Math.min((Number(worked || 0) / available) * 100, 100), 0) : 0;
+      const stopCount = Math.max(Number(stops || 0), 0);
+      return {
+        available,
+        availability,
+        utilization,
+        tmef: stopCount ? (Number(worked || 0) / stopCount) : Number(worked || 0),
+        tmpr: stopCount ? (Number(mc || 0) / stopCount) : 0,
+      };
+    }
+    function setOptions(selectId, options, allLabel="Todos"){
+      const select = $(selectId);
+      const current = select.value;
+      select.innerHTML = `<option value="">${esc(allLabel)}</option>` + options.map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join("");
+      if([...select.options].some(opt => opt.value === current)) select.value = current;
+    }
+    function portalEquipment(){
+      const rows = Array.isArray(portal.equipment) ? portal.equipment : [];
+      return rows.filter(e => e && (e.code || e.equipment_code));
+    }
+    function renderPortalSelectors(){
+      const period = portal.period || {};
+      const today = toIsoDate(new Date());
+      if(!$("kpiStart").value) $("kpiStart").value = period.start || today;
+      if(!$("kpiEnd").value) $("kpiEnd").value = period.end || today;
+      if(!$("prBase").value) $("prBase").value = period.start || today;
+      if(!$("bitStart").value) $("bitStart").value = period.start || today;
+      if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
+      const groups = (portal.kpi_groups && portal.kpi_groups.length ? portal.kpi_groups : ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"]).map(g => ({value:g, label:g}));
+      const previousGroup = $("kpiGroup").value;
+      $("kpiGroup").innerHTML = groups.map(g => `<option value="${esc(g.value)}">${esc(g.label)}</option>`).join("");
+      $("kpiGroup").value = previousGroup && groups.some(g => g.value === previousGroup) ? previousGroup : groups[0]?.value || "";
+      const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
+      setOptions("prEquipment", equipmentOptions, "Todos");
+      setOptions("bitEquipment", equipmentOptions, "Todos");
+    }
+    function calculateKpiRows(){
+      const group = $("kpiGroup").value || "Todos los equipos";
+      const start = $("kpiStart").value;
+      const end = $("kpiEnd").value;
+      const settings = portal.settings || {};
+      const shiftHours = Number(settings.shift_hours || 9);
+      const dailyHours = shiftHours * Number(settings.turns_per_day || 2);
+      const days = Math.max(Math.round((parseIsoDate(end) - parseIsoDate(start)) / 86400000) + 1, 1);
+      const captures = (portal.captures || []).filter(c => inRange(c.work_date, start, end));
+      const grouped = {};
+      portalEquipment().filter(eq => groupMatches(eq, group)).forEach(eq => {
+        const code = eq.code || eq.equipment_code || "";
+        grouped[code] = {code, description:eq.description || "", family:eq.family || "", status:eq.status || "Disponible", period:days * dailyHours, worked:0, mp:0, mc:0, stops:0, unavailableCount:0};
+      });
+      captures.forEach(c => {
+        const code = c.equipment_code || c.code || "";
+        if(!grouped[code]) return;
+        const row = grouped[code];
+        const mp = Number(c.mp_hours || 0);
+        let mc = Number(c.mc_hours || 0);
+        if(unavailable(c.status)){
+          const base = String(c.shift || "").toUpperCase() === "GENERAL" ? dailyHours : shiftHours;
+          mc += Math.max(base - mp - mc, 0);
+          row.unavailableCount += 1;
+          row.status = c.status || "FUERA";
+        }
+        row.worked += Number(c.worked_hours || 0);
+        row.mp += mp;
+        row.mc += mc;
+        row.stops += Number(c.stops || 0);
+      });
+      const rows = Object.values(grouped).sort((a,b) => a.code.localeCompare(b.code)).map(row => {
+        const out = row.worked <= 0 && (row.unavailableCount > 0 || unavailable(row.status));
+        const m = out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops);
+        return {...row, ...m, out, availabilityText: out ? "FUERA" : pct(m.availability), utilizationText: out ? "FUERA" : pct(m.utilization)};
+      });
+      const totals = rows.reduce((acc, row) => {
+        acc.period += row.period; acc.worked += row.worked; acc.mp += row.mp; acc.mc += row.mc; acc.stops += row.stops; acc.available += row.available;
+        return acc;
+      }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
+      totals.availability = totals.period ? (totals.available / totals.period) * 100 : 0;
+      totals.utilization = totals.available ? (totals.worked / totals.available) * 100 : 0;
+      totals.tmef = totals.stops ? totals.worked / totals.stops : totals.worked;
+      totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
+      return {group, start, end, rows, totals};
+    }
+    function renderDashboard(){
+      const report = calculateKpiRows();
+      const settings = portal.settings || {};
+      $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
+      $("kpiTitle").textContent = `${report.group} | ${report.start} a ${report.end}`;
+      const cards = [
+        ["% Disponibilidad", pct(report.totals.availability), settings.meta_availability || 85, report.totals.availability],
+        ["% Utilizacion", pct(report.totals.utilization), settings.meta_utilization || 75, report.totals.utilization],
+        ["TMEF", `${one(report.totals.tmef)} h`, settings.meta_tmef || 8, report.totals.tmef],
+        ["TMPR", `${one(report.totals.tmpr)} h`, settings.meta_tmpr || 4, report.totals.tmpr],
+      ];
+      $("kpiCards").innerHTML = cards.map(([label, value, target, actual]) => {
+        const width = Math.max(Math.min((Number(actual || 0) / Math.max(Number(target || 1), 1)) * 100, 100), 0);
+        const bad = label === "TMPR" ? Number(actual || 0) > Number(target || 0) : Number(actual || 0) < Number(target || 0);
+        return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">Meta ${esc(label.includes("%") ? pct(target) : `${one(target)} h`)}</small><div class="bar-track"><i class="bar-fill" style="width:${width}%"></i></div></div>`;
+      }).join("");
+      $("kpiChart").innerHTML = report.rows.map(row => {
+        const h = Math.max(Math.min(row.availability, 100), 0);
+        return `<div class="chart-bar ${row.out ? "out" : ""}" title="${esc(row.code)} ${esc(row.availabilityText)}"><span>${esc(row.availabilityText)}</span><i style="--h:${h * 2.1}px"></i><b>${esc(row.code)}</b></div>`;
+      }).join("") || `<p class="muted">Sin datos KPI para el periodo.</p>`;
+      $("kpiTable").innerHTML = `<thead><tr><th># Eco</th><th>Equipo</th><th>Hrs periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>` +
+        report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td>${esc(row.availabilityText)}</td><td>${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function filteredPreventives(){
+      const [start, end] = periodRange($("prPeriod").value, $("prBase").value);
+      const selected = $("prEquipment").value;
+      const search = ($("prSearch").value || "").toUpperCase();
+      const rows = (portal.preventives || []).filter(row => {
+        const dateOk = inRange(row.projected_date, start, end) || ["VENCIDO", "URGENTE"].includes(String(row.status || "").toUpperCase());
+        const eqOk = !selected || row.equipment_code === selected;
+        const text = [row.equipment_code,row.equipment_description,row.component,row.meter_type,row.status].join(" ").toUpperCase();
+        return dateOk && eqOk && (!search || text.includes(search));
+      }).sort((a,b) => String(a.projected_date || "").localeCompare(String(b.projected_date || "")) || String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")));
+      return {start, end, rows};
+    }
+    function renderPreventives(){
+      const result = filteredPreventives();
+      $("prTitle").textContent = `PR Preventivos | ${result.start} a ${result.end}`;
+      $("prCount").textContent = `${result.rows.length} preventivo(s)`;
+      const period = $("prPeriod").value.toLowerCase();
+      if(period.startsWith("a")){
+        const months = Array.from({length:12}, (_, idx) => {
+          const month = idx + 1;
+          const count = result.rows.filter(r => String(r.projected_date || "").slice(5,7) === String(month).padStart(2,"0")).length;
+          return `<div class="schedule-cell"><strong>${["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][idx]}</strong><em>${count} servicios</em></div>`;
+        });
+        $("prCalendar").innerHTML = months.join("");
+      } else {
+        $("prCalendar").innerHTML = dateList(result.start, result.end, 35).map(day => {
+          const chips = result.rows.filter(r => r.projected_date === day).slice(0,3).map(r => `<span class="schedule-chip ${r.status === "VENCIDO" ? "late" : (r.status === "URGENTE" ? "near" : "")}">${esc(r.equipment_code)} ${esc(r.component)}</span>`).join("");
+          return `<div class="schedule-cell"><strong>${esc(day.slice(8,10))}</strong><em>${esc(day.slice(5,7))}</em>${chips}</div>`;
+        }).join("");
+      }
+      $("prTable").innerHTML = `<thead><tr><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
+        result.rows.map(row => `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(row.projected_date || "")}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function renderBitacora(){
+      const selected = $("bitEquipment").value;
+      const start = $("bitStart").value;
+      const end = $("bitEnd").value;
+      const search = ($("bitSearch").value || "").toUpperCase();
+      const rows = (portal.captures || []).filter(row => {
+        const eqOk = !selected || row.equipment_code === selected;
+        const text = [row.component,row.fault,row.wear,row.status,row.observations].join(" ").toUpperCase();
+        return eqOk && inRange(row.work_date, start, end) && (!search || text.includes(search));
+      });
+      $("bitTable").innerHTML = `<thead><tr><th>Fecha</th><th>Turno</th><th>Equipo</th><th>Componente</th><th>HI</th><th>HF</th><th>Hrs Trab</th><th>MP</th><th>MC</th><th>Stand By</th><th>Paradas</th><th>Aceite L</th><th>Estatus</th><th>Falla / observaciones</th><th>Fotos</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td>${esc(row.work_date)}</td><td>${esc(row.shift)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${one(row.hi)}</td><td>${one(row.hf)}</td><td>${one(row.worked_hours)}</td><td>${one(row.mp_hours)}</td><td>${one(row.mc_hours)}</td><td>${one(row.standby_hours)}</td><td>${num(row.stops)}</td><td>${one(row.oil_liters)}</td><td>${esc(row.status)}</td><td>${esc([row.fault,row.observations].filter(Boolean).join(" | "))}</td><td>${num(row.evidence_count)}</td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function conditionClass(condition){
+      const text = String(condition || "").toUpperCase();
+      if(text.includes("FUERA") || text.includes("NO DISP")) return "cond-out";
+      if(text.includes("OPERATIVA") || text.includes("REPARACION") || text.includes("STAND")) return "cond-warn";
+      if(text.includes("DISPONIBLE")) return "cond-ok";
+      return "";
+    }
+    function renderDisponibilidad(){
+      const search = ($("dispSearch").value || "").toUpperCase();
+      const status = $("dispStatus").value;
+      const rows = (portal.availability || []).filter(row => {
+        const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
+        return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
+      });
+      $("dispTable").innerHTML = `<thead><tr><th>Categoria</th><th>Equipo</th><th>No ECO</th><th>Condicion</th><th>Observaciones</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td>${esc(row.category)}</td><td>${esc(row.equipment)}</td><td>${esc(row.eco)}</td><td class="condition-cell ${conditionClass(row.condition)}">${esc(row.condition)}</td><td class="${Number(row.highlight_observation || 0) ? "highlight" : ""}">${esc(row.observations)}</td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function renderAll(){
+      renderStats();
+      renderSelectors();
+      renderPortalSelectors();
+      renderDashboard();
+      renderPreventives();
+      renderBitacora();
+      renderDisponibilidad();
+      renderFilters();
+      renderInventory();
+      renderMovements();
+    }
     document.querySelectorAll(".tabs button").forEach(btn => btn.addEventListener("click", () => {
       document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       btn.classList.add("active"); $(btn.dataset.tab).classList.add("active");
     }));
+    ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
+    $("renderKpiBtn").addEventListener("click", renderDashboard);
+    $("printKpiBtn").addEventListener("click", () => window.print());
+    ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
+    $("prSearch").addEventListener("input", renderPreventives);
+    $("renderPrBtn").addEventListener("click", renderPreventives);
+    ["bitEquipment","bitStart","bitEnd"].forEach(id => $(id).addEventListener("change", renderBitacora));
+    $("bitSearch").addEventListener("input", renderBitacora);
+    $("renderBitBtn").addEventListener("click", renderBitacora);
+    $("dispSearch").addEventListener("input", renderDisponibilidad);
+    $("dispStatus").addEventListener("change", renderDisponibilidad);
+    $("renderDispBtn").addEventListener("click", renderDisponibilidad);
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
@@ -942,6 +1372,38 @@ async def publish_catalog(request: Request, _auth: str | None = Header(default=N
         snapshot.payload_json = json_dumps(payload)
         session.commit()
     return {"ok": True, "equipment": len(equipment)}
+
+
+@app.post("/api/portal/snapshot")
+async def publish_portal_snapshot(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Portal invalido.")
+    equipment = payload.get("equipment") or []
+    captures = payload.get("captures") or []
+    preventives = payload.get("preventives") or []
+    availability = payload.get("availability") or []
+    if not isinstance(equipment, list) or not isinstance(captures, list) or not isinstance(preventives, list):
+        raise HTTPException(status_code=400, detail="El portal debe contener listas validas.")
+    payload["ok"] = True
+    payload["source"] = "cloud-portal"
+    payload["updated_at"] = utc_now().isoformat(timespec="seconds")
+    with SessionLocal() as session:
+        snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+        if snapshot is None:
+            snapshot = PortalSnapshot(name="default")
+            session.add(snapshot)
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(payload)
+        session.commit()
+    return {
+        "ok": True,
+        "equipment": len(equipment),
+        "captures": len(captures),
+        "preventives": len(preventives),
+        "availability": len(availability) if isinstance(availability, list) else 0,
+    }
 
 
 @app.post("/api/sync")
