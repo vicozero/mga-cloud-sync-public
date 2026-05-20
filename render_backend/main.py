@@ -136,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.1")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -564,6 +564,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     header p { margin:7px 0 0; color:#dbeafe; font-size:14px; }
     .key-card { position:relative; z-index:1; min-width:280px; padding:12px; border:1px solid rgba(255,255,255,.16); border-radius:8px; background:rgba(255,255,255,.08); backdrop-filter:blur(10px); }
     .key-card label { color:#dbeafe; }
+    .key-card.missing { border-color:rgba(225,29,72,.55); box-shadow:0 0 0 3px rgba(225,29,72,.16); }
+    .edit-status { display:block; margin-top:7px; color:#bfdbfe; font-size:12px; font-weight:700; }
+    .edit-status.active { color:#99f6e4; }
     header input { min-width:260px; padding:10px 11px; border:1px solid rgba(255,255,255,.28); border-radius:6px; color:white; background:rgba(255,255,255,.1); outline:none; }
     header input::placeholder { color:#cbd5e1; }
     main { width:min(1480px, 100%); margin:0 auto; padding:18px; display:grid; gap:14px; }
@@ -597,6 +600,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .wide { grid-column:1 / -1; }
+    .form-message { display:none; grid-column:1 / -1; padding:10px 12px; border-radius:6px; font-size:13px; font-weight:700; }
+    .form-message.show { display:block; }
+    .form-message.error { color:#991b1b; background:#fee2e2; border:1px solid #fecaca; }
+    .form-message.ok { color:#065f46; background:#d1fae5; border:1px solid #a7f3d0; }
     .dashboard-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .metric-card { border:1px solid var(--line); border-radius:8px; padding:13px; background:linear-gradient(180deg,#fff,#f8fbff); }
     .metric-card span { display:block; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }
@@ -663,7 +670,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
       <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad e inventario de filtros</p></div>
     </div>
-    <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
+    <div class="key-card" id="keyCard"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label><small class="edit-status" id="editStatus">Solo consulta</small></div>
   </header>
   <main>
     <nav class="tabs">
@@ -759,6 +766,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Referencia<input id="movRef"></label>
             <label>Usuario<input id="movUser"></label>
             <label class="wide">Notas<textarea id="movNotes" rows="3"></textarea></label>
+            <div id="movementMessage" class="form-message" role="status"></div>
             <button class="btn wide" id="movementBtn">Guardar movimiento</button>
           </div>
           <h3>Ultimos movimientos</h3>
@@ -780,6 +788,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
     let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {} };
     const AUTO_REFRESH_MS = 15000;
+    const EDIT_KEY_HELP = "Pega la clave real de edicion en la esquina superior derecha. Esta en MGA Mantenimiento > Red > API key cloud. No escribas X-MGA-API-Key.";
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
     apiKey.value = localStorage.getItem("mgaFilterApiKey") || "";
@@ -787,17 +796,44 @@ WAREHOUSE_HTML = r"""<!doctype html>
       apiKey.value = "";
       localStorage.removeItem("mgaFilterApiKey");
     }
-    apiKey.addEventListener("input", () => localStorage.setItem("mgaFilterApiKey", apiKey.value.trim()));
+    function setFormMessage(id, text, type="error"){
+      const el = $(id);
+      if(!el) return;
+      el.textContent = text || "";
+      el.className = `form-message ${text ? "show" : ""} ${type || ""}`.trim();
+    }
+    function setImportMessage(text){ $("importResult").textContent = text || ""; }
+    function editKeyReady(){
+      const value = apiKey.value.trim();
+      return Boolean(value && value !== "X-MGA-API-Key");
+    }
+    function updateEditState(){
+      const ready = editKeyReady();
+      $("keyCard").classList.toggle("missing", !ready);
+      $("editStatus").classList.toggle("active", ready);
+      $("editStatus").textContent = ready ? "Edicion activa" : "Solo consulta: pega la clave para guardar";
+      return ready;
+    }
+    apiKey.addEventListener("input", () => {
+      localStorage.setItem("mgaFilterApiKey", apiKey.value.trim());
+      updateEditState();
+      if(editKeyReady()) setFormMessage("movementMessage", "", "");
+    });
     apiKey.addEventListener("keydown", (ev) => { if(ev.key === "Enter") load(true).catch(showError); });
     function hasApiKey(show=true){
-      const value = apiKey.value.trim();
-      if(value && value !== "X-MGA-API-Key") return true;
+      if(editKeyReady()){
+        updateEditState();
+        return true;
+      }
       apiKey.value = "";
       localStorage.removeItem("mgaFilterApiKey");
       if(show){
-        alert("Para modificar inventario pega la clave real. Esta en MGA Mantenimiento > Red > API key cloud.");
+        setFormMessage("movementMessage", EDIT_KEY_HELP, "error");
+        setImportMessage(EDIT_KEY_HELP);
         apiKey.focus();
+        apiKey.select();
       }
+      updateEditState();
       return false;
     }
     function headers(json=false){ const h = {}; if(apiKey.value.trim()) h["X-MGA-API-Key"] = apiKey.value.trim(); if(json) h["Content-Type"]="application/json"; return h; }
@@ -811,6 +847,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
     }
     function showError(error){ alert(error.message || String(error)); }
+    updateEditState();
     function esc(v){ return String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
     function num(v){ const n = Number(v || 0); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
     function one(v){ return `${Number(v || 0).toFixed(1)}`; }
@@ -1271,18 +1308,25 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("movementBtn").addEventListener("click", async () => {
       if(!hasApiKey(true)) return;
       const payload = { part_number:$("movPart").value, description:$("movDesc").value, movement_type:$("movType").value, quantity:$("movQty").value, unit:$("movUnit").value, equipment_code:$("movEquipment").value, service_interval:$("movService").value, reference:$("movRef").value, created_by:$("movUser").value, notes:$("movNotes").value };
+      setFormMessage("movementMessage", "Guardando movimiento...", "");
       const r = await fetch("/api/filter-inventory/movement", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
-      if(!r.ok) return alert(await apiError(r));
+      if(!r.ok) {
+        const message = await apiError(r);
+        setFormMessage("movementMessage", r.status === 401 ? `Clave incorrecta. ${EDIT_KEY_HELP}` : message, "error");
+        if(r.status === 401) apiKey.focus();
+        return;
+      }
       ["movPart","movDesc","movRef","movNotes"].forEach(id => $(id).value = "");
       await load();
+      setFormMessage("movementMessage", "Movimiento guardado y concentrado actualizado.", "ok");
     });
     $("importBtn").addEventListener("click", async () => {
-      const file = $("importFile").files[0]; if(!file) return alert("Selecciona un Excel.");
+      const file = $("importFile").files[0]; if(!file) return setImportMessage("Selecciona un Excel.");
       if(!hasApiKey(true)) return;
       const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
       const r = await fetch("/api/filter-inventory/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), replace:true})});
       const payload = await r.json().catch(() => ({}));
-      $("importResult").textContent = JSON.stringify(payload, null, 2);
+      $("importResult").textContent = r.status === 401 ? `Clave incorrecta. ${EDIT_KEY_HELP}` : JSON.stringify(payload, null, 2);
       if(r.ok) await load();
     });
     load().catch(showError);
