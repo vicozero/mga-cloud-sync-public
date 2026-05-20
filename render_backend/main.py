@@ -136,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.3")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.4")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -590,6 +590,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .btn.danger { background:linear-gradient(135deg,#b31212,var(--red)); }
     .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.92); border:1px solid rgba(216,222,232,.9); border-radius:8px; padding:16px; box-shadow:var(--shadow); }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
+    .dashboard-controls { grid-template-columns:1.05fr 1fr 1fr 1fr .95fr .95fr; }
+    .disp-controls { grid-template-columns:1fr 1fr 1fr 1fr; }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
     input, select, textarea { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; background:white; outline:none; transition:border .15s ease, box-shadow .15s ease; }
     input:focus, select:focus, textarea:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(0,156,154,.14); }
@@ -638,6 +640,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .kpi-report-table { margin-top:14px; max-height:420px; }
     .chart { display:flex; align-items:end; gap:12px; min-height:270px; padding:20px 16px 28px; border:1px solid var(--line); border-radius:8px; background:linear-gradient(180deg,#fff,#f8fbff); overflow:auto; }
     .kpi-format-mode .chart { display:block; min-height:330px; padding:12px 14px 18px; }
+    .report-export-head { display:none; align-items:center; justify-content:space-between; gap:16px; margin-bottom:10px; padding:4px 0 10px; border-bottom:3px solid var(--blue); }
+    .report-export-head .brand-mark { display:flex; align-items:center; gap:10px; color:var(--blue); font-weight:900; font-size:18px; }
+    .report-export-head .brand-mark img { width:74px; height:46px; object-fit:contain; padding:4px 6px; background:white; border:1px solid var(--line); border-radius:6px; }
+    .exporting .report-export-head, .print-export .report-export-head { display:flex; }
+    .exporting .table-wrap, .print-export .table-wrap { max-height:none !important; overflow:visible !important; }
+    .exporting th, .print-export th { position:static !important; }
     .kpi-chart-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; color:#111827; font-size:11px; }
     .kpi-mini-tabs { display:grid; grid-template-columns:repeat(4, minmax(96px, 1fr)); gap:4px; flex:1; }
     .kpi-mini-tabs span { border:1px solid #111; padding:7px 9px; background:white; color:#111; font-size:12px; }
@@ -660,6 +668,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .highlight { background:#fff9b1; }
     .subtle-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
     .subtle-title h3 { margin:0; color:var(--blue); }
+    .export-note { color:var(--muted); font-size:12px; font-weight:700; }
     .print-only { display:none; }
     @media print {
       header, .tabs, #stats, .dashboard-controls, .no-print { display:none !important; }
@@ -702,8 +711,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Hasta<input id="kpiEnd" type="date"></label>
         <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
         <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
+        <button class="btn secondary" id="downloadKpiImageBtn">Descargar imagen</button>
       </div>
       <div class="panel" id="kpiPrintArea">
+        <div class="report-export-head">
+          <div class="brand-mark"><img src="/static/mga-corner-logo.jfif" alt="MGA"><span>MGA</span></div>
+          <strong id="kpiExportTitle">Reporte KPI</strong>
+          <span class="export-note" id="kpiExportPeriod"></span>
+        </div>
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
         <div class="kpi-format-board">
           <div class="kpi-side" id="kpiCards"></div>
@@ -738,12 +753,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="table-wrap"><table id="bitTable"></table></div>
     </section>
     <section id="disponibilidad" class="view">
-      <div class="panel toolbar">
+      <div class="panel toolbar disp-controls">
         <label>Categoria / equipo<input id="dispSearch" placeholder="Buscar"></label>
         <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
         <button class="btn" id="renderDispBtn">Actualizar</button>
+        <button class="btn secondary" id="downloadDispImageBtn">Descargar imagen</button>
       </div>
-      <div class="table-wrap"><table id="dispTable"></table></div>
+      <div class="panel" id="dispPrintArea">
+        <div class="report-export-head">
+          <div class="brand-mark"><img src="/static/mga-corner-logo.jfif" alt="MGA"><span>MGA</span></div>
+          <strong>Disponibilidad de equipos</strong>
+          <span class="export-note" id="dispExportDate"></span>
+        </div>
+        <div class="subtle-title"><h3 id="dispTitle">Disponibilidad</h3><span class="muted" id="dispCount"></span></div>
+        <div class="table-wrap"><table id="dispTable"></table></div>
+      </div>
     </section>
     <section id="equipos" class="view">
       <div class="panel toolbar">
@@ -875,6 +899,129 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function metricCardHtml(label, value, note, width, bad=false){
       return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
+    }
+    function fileStamp(){
+      const d = new Date();
+      return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}_${String(d.getHours()).padStart(2,"0")}${String(d.getMinutes()).padStart(2,"0")}`;
+    }
+    function cleanFileName(value){
+      return String(value || "MGA").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0,90) || "MGA";
+    }
+    function allPageStyles(extra=""){
+      return [...document.querySelectorAll("style")].map(style => style.textContent || "").join("\n") + "\n" + extra;
+    }
+    async function blobToDataUrl(blob){
+      return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+    async function inlineImages(root){
+      const images = [...root.querySelectorAll("img")];
+      await Promise.all(images.map(async img => {
+        try {
+          const response = await fetch(img.src);
+          if(!response.ok) return;
+          img.src = await blobToDataUrl(await response.blob());
+        } catch {}
+      }));
+    }
+    async function makeExportClone(elementId, minWidth=1120){
+      const source = $(elementId);
+      if(!source) throw new Error("No se encontro el bloque para exportar.");
+      const wrapper = document.createElement("div");
+      wrapper.className = "exporting";
+      wrapper.style.cssText = "position:fixed;left:-20000px;top:0;background:#fff;padding:0;z-index:-1;";
+      const clone = source.cloneNode(true);
+      clone.classList.add("exporting");
+      clone.style.width = `${Math.max(source.scrollWidth, minWidth)}px`;
+      clone.style.background = "#fff";
+      clone.querySelectorAll(".table-wrap,.chart,.chart-plot").forEach(el => {
+        el.style.maxHeight = "none";
+        el.style.overflow = "visible";
+      });
+      clone.querySelectorAll("th").forEach(el => el.style.position = "static");
+      wrapper.appendChild(clone);
+      document.body.appendChild(wrapper);
+      await inlineImages(clone);
+      return { wrapper, clone };
+    }
+    function triggerDownload(url, fileName){
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    async function downloadElementImage(elementId, fileName, minWidth=1120){
+      const {wrapper, clone} = await makeExportClone(elementId, minWidth);
+      try {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const rect = clone.getBoundingClientRect();
+        const width = Math.ceil(Math.max(clone.scrollWidth, rect.width, minWidth));
+        const height = Math.ceil(Math.max(clone.scrollHeight, rect.height, 320));
+        const styleText = allPageStyles(`
+          *{box-sizing:border-box}
+          body{margin:0;background:#fff;font-family:Segoe UI,Arial,sans-serif;color:#1f2937}
+          .panel{box-shadow:none !important}
+          .table-wrap{max-height:none !important;overflow:visible !important}
+          th{position:static !important}
+        `);
+        const serialized = new XMLSerializer().serializeToString(clone);
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${styleText.replace(/<\/style/gi, "<\\/style")}</style>${serialized}</div></foreignObject></svg>`;
+        const imageUrl = URL.createObjectURL(new Blob([svg], {type:"image/svg+xml;charset=utf-8"}));
+        const img = new Image();
+        img.decoding = "async";
+        const loaded = new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+        img.src = imageUrl;
+        await loaded;
+        const scale = Math.min(window.devicePixelRatio || 2, 2);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(width * scale);
+        canvas.height = Math.ceil(height * scale);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.setTransform(scale, 0, 0, scale, 0, 0);
+        ctx.drawImage(img, 0, 0, width, height);
+        URL.revokeObjectURL(imageUrl);
+        const pngUrl = canvas.toDataURL("image/png");
+        triggerDownload(pngUrl, fileName);
+      } finally {
+        wrapper.remove();
+      }
+    }
+    async function printElementReport(elementId, title, minWidth=1120){
+      const {wrapper, clone} = await makeExportClone(elementId, minWidth);
+      try {
+        const popup = window.open("", "_blank", "width=1280,height=900");
+        if(!popup) {
+          window.print();
+          return;
+        }
+        const styles = allPageStyles(`
+          @page{size:landscape;margin:8mm}
+          body{margin:0;background:#fff;font-family:Segoe UI,Arial,sans-serif;color:#1f2937}
+          main{width:100%;padding:0}
+          .panel{box-shadow:none !important;border:0 !important;border-radius:0 !important;padding:0 !important}
+          .table-wrap{max-height:none !important;overflow:visible !important;border:1px solid #d8dee8}
+          th{position:static !important}
+          .kpi-format-board{display:grid !important;grid-template-columns:minmax(230px,.82fr) minmax(420px,1.36fr) minmax(230px,.82fr) !important;gap:10px}
+          .chart,.chart-plot{overflow:visible !important}
+        `);
+        popup.document.open();
+        popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${styles.replace(/<\/style/gi, "<\\/style")}</style></head><body><main class="print-export">${clone.outerHTML}</main><script>window.onload=()=>setTimeout(()=>window.print(),350);<\/script></body></html>`);
+        popup.document.close();
+      } finally {
+        wrapper.remove();
+      }
+    }
+    function setKpiExportMeta(){
+      $("kpiExportTitle").textContent = $("kpiTitle").textContent || "Reporte KPI";
+      $("kpiExportPeriod").textContent = $("portalUpdated").textContent || "";
     }
     async function load(){
       const [r, p] = await Promise.all([
@@ -1126,6 +1273,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const report = oilRowsForPeriod();
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
       $("kpiTitle").textContent = `KPI Aceites | ${report.start} a ${report.end}`;
+      setKpiExportMeta();
       const litersPerHour = report.totals.worked_hours ? report.totals.total_liters / report.totals.worked_hours : 0;
       const activeRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0);
       $("kpiCards").innerHTML = [
@@ -1152,6 +1300,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const summary = tire.summary || {};
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
       $("kpiTitle").textContent = "KPI Llantas";
+      setKpiExportMeta();
       $("kpiCards").innerHTML = [
         ["Llantas", `${summary.total || rows.length || 0}`, "registradas", 100, false],
         ["Vida prom.", pct(summary.avg_life || 0), "igual a % piso", Number(summary.avg_life || 0), false],
@@ -1191,6 +1340,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const metaUtilization = Number(settings.meta_utilization || 75);
       const metaTmef = Number(settings.meta_tmef || 8);
       const metaTmpr = Number(settings.meta_tmpr || 4);
+      setKpiExportMeta();
       $("kpiCards").innerHTML = [
         metricCardHtml("% Disponibilidad", pct(report.totals.availability), `Meta ${pct(metaAvailability)}`, report.totals.availability, report.totals.availability < metaAvailability),
         metricCardHtml("Meta", pct(metaAvailability), `${one(report.totals.availability - metaAvailability)}%`, metaAvailability, false),
@@ -1274,6 +1424,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
         return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
       });
+      const statusLabel = status || "Todas";
+      $("dispTitle").textContent = `Disponibilidad | ${statusLabel}`;
+      $("dispCount").textContent = `${rows.length} renglon(es)`;
+      $("dispExportDate").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "";
       $("dispTable").innerHTML = `<thead><tr><th>Categoria</th><th>Equipo</th><th>No ECO</th><th>Condicion</th><th>Observaciones</th></tr></thead><tbody>` +
         rows.map(row => `<tr><td>${esc(row.category)}</td><td>${esc(row.equipment)}</td><td>${esc(row.eco)}</td><td class="condition-cell ${conditionClass(row.condition)}">${esc(row.condition)}</td><td class="${Number(row.highlight_observation || 0) ? "highlight" : ""}">${esc(row.observations)}</td></tr>`).join("") +
         `</tbody>`;
@@ -1297,7 +1451,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     $("renderKpiBtn").addEventListener("click", renderDashboard);
-    $("printKpiBtn").addEventListener("click", () => window.print());
+    $("printKpiBtn").addEventListener("click", () => printElementReport("kpiPrintArea", $("kpiTitle").textContent || "Reporte KPI").catch(showError));
+    $("downloadKpiImageBtn").addEventListener("click", () => downloadElementImage("kpiPrintArea", `${cleanFileName($("kpiTitle").textContent)}_${fileStamp()}.png`, 1260).catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
@@ -1307,6 +1462,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dispSearch").addEventListener("input", renderDisponibilidad);
     $("dispStatus").addEventListener("change", renderDisponibilidad);
     $("renderDispBtn").addEventListener("click", renderDisponibilidad);
+    $("downloadDispImageBtn").addEventListener("click", () => downloadElementImage("dispPrintArea", `Disponibilidad_MGA_${fileStamp()}.png`, 1180).catch(showError));
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
