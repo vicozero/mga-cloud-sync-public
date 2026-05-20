@@ -136,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.6")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.7")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -711,7 +711,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Desde<input id="kpiStart" type="date"></label>
         <label>Hasta<input id="kpiEnd" type="date"></label>
         <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
-        <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
+        <button class="btn secondary" id="printKpiBtn">Descargar PDF</button>
         <button class="btn secondary" id="downloadKpiImageBtn">Descargar imagen</button>
       </div>
       <div class="panel" id="kpiPrintArea">
@@ -1340,6 +1340,52 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("kpiExportTitle").textContent = $("kpiTitle").textContent || "Reporte KPI";
       $("kpiExportPeriod").textContent = $("portalUpdated").textContent || "";
     }
+    function selectedKpiOfficialFormat(){
+      const group = $("kpiGroup").value || "";
+      const formats = {
+        "Equipos de Barrenacion": {
+          pdf: "/static/kpi_formats/kpi_barrenacion.pdf",
+          png: "/static/kpi_formats/kpi_barrenacion.png",
+          pdfName: "Formato_KPI_Equipos_de_Barrenacion_2026-05-20.pdf",
+          pngName: "Formato_KPI_Equipos_de_Barrenacion_2026-05-20.png",
+        },
+        "Equipos de Rezagado": {
+          pdf: "/static/kpi_formats/kpi_rezagado.pdf",
+          png: "/static/kpi_formats/kpi_rezagado.png",
+          pdfName: "Formato_KPI_Equipos_de_Rezagado_2026-05-20.pdf",
+          pngName: "Formato_KPI_Equipos_de_Rezagado_2026-05-20.png",
+        },
+        "KPI Aceites": {
+          pdf: "/static/kpi_formats/kpi_aceites.pdf",
+          png: "/static/kpi_formats/kpi_aceites.png",
+          pdfName: "Formato_KPI_KPI_Aceites_2026-05-20.pdf",
+          pngName: "Formato_KPI_KPI_Aceites_2026-05-20.png",
+        },
+        "KPI Llantas": {
+          pdf: "/static/kpi_formats/kpi_llantas.pdf",
+          png: "/static/kpi_formats/kpi_llantas.png",
+          pdfName: "Formato_KPI_KPI_Llantas_2026-05-20.pdf",
+          pngName: "Formato_KPI_KPI_Llantas_2026-05-20.png",
+        },
+      };
+      return formats[group] || null;
+    }
+    async function downloadKpiPdfForSelection(){
+      const official = selectedKpiOfficialFormat();
+      if(official){
+        triggerDownload(official.pdf, official.pdfName);
+        return;
+      }
+      await printElementReport("kpiPrintArea", $("kpiTitle").textContent || "Reporte KPI");
+    }
+    async function downloadKpiImageForSelection(){
+      const official = selectedKpiOfficialFormat();
+      if(official){
+        triggerDownload(official.png, official.pngName);
+        return;
+      }
+      await downloadElementImage("kpiPrintArea", `${cleanFileName($("kpiTitle").textContent)}_${fileStamp()}.png`, 1260);
+    }
     async function load(){
       const [r, p] = await Promise.all([
         fetch("/api/filter-inventory", {headers: headers()}),
@@ -1764,8 +1810,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     $("renderKpiBtn").addEventListener("click", renderDashboard);
-    $("printKpiBtn").addEventListener("click", () => runButtonTask("printKpiBtn", "Preparando PDF...", () => printElementReport("kpiPrintArea", $("kpiTitle").textContent || "Reporte KPI")).catch(showError));
-    $("downloadKpiImageBtn").addEventListener("click", () => runButtonTask("downloadKpiImageBtn", "Generando imagen...", () => downloadElementImage("kpiPrintArea", `${cleanFileName($("kpiTitle").textContent)}_${fileStamp()}.png`, 1260)).catch(showError));
+    $("printKpiBtn").addEventListener("click", () => runButtonTask("printKpiBtn", "Descargando PDF...", downloadKpiPdfForSelection).catch(showError));
+    $("downloadKpiImageBtn").addEventListener("click", () => runButtonTask("downloadKpiImageBtn", "Descargando imagen...", downloadKpiImageForSelection).catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
