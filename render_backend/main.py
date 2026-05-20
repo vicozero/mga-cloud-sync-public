@@ -136,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.2")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.3")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -476,6 +476,18 @@ def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="API key invalida.")
 
 
+def require_inventory_key(x_mga_api_key: str | None = None, x_mga_warehouse_key: str | None = None) -> None:
+    if os.getenv("MGA_REQUIRE_API_KEY", "").strip().lower() not in {"1", "true", "yes", "si"}:
+        return
+    expected_api = os.getenv("MGA_API_KEY", "").strip()
+    expected_warehouse = os.getenv("MGA_WAREHOUSE_KEY", "MGA4lmacen").strip()
+    if expected_api and x_mga_api_key == expected_api:
+        return
+    if expected_warehouse and x_mga_warehouse_key == expected_warehouse:
+        return
+    raise HTTPException(status_code=401, detail="Clave de almacen invalida.")
+
+
 def database_status() -> dict[str, Any]:
     return {
         "engine": engine.dialect.name,
@@ -670,7 +682,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
       <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad e inventario de filtros</p></div>
     </div>
-    <div class="key-card" id="keyCard"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label><small class="edit-status" id="editStatus">Solo consulta</small></div>
+    <div class="key-card" id="keyCard"><label>Clave almacen<input id="apiKey" type="password" placeholder="Clave de almacen"></label><small class="edit-status" id="editStatus">Solo consulta</small></div>
   </header>
   <main>
     <nav class="tabs">
@@ -788,13 +800,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
     let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {} };
     const AUTO_REFRESH_MS = 15000;
-    const EDIT_KEY_HELP = "Pega la clave real de edicion en la esquina superior derecha. Esta en MGA Mantenimiento > Red > API key cloud. No escribas X-MGA-API-Key.";
+    const EDIT_KEY_HELP = "Captura la clave de almacen asignada para registrar movimientos o importar inventario.";
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
-    apiKey.value = localStorage.getItem("mgaFilterApiKey") || "";
+    localStorage.removeItem("mgaFilterApiKey");
+    apiKey.value = localStorage.getItem("mgaWarehouseKey") || "";
     if(apiKey.value.trim() === "X-MGA-API-Key"){
       apiKey.value = "";
       localStorage.removeItem("mgaFilterApiKey");
+      localStorage.removeItem("mgaWarehouseKey");
     }
     function setFormMessage(id, text, type="error"){
       const el = $(id);
@@ -811,11 +825,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const ready = editKeyReady();
       $("keyCard").classList.toggle("missing", !ready);
       $("editStatus").classList.toggle("active", ready);
-      $("editStatus").textContent = ready ? "Edicion activa" : "Solo consulta: pega la clave para guardar";
+      $("editStatus").textContent = ready ? "Edicion de almacen activa" : "Solo consulta: captura clave de almacen";
       return ready;
     }
     apiKey.addEventListener("input", () => {
-      localStorage.setItem("mgaFilterApiKey", apiKey.value.trim());
+      localStorage.setItem("mgaWarehouseKey", apiKey.value.trim());
       updateEditState();
       if(editKeyReady()) setFormMessage("movementMessage", "", "");
     });
@@ -826,7 +840,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         return true;
       }
       apiKey.value = "";
-      localStorage.removeItem("mgaFilterApiKey");
+      localStorage.removeItem("mgaWarehouseKey");
       if(show){
         setFormMessage("movementMessage", EDIT_KEY_HELP, "error");
         setImportMessage(EDIT_KEY_HELP);
@@ -836,7 +850,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       updateEditState();
       return false;
     }
-    function headers(json=false){ const h = {}; if(apiKey.value.trim()) h["X-MGA-API-Key"] = apiKey.value.trim(); if(json) h["Content-Type"]="application/json"; return h; }
+    function headers(json=false){ const h = {}; if(apiKey.value.trim()) h["X-MGA-Warehouse-Key"] = apiKey.value.trim(); if(json) h["Content-Type"]="application/json"; return h; }
     async function apiError(response){
       const text = await response.text();
       try {
@@ -1312,7 +1326,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const r = await fetch("/api/filter-inventory/movement", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!r.ok) {
         const message = await apiError(r);
-        setFormMessage("movementMessage", r.status === 401 ? `Clave incorrecta. ${EDIT_KEY_HELP}` : message, "error");
+        setFormMessage("movementMessage", r.status === 401 ? `Clave de almacen incorrecta. ${EDIT_KEY_HELP}` : message, "error");
         if(r.status === 401) apiKey.focus();
         return;
       }
@@ -1326,7 +1340,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
       const r = await fetch("/api/filter-inventory/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), replace:true})});
       const payload = await r.json().catch(() => ({}));
-      $("importResult").textContent = r.status === 401 ? `Clave incorrecta. ${EDIT_KEY_HELP}` : JSON.stringify(payload, null, 2);
+      $("importResult").textContent = r.status === 401 ? `Clave de almacen incorrecta. ${EDIT_KEY_HELP}` : JSON.stringify(payload, null, 2);
       if(r.ok) await load();
     });
     load().catch(showError);
@@ -1416,8 +1430,12 @@ async def replace_filter_inventory_snapshot(request: Request, _auth: str | None 
 
 
 @app.post("/api/filter-inventory/import")
-async def import_filter_inventory(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
-    require_api_key(_auth)
+async def import_filter_inventory(
+    request: Request,
+    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
+    _warehouse_auth: str | None = Header(default=None, alias="X-MGA-Warehouse-Key"),
+) -> dict[str, Any]:
+    require_inventory_key(_auth, _warehouse_auth)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Carga invalida.")
@@ -1509,8 +1527,12 @@ def export_filter_inventory(_auth: str | None = Header(default=None, alias="X-MG
 
 
 @app.post("/api/filter-inventory/movement")
-async def save_filter_inventory_movement(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
-    require_api_key(_auth)
+async def save_filter_inventory_movement(
+    request: Request,
+    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
+    _warehouse_auth: str | None = Header(default=None, alias="X-MGA-Warehouse-Key"),
+) -> dict[str, Any]:
+    require_inventory_key(_auth, _warehouse_auth)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Movimiento invalido.")
