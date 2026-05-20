@@ -341,8 +341,10 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         "preventives": [],
         "captures": captures,
         "availability": [],
-        "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"],
+        "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado", "KPI Aceites", "KPI Llantas"],
         "kpi_reports": {},
+        "oil_kpi": {"rows": [], "totals": {}, "columns": []},
+        "tire_kpi": {"rows": [], "summary": {}},
     }
 
 
@@ -932,7 +934,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("prBase").value) $("prBase").value = period.start || today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
       if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
-      const groups = (portal.kpi_groups && portal.kpi_groups.length ? portal.kpi_groups : ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"]).map(g => ({value:g, label:g}));
+      const rawGroups = portal.kpi_groups && portal.kpi_groups.length ? [...portal.kpi_groups] : ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"];
+      ["KPI Aceites", "KPI Llantas"].forEach(group => { if(!rawGroups.includes(group)) rawGroups.push(group); });
+      const groups = rawGroups.map(g => ({value:g, label:g}));
       const previousGroup = $("kpiGroup").value;
       $("kpiGroup").innerHTML = groups.map(g => `<option value="${esc(g.value)}">${esc(g.label)}</option>`).join("");
       $("kpiGroup").value = previousGroup && groups.some(g => g.value === previousGroup) ? previousGroup : groups[0]?.value || "";
@@ -986,7 +990,116 @@ WAREHOUSE_HTML = r"""<!doctype html>
       totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
       return {group, start, end, rows, totals};
     }
+    function oilColumns(){
+      const cols = portal.oil_kpi && Array.isArray(portal.oil_kpi.columns) && portal.oil_kpi.columns.length ? portal.oil_kpi.columns : [
+        {label:"15W40", key:"oil_motor_15w40"},
+        {label:"ISO 68", key:"oil_hco_iso68"},
+        {label:"SAE 30", key:"oil_trans_sae30"},
+        {label:"SAE 50", key:"oil_sae50"},
+        {label:"85W140", key:"oil_85w140"},
+        {label:"ALMO", key:"almo_liters"},
+        {label:"Refrigerante", key:"coolant_liters"},
+      ];
+      return cols;
+    }
+    function oilGroupFor(eq){
+      const code = String(eq.code || eq.equipment_code || "").toUpperCase();
+      const text = `${code} ${eq.description || ""} ${eq.family || ""}`.toUpperCase();
+      if(code.startsWith("JL") || code.startsWith("JA") || text.includes("JUMBO") || text.includes("ANCLADOR")) return "BARRENACION";
+      if(code.startsWith("ST") || text.includes("SCOOP") || text.includes("CATERPILLAR") || text.includes("EPROC") || text.includes("R1300") || text.includes("R1600")) return "REZAGADO";
+      return "UTILITARIO";
+    }
+    function oilRowsForPeriod(){
+      const start = $("kpiStart").value;
+      const end = $("kpiEnd").value;
+      const cols = oilColumns();
+      const grouped = {};
+      portalEquipment().forEach(eq => {
+        const code = eq.code || eq.equipment_code || "";
+        grouped[code] = {code, description:eq.description || "", group:oilGroupFor(eq), worked_hours:0, total_liters:0};
+        cols.forEach(col => grouped[code][col.key] = 0);
+      });
+      (portal.captures || []).filter(row => inRange(row.work_date, start, end)).forEach(row => {
+        const code = row.equipment_code || row.code || "";
+        if(!grouped[code]) {
+          grouped[code] = {code, description:"", group:"UTILITARIO", worked_hours:0, total_liters:0};
+          cols.forEach(col => grouped[code][col.key] = 0);
+        }
+        grouped[code].worked_hours += Number(row.worked_hours || 0);
+        cols.forEach(col => {
+          const value = Number(row[col.key] || 0);
+          grouped[code][col.key] += value;
+          grouped[code].total_liters += value;
+        });
+      });
+      const rows = Object.values(grouped).sort((a,b) => `${a.group} ${a.code}`.localeCompare(`${b.group} ${b.code}`));
+      const totals = rows.reduce((acc, row) => {
+        acc.worked_hours += row.worked_hours;
+        acc.total_liters += row.total_liters;
+        cols.forEach(col => acc[col.key] = (acc[col.key] || 0) + Number(row[col.key] || 0));
+        return acc;
+      }, {worked_hours:0, total_liters:0});
+      return {start, end, cols, rows, totals};
+    }
+    function renderOilDashboard(){
+      const report = oilRowsForPeriod();
+      $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
+      $("kpiTitle").textContent = `KPI Aceites | ${report.start} a ${report.end}`;
+      const litersPerHour = report.totals.worked_hours ? report.totals.total_liters / report.totals.worked_hours : 0;
+      const activeRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0);
+      $("kpiCards").innerHTML = [
+        ["Equipos", `${activeRows.length}`, "con consumo o trabajo", 100, false],
+        ["Litros total", `${one(report.totals.total_liters)} L`, "acumulado periodo", Math.min(report.totals.total_liters / 10, 100), false],
+        ["Hrs trabajadas", `${one(report.totals.worked_hours)} h`, "capturas", Math.min(report.totals.worked_hours / 10, 100), false],
+        ["L / hora", `${one(litersPerHour)}`, "consumo promedio", Math.min(litersPerHour * 20, 100), litersPerHour > 1.5],
+      ].map(([label, value, note, width, bad]) => `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(width,100),0)}%"></i></div></div>`).join("");
+      const chartRows = [...report.rows].filter(row => row.total_liters > 0).sort((a,b) => b.total_liters - a.total_liters).slice(0,18);
+      const maxValue = Math.max(...chartRows.map(row => row.total_liters), 1);
+      $("kpiChart").innerHTML = chartRows.map(row => {
+        const h = Math.max((row.total_liters / maxValue) * 210, 4);
+        return `<div class="chart-bar" title="${esc(row.code)} ${one(row.total_liters)} L"><span>${one(row.total_liters)} L</span><i style="--h:${h}px"></i><b>${esc(row.code)}</b></div>`;
+      }).join("") || `<p class="muted">Sin consumos de aceite en el periodo.</p>`;
+      const headers = ["Equipo","Grupo","Hrs Trab", ...report.cols.map(col => col.label), "Total L"];
+      $("kpiTable").innerHTML = `<thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
+        report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.group)}</td><td>${one(row.worked_hours)}</td>${report.cols.map(col => `<td>${one(row[col.key])}</td>`).join("")}<td>${one(row.total_liters)}</td></tr>`).join("") +
+        `<tr><td><b>Total</b></td><td></td><td><b>${one(report.totals.worked_hours)}</b></td>${report.cols.map(col => `<td><b>${one(report.totals[col.key])}</b></td>`).join("")}<td><b>${one(report.totals.total_liters)}</b></td></tr></tbody>`;
+    }
+    function renderTireDashboard(){
+      const tire = portal.tire_kpi || {};
+      const rows = Array.isArray(tire.rows) ? tire.rows : [];
+      const summary = tire.summary || {};
+      $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
+      $("kpiTitle").textContent = "KPI Llantas";
+      $("kpiCards").innerHTML = [
+        ["Llantas", `${summary.total || rows.length || 0}`, "registradas", 100, false],
+        ["Vida prom.", pct(summary.avg_life || 0), "igual a % piso", Number(summary.avg_life || 0), false],
+        ["Criticas", `${summary.critical || 0}`, "cambio requerido", Number(summary.critical || 0) ? 100 : 0, Number(summary.critical || 0) > 0],
+        ["Proximas", `${summary.soon || 0}`, "seguimiento", Number(summary.soon || 0) ? 70 : 0, false],
+      ].map(([label, value, note, width, bad]) => `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`).join("");
+      const chartRows = [...rows].sort((a,b) => Number(a.life_percent || 0) - Number(b.life_percent || 0)).slice(0,24);
+      $("kpiChart").innerHTML = chartRows.map(row => {
+        const value = Math.max(Math.min(Number(row.life_percent || row.tread_remaining_percent || 0), 100), 0);
+        const out = ["CRITICA","BAJA"].includes(String(row.control_status || "").toUpperCase());
+        return `<div class="chart-bar ${out ? "out" : ""}" title="${esc(row.equipment_code)} ${esc(row.tire_code)} ${pct(value)}"><span>${pct(value)}</span><i style="--h:${Math.max(value * 2.1, 4)}px"></i><b>${esc(row.equipment_code || "-")}</b></div>`;
+      }).join("") || `<p class="muted">Sin llantas registradas.</p>`;
+      $("kpiTable").innerHTML = `<thead><tr><th>Equipo</th><th>Llanta</th><th>Pos.</th><th>Marca</th><th>Hrs uso</th><th>Hrs rest.</th><th>% Vida</th><th>% Piso</th><th>KPI</th><th>Recomendacion</th></tr></thead><tbody>` +
+        rows.map(row => {
+          const value = Number(row.life_percent || row.tread_remaining_percent || 0);
+          const status = String(row.control_status || "");
+          const cls = status === "OK" ? "ok" : (status === "PROXIMA" || status === "REVISION" ? "warn" : "bad");
+          return `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.tire_code)}</td><td>${esc(row.position)}</td><td>${esc(row.brand)}</td><td>${one(row.hours_used)}</td><td>${one(row.life_remaining_hours)}</td><td>${pct(value)}</td><td>${pct(value)}</td><td><span class="pill ${cls}">${esc(status || "S/D")}</span></td><td>${esc(row.recommendation || "")}</td></tr>`;
+        }).join("") + `</tbody>`;
+    }
     function renderDashboard(){
+      const selectedGroup = $("kpiGroup").value || "";
+      if(selectedGroup === "KPI Aceites") {
+        renderOilDashboard();
+        return;
+      }
+      if(selectedGroup === "KPI Llantas") {
+        renderTireDashboard();
+        return;
+      }
       const report = calculateKpiRows();
       const settings = portal.settings || {};
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
