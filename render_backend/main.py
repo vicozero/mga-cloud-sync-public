@@ -136,7 +136,7 @@ engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.0")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -779,6 +779,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
     let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {} };
+    const AUTO_REFRESH_MS = 15000;
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
     apiKey.value = localStorage.getItem("mgaFilterApiKey") || "";
@@ -1285,6 +1286,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(r.ok) await load();
     });
     load().catch(showError);
+    setInterval(() => {
+      if(document.visibilityState !== "visible") return;
+      load().catch(error => console.warn("No se pudo actualizar automatico", error));
+    }, AUTO_REFRESH_MS);
   </script>
 </body>
 </html>"""
