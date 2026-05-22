@@ -2284,32 +2284,204 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function metricCardHtml(label, value, note, width, bad=false){
       return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
     }
-    function kpiFormatUrl(kind){
-      return `/api/kpi-format/${kind}?group=${encodeURIComponent($("kpiGroup").value || "")}`;
+    const monthNames = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    function periodTitle(start){
+      const date = parseIsoDate(start || $("kpiStart").value);
+      return `${monthNames[date.getMonth()].toUpperCase()} ${date.getFullYear()}`;
     }
-    async function openKpiPdf(){
-      const r = await fetch(kpiFormatUrl("pdf"), {headers: headers()});
-      if(!r.ok) return alert(await apiError(r));
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const win = window.open(url, "_blank");
-      if(!win){
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `Formato_KPI_${($("kpiGroup").value || "KPI").replaceAll(" ","_")}.pdf`;
-        a.click();
-      }
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    function kpiSheetKind(){
+      const group = String($("kpiGroup").value || "").toUpperCase();
+      if(group.includes("ACEITE")) return "oil";
+      if(group.includes("LLANTA")) return "tire";
+      if(group.includes("REZAGADO")) return "machine";
+      return "machine";
+    }
+    function kpiExactCss(kind="machine", forPrint=false){
+      const page = kind === "tire" ? "letter portrait" : "letter landscape";
+      return `
+        ${forPrint ? `@page { size:${page}; margin:0; } html,body{margin:0;background:white;}` : ""}
+        .kpi-sheet{width:1200px;min-height:${kind === "tire" ? 1295 : 927}px;background:#eeeeee;color:#041b40;font-family:Segoe UI,Arial,sans-serif;box-sizing:border-box;padding:0;overflow:hidden;}
+        .kpi-sheet *{box-sizing:border-box;letter-spacing:0;}
+        .kpi-head{height:64px;background:#123d82;color:white;display:flex;align-items:center;justify-content:center;position:relative;border-bottom:4px solid #0aa6a6;}
+        .kpi-head h1{margin:0;font-size:30px;line-height:1;font-weight:800;text-transform:uppercase;}
+        .kpi-logo{position:absolute;left:34px;top:14px;font-weight:800;font-size:19px;color:white;}
+        .kpi-logo::after{content:"";display:block;width:54px;height:4px;background:#e11d48;margin-top:4px;}
+        .kpi-title-row{height:54px;display:flex;align-items:center;justify-content:center;color:#06306e;font-size:24px;font-weight:800;background:#f2f2f2;}
+        .kpi-board{display:grid;grid-template-columns:330px 1fr 280px;gap:12px;padding:0 26px 12px;}
+        .kpi-card-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid #d8d8d8;background:white;}
+        .kpi-card{height:128px;border-right:1px solid #ddd;border-bottom:1px solid #ddd;padding:16px 12px;text-align:center;background:white;}
+        .kpi-card h3{margin:0 0 10px;color:#666;font-size:16px;}
+        .kpi-card strong{display:block;color:#666;font-size:30px;}
+        .kpi-card .bar{height:10px;background:#e5e7eb;margin:14px 4px 8px;border-radius:0;overflow:hidden;}
+        .kpi-card .bar i{display:block;height:100%;background:#0aa6a6;}
+        .kpi-card.bad .bar i{background:#e11d48;}
+        .kpi-card small{color:#5f6774;font-size:12px;}
+        .kpi-chart-panel{background:white;padding:16px 20px 10px;min-height:360px;}
+        .kpi-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:0 0 18px;}
+        .kpi-tabs span{border:1px solid #111;padding:8px 10px;font-size:13px;background:white;color:#111;}
+        .kpi-tabs span.active{background:#0aa6a6;color:#041b40;}
+        .kpi-bars{height:250px;display:flex;gap:18px;align-items:flex-end;border-bottom:1px solid #ccc;border-left:1px solid #eee;padding:18px 14px 0;position:relative;}
+        .kpi-bars::before,.kpi-bars::after{content:"";position:absolute;left:14px;right:14px;border-top:1px dashed #999;}
+        .kpi-bars::before{top:70px}.kpi-bars::after{top:125px}
+        .kpi-bar{width:54px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;}
+        .kpi-bar em{font-style:normal;font-size:12px;color:#303846;margin-bottom:4px;}
+        .kpi-bar i{display:block;width:46px;height:var(--h);min-height:4px;background:#0aa6a6;border:1px solid #006f70;}
+        .kpi-bar.out i{background:#e11d48;border-color:#be123c;}
+        .kpi-bar b{font-size:10px;color:#27364a;margin-top:8px;font-weight:600;text-align:center;max-width:76px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .kpi-report-name{text-align:center;font-size:17px;font-weight:800;color:#000;margin:10px 0 6px;}
+        .kpi-days{display:flex;gap:70px;justify-content:center;align-items:center;margin-bottom:8px;font-size:13px;color:#777;font-weight:700;}
+        .kpi-days b{display:inline-block;background:white;color:#000;min-width:80px;padding:6px 20px;margin-left:10px;}
+        .kpi-table-wrap{padding:0 90px 22px;}
+        .kpi-exact-table{width:100%;border-collapse:collapse;background:white;font-size:11px;color:#334155;}
+        .kpi-exact-table th{background:white;color:#555;border:1px solid #111;font-weight:800;text-align:center;padding:7px 5px;}
+        .kpi-exact-table td{border:1px solid #111;text-align:center;padding:6px 5px;background:white;}
+        .kpi-exact-table .badtext{color:#e11d48}.kpi-exact-table .oktext{color:#0aa6a6}
+        .oil-sheet{background:#f6f8fb;}
+        .oil-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:14px 18px;}
+        .oil-stat{background:white;border:1px solid #d6dee9;padding:12px;text-align:center;}
+        .oil-stat strong{display:block;color:#0b2f6f;font-size:26px}.oil-stat span{color:#667085;font-weight:700;font-size:12px;}
+        .oil-grid{display:grid;grid-template-columns:1fr 1.25fr;gap:14px;padding:0 18px 16px;}
+        .oil-panel{background:white;border:1px solid #d6dee9;padding:14px;}
+        .oil-panel h2{margin:0 0 12px;color:#0b2f6f;font-size:20px;}
+        .oil-bars{height:260px;display:flex;align-items:flex-end;gap:16px;border-bottom:1px solid #ccd5e1;padding:10px 10px 0;}
+        .oil-bar{width:50px;text-align:center;font-size:10px;color:#334155}.oil-bar i{display:block;height:var(--h);background:#0aa6a6;margin:4px auto 7px;width:38px;}
+        .tire-sheet{background:#f5f8fc;}
+        .tire-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:14px 12px;}
+        .tire-stat{background:white;border:1px solid #d8dee8;padding:12px;text-align:center;clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);}
+        .tire-stat strong{display:block;font-size:26px;color:#0b2f6f}.tire-stat span{font-size:12px;color:#667085;font-weight:700;}
+        .tire-table{width:100%;border-collapse:collapse;background:white;font-size:15px;color:#5c6673;}
+        .tire-table th{background:#e8eef7;border:1px solid #cdd5df;padding:9px;color:#516173;text-align:center;}
+        .tire-table td{border:1px solid #d8dee8;padding:8px;text-align:center;}
+        .life-cell{display:flex;align-items:center;gap:8px;justify-content:flex-end}.life-bar{width:78px;height:18px;background:#e5e7eb}.life-bar i{display:block;height:100%;background:#0aa6a6;width:var(--w);}
+        ${forPrint ? `.kpi-sheet{transform-origin:top left;} body{display:flex;justify-content:center;} .print-note{display:none;}` : ""}
+      `;
+    }
+    function metricProgress(value, target, inverse=false){
+      const v = Number(value || 0), t = Math.max(Number(target || 1), 1);
+      return inverse ? Math.min((t / Math.max(v, 0.1)) * 100, 100) : Math.min((v / t) * 100, 100);
+    }
+    function exactMachineHtml(){
+      const report = calculateKpiRows();
+      const settings = portal.settings || {};
+      const targets = {
+        availability:Number(settings.meta_availability || 85),
+        utilization:Number(settings.meta_utilization || 75),
+        tmef:Number(settings.meta_tmef || 8),
+        tmpr:Number(settings.meta_tmpr || 4),
+      };
+      const metric = kpiMetricTabs.some(item => item.key === selectedKpiMetric) ? selectedKpiMetric : "availability";
+      const metricLabel = kpiMetricTabs.find(item => item.key === metric)?.label || "% Disponibilidad";
+      const axisMax = kpiMetricAxisMax(metric, report.rows, targets[metric]);
+      const chartRows = report.rows.slice(0, 8);
+      const tabs = kpiMetricTabs.map(item => `<span class="${item.key === metric ? "active" : ""}">${esc(item.label)}</span>`).join("");
+      const bars = chartRows.map(row => {
+        const value = kpiMetricValue(row, metric);
+        const height = Math.max(Math.min(value / Math.max(axisMax, 1), 1) * 210, 4);
+        return `<div class="kpi-bar ${row.out ? "out" : ""}"><em>${esc(kpiMetricText(row, metric))}</em><i style="--h:${height}px"></i><b>${esc(row.code || "-")}</b></div>`;
+      }).join("") || `<p>Sin datos KPI.</p>`;
+      const tableRows = report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td class="${row.availability < targets.availability ? "badtext" : "oktext"}">${esc(row.availabilityText)}</td><td class="${row.utilization < targets.utilization ? "badtext" : "oktext"}">${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td></tr>`).join("");
+      return `<section class="kpi-sheet">
+        <div class="kpi-title-row"><div class="kpi-logo">MGA</div>${esc(report.group)}</div>
+        <div class="kpi-board">
+          <div class="kpi-card-grid">
+            <div class="kpi-card ${report.totals.availability < targets.availability ? "bad" : ""}"><h3>% Disponibilidad</h3><strong>${pct(report.totals.availability)}</strong><div class="bar"><i style="width:${metricProgress(report.totals.availability, targets.availability)}%"></i></div><small>Meta ${pct(targets.availability)}</small></div>
+            <div class="kpi-card"><h3>Meta</h3><strong>${pct(targets.availability)}</strong><div class="bar"><i style="width:${targets.availability}%"></i></div><small>${one(report.totals.availability - targets.availability)}%</small></div>
+            <div class="kpi-card ${report.totals.utilization < targets.utilization ? "bad" : ""}"><h3>% Utilizacion</h3><strong>${pct(report.totals.utilization)}</strong><div class="bar"><i style="width:${metricProgress(report.totals.utilization, targets.utilization)}%"></i></div><small>Meta ${pct(targets.utilization)}</small></div>
+            <div class="kpi-card"><h3>Meta</h3><strong>${pct(targets.utilization)}</strong><div class="bar"><i style="width:${targets.utilization}%"></i></div><small>${one(report.totals.utilization - targets.utilization)}%</small></div>
+          </div>
+          <div class="kpi-chart-panel"><div class="kpi-tabs">${tabs}</div><div class="kpi-bars">${bars}</div><div style="text-align:center;margin-top:8px;font-weight:700;color:#52627a">${esc(metricLabel)}</div></div>
+          <div class="kpi-card-grid">
+            <div class="kpi-card ${report.totals.tmef < targets.tmef ? "bad" : ""}"><h3>TMEF</h3><strong>${one(report.totals.tmef)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmef, targets.tmef)}%"></i></div><small>Meta ${one(targets.tmef)} h</small></div>
+            <div class="kpi-card"><h3>Meta</h3><strong>${one(targets.tmef)} hrs</strong><div class="bar"><i style="width:100%"></i></div><small>${one(report.totals.tmef - targets.tmef)} h</small></div>
+            <div class="kpi-card ${report.totals.tmpr > targets.tmpr ? "bad" : ""}"><h3>TMPR</h3><strong>${one(report.totals.tmpr)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmpr, targets.tmpr, true)}%"></i></div><small>Meta ${one(targets.tmpr)} h</small></div>
+            <div class="kpi-card"><h3>Meta</h3><strong>${one(targets.tmpr)} hrs</strong><div class="bar"><i style="width:100%"></i></div><small>${one(targets.tmpr - report.totals.tmpr)} h</small></div>
+          </div>
+        </div>
+        <div class="kpi-report-name">REPORTE SEMANAL DE INDICADORES</div>
+        <div class="kpi-days"><span>Dia Inicial:<b>${Number(String(report.start).slice(-2))}</b></span><span>Dia Final:<b>${Number(String(report.end).slice(-2))}</b></span></div>
+        <div class="kpi-table-wrap"><table class="kpi-exact-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs Periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs Trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th></tr></thead><tbody>${tableRows}<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td></tr></tbody></table></div>
+      </section>`;
+    }
+    function exactOilHtml(){
+      const report = oilRowsForPeriod();
+      const litersPerHour = report.totals.worked_hours ? report.totals.total_liters / report.totals.worked_hours : 0;
+      const activeRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0);
+      const chartRows = [...report.rows].filter(row => row.total_liters > 0).sort((a,b) => b.total_liters - a.total_liters).slice(0,12);
+      const maxValue = Math.max(...chartRows.map(row => row.total_liters), 1);
+      const bars = chartRows.map(row => `<div class="oil-bar"><b>${one(row.total_liters)}</b><i style="--h:${Math.max((row.total_liters / maxValue) * 220, 4)}px"></i><span>${esc(row.code)}</span></div>`).join("");
+      const headers = ["Equipo","Grupo","Hrs Trab", ...report.cols.map(col => col.label), "Total L"];
+      const tableRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0).map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.group)}</td><td>${one(row.worked_hours)}</td>${report.cols.map(col => `<td>${one(row[col.key])}</td>`).join("")}<td>${one(row.total_liters)}</td></tr>`).join("");
+      return `<section class="kpi-sheet oil-sheet">
+        <div class="kpi-head"><div class="kpi-logo">MGA</div><h1>KPI ACEITES - ${esc(periodTitle(report.start))}</h1></div>
+        <div class="oil-stats">
+          <div class="oil-stat"><strong>${activeRows.length}</strong><span>Equipos</span></div>
+          <div class="oil-stat"><strong>${one(report.totals.total_liters)} L</strong><span>Litros total</span></div>
+          <div class="oil-stat"><strong>${one(report.totals.worked_hours)} h</strong><span>Hrs trabajadas</span></div>
+          <div class="oil-stat"><strong>${one(litersPerHour)}</strong><span>L / hora</span></div>
+          <div class="oil-stat"><strong>${report.cols.length}</strong><span>Tipos aceite</span></div>
+        </div>
+        <div class="oil-grid">
+          <div class="oil-panel"><h2>Consumo por equipo</h2><div class="oil-bars">${bars || "Sin consumos"}</div></div>
+          <div class="oil-panel"><h2>Detalle de aceites</h2><table class="kpi-exact-table"><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tableRows}<tr><td><b>Total</b></td><td></td><td><b>${one(report.totals.worked_hours)}</b></td>${report.cols.map(col => `<td><b>${one(report.totals[col.key])}</b></td>`).join("")}<td><b>${one(report.totals.total_liters)}</b></td></tr></tbody></table></div>
+        </div>
+      </section>`;
+    }
+    function exactTireHtml(){
+      const tire = portal.tire_kpi || {};
+      const rows = Array.isArray(tire.rows) ? tire.rows : [];
+      const summary = tire.summary || {};
+      const tableRows = rows.slice(0, 28).map(row => {
+        const value = Math.max(Math.min(Number(row.life_percent || row.tread_remaining_percent || 0), 100), 0);
+        const status = String(row.control_status || "");
+        const color = status === "OK" ? "#0aa6a6" : (status === "PROXIMA" || status === "REVISION" ? "#b45309" : "#e11d48");
+        return `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.tire_code)}</td><td>${esc(row.position)}</td><td>${one(row.hours_used)}</td><td>${one(row.life_remaining_hours)}</td><td><div class="life-cell"><span>${pct(value)}</span><div class="life-bar"><i style="--w:${value}%"></i></div></div></td><td>${pct(value)}</td><td style="color:${color};font-weight:800">${esc(status || "S/D")}</td></tr>`;
+      }).join("");
+      return `<section class="kpi-sheet tire-sheet">
+        <div class="kpi-head"><div class="kpi-logo">MGA</div><h1>VIDA UTIL DE LLANTAS - ${esc(periodTitle($("kpiStart").value))}</h1></div>
+        <div class="tire-stats">
+          <div class="tire-stat"><strong>${summary.total || rows.length || 0}</strong><span>Llantas</span></div>
+          <div class="tire-stat"><strong>${pct(summary.avg_life || 0)}</strong><span>Vida prom.</span></div>
+          <div class="tire-stat"><strong>${summary.critical || 0}</strong><span>Criticas</span></div>
+          <div class="tire-stat"><strong>${summary.soon || 0}</strong><span>Proximas</span></div>
+          <div class="tire-stat"><strong>${one(summary.avg_remaining_hours || 0)}</strong><span>Hrs rest. prom.</span></div>
+        </div>
+        <div style="padding:0 12px 18px;"><table class="tire-table"><thead><tr><th>Equipo</th><th>Llanta</th><th>Pos.</th><th>Hrs uso</th><th>Hrs rest.</th><th>% vida</th><th>% piso</th><th>KPI</th></tr></thead><tbody>${tableRows || `<tr><td colspan="8">Sin llantas registradas</td></tr>`}</tbody></table></div>
+      </section>`;
+    }
+    function buildExactKpiHtml(){
+      const kind = kpiSheetKind();
+      if(kind === "oil") return {kind, width:1200, height:927, html:exactOilHtml()};
+      if(kind === "tire") return {kind, width:1200, height:1295, html:exactTireHtml()};
+      return {kind, width:1200, height:927, html:exactMachineHtml()};
+    }
+    function printExactKpi(){
+      const doc = buildExactKpiHtml();
+      const win = window.open("", "_blank");
+      if(!win) return alert("Permite ventanas emergentes para imprimir el KPI.");
+      win.document.open();
+      win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Formato KPI</title><style>${kpiExactCss(doc.kind, true)}</style></head><body>${doc.html}<scr` + `ipt>window.onload=function(){setTimeout(function(){window.print();},300);};</scr` + `ipt></body></html>`);
+      win.document.close();
     }
     async function downloadKpiImage(){
-      const r = await fetch(kpiFormatUrl("image"), {headers: headers()});
-      if(!r.ok) return alert(await apiError(r));
-      const blob = await r.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `Formato_KPI_${($("kpiGroup").value || "KPI").replaceAll(" ","_")}.png`;
-      a.click();
-      URL.revokeObjectURL(a.href);
+      const doc = buildExactKpiHtml();
+      const css = kpiExactCss(doc.kind, false);
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.width}" height="${doc.height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${css}</style>${doc.html}</div></foreignObject></svg>`;
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = doc.width;
+        canvas.height = doc.height;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, doc.width, doc.height);
+        ctx.drawImage(image, 0, 0);
+        const a = document.createElement("a");
+        a.href = canvas.toDataURL("image/png");
+        a.download = `Formato_KPI_${($("kpiGroup").value || "KPI").replaceAll(" ","_")}.png`;
+        a.click();
+      };
+      image.onerror = () => alert("No se pudo generar la imagen KPI.");
+      image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     }
     async function load(){
       const [r, p, prod, req, dieselPayload] = await Promise.all([
@@ -3209,7 +3381,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     $("renderKpiBtn").addEventListener("click", renderDashboard);
-    $("printKpiBtn").addEventListener("click", () => openKpiPdf().catch(showError));
+    $("printKpiBtn").addEventListener("click", printExactKpi);
     $("kpiImageBtn").addEventListener("click", () => downloadKpiImage().catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
