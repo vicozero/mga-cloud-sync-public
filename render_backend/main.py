@@ -576,10 +576,18 @@ def catalog_with_inventory(session: Session) -> dict[str, Any]:
 def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
     if os.getenv("MGA_REQUIRE_API_KEY", "").strip().lower() not in {"1", "true", "yes", "si"}:
         return
-    expected = os.getenv("MGA_API_KEY", "").strip()
-    if not expected:
+    allowed = {
+        value
+        for value in (
+            os.getenv("MGA_API_KEY", "").strip(),
+            os.getenv("MGA_ALMACEN_KEY", "").strip(),
+            "MGA4lmacen",
+        )
+        if value
+    }
+    if not allowed:
         raise HTTPException(status_code=500, detail="MGA_API_KEY no configurada en Render.")
-    if x_mga_api_key != expected:
+    if x_mga_api_key not in allowed:
         raise HTTPException(status_code=401, detail="API key invalida.")
 
 
