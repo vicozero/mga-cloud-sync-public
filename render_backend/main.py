@@ -3127,6 +3127,17 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
     payload["updated_at"] = utc_now().isoformat(timespec="seconds")
     with SessionLocal() as session:
         snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+        previous_payload: dict[str, Any] = {}
+        if snapshot is not None:
+            previous_raw = json_loads(snapshot.payload_json)
+            if isinstance(previous_raw, dict):
+                previous_payload = previous_raw
+        if "diesel" not in payload and isinstance(previous_payload.get("diesel"), dict):
+            payload["diesel"] = previous_payload["diesel"]
+            settings = payload.setdefault("settings", {})
+            previous_settings = previous_payload.get("settings") if isinstance(previous_payload.get("settings"), dict) else {}
+            if isinstance(settings, dict) and "meta_diesel_lh" not in settings and isinstance(previous_settings, dict):
+                settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
