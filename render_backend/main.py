@@ -2652,6 +2652,61 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .oil-panel h2{margin:0 0 12px;color:#0b2f6f;font-size:20px;}
         .oil-bars{height:260px;display:flex;align-items:flex-end;gap:16px;border-bottom:1px solid #ccd5e1;padding:10px 10px 0;}
         .oil-bar{width:50px;text-align:center;font-size:10px;color:#334155}.oil-bar i{display:block;height:var(--h);background:#0aa6a6;margin:4px auto 7px;width:38px;}
+        .oil-export{padding:12px 14px 18px;background:#eeeeee;color:#333;}
+        .oil-export .oil-title{display:grid;grid-template-columns:1fr 2fr 1fr;align-items:center;height:34px;margin:0 0 12px;background:white;color:#333;text-align:center;font-size:20px;font-weight:800;}
+        .oil-export .oil-month{font-size:14px;}
+        .oil-export .kpi-format-board{display:grid;grid-template-columns:minmax(260px,.7fr) minmax(430px,1.2fr) minmax(260px,.7fr);gap:22px;align-items:start;}
+        .oil-export .kpi-side{display:grid;grid-template-columns:1fr;gap:40px;border:0;background:transparent;align-self:start;}
+        .oil-metric-section{background:white;border:1px solid #e5e7eb;}
+        .oil-metric-title{height:34px;display:flex;align-items:center;justify-content:center;color:#707780;font-weight:800;font-size:18px;}
+        .oil-metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#eeeeee;}
+        .oil-metric-cell{min-height:92px;background:white;display:grid;align-content:center;justify-items:center;gap:8px;padding:8px 6px;}
+        .oil-metric-cell strong{color:#777d86;font-size:31px;line-height:1;}
+        .oil-metric-line{height:10px;width:100%;background:#eef1f4;}
+        .oil-metric-line i{display:block;height:100%;width:100%;background:#009c9a;}
+        .oil-metric-line.oil-red i{background:#d76f75;}
+        .oil-metric-line.oil-darkred i{background:#a40000;}
+        .oil-metric-cell span{color:#4b5563;font-size:12px;}
+        .oil-export .chart{min-height:330px;padding:14px 18px 10px;border:1px solid #d8dee8;border-radius:0;background:white;display:block;overflow:hidden;}
+        .oil-chart-grid{display:grid;grid-template-columns:42px 1fr;grid-template-rows:250px 38px;column-gap:8px;}
+        .oil-axis{grid-row:1;display:flex;flex-direction:column;justify-content:space-between;align-items:end;padding:0 2px 0 0;color:#111;font-size:12px;}
+        .oil-plot{position:relative;grid-column:2;grid-row:1;display:flex;align-items:stretch;gap:14px;padding:0 8px;border-bottom:1px solid #d9d9d9;background:repeating-linear-gradient(to top, transparent 0, transparent 49px, #d9d9d9 50px);}
+        .oil-cluster{flex:1 1 62px;min-width:54px;display:grid;grid-template-rows:1fr auto;justify-items:center;gap:8px;}
+        .oil-bars-stack{height:100%;display:flex;align-items:flex-end;gap:2px;}
+        .oil-series-bar{width:9px;min-height:1px;position:relative;}
+        .oil-series-bar b{position:absolute;left:50%;transform:translateX(-50%);top:-15px;color:#111;font-size:10px;font-weight:500;white-space:nowrap;}
+        .oil-cluster-label{color:#111;font-size:12px;text-align:center;white-space:nowrap;}
+        .oil-legend{grid-column:2;grid-row:2;display:flex;align-items:end;justify-content:center;gap:18px;color:#333;font-size:12px;}
+        .oil-legend span{display:flex;align-items:center;gap:5px;white-space:nowrap;}
+        .oil-legend i{display:block;width:10px;height:10px;}
+        .oil-export .oil-bottom-wrap{margin-top:28px;border:0;background:transparent;overflow:visible;}
+        .oil-bottom-grid{width:100%;border-collapse:separate;border-spacing:0;background:transparent;}
+        .oil-bottom-grid>tbody>tr>td{border:0;padding:0 8px;vertical-align:top;}
+        .oil-report-cell{width:72%;}
+        .oil-order-cell{width:28%;}
+        .oil-report-header{background:#f3f3f3;text-align:center;padding:10px 8px 8px;}
+        .oil-report-header h3{margin:0 0 8px;color:#111;font-size:17px;}
+        .oil-days{display:flex;justify-content:center;gap:72px;color:#707780;font-size:12px;font-weight:800;}
+        .oil-days b{display:inline-block;min-width:58px;margin-left:8px;padding:5px 16px;background:white;color:#111;}
+        .oil-report-table{width:100%;border-collapse:collapse;background:white;color:#555;}
+        .oil-report-table th,.oil-report-table td{border:1px solid #111;padding:4px 5px;font-size:10px;text-align:center;vertical-align:middle;}
+        .oil-report-table th{position:static;background:white;color:#555;font-weight:800;text-transform:none;line-height:1.05;}
+        .oil-report-table td{background:#efefef;}
+        .oil-report-table .oil-subtotal td{background:#ffd966;}
+        .oil-report-table .oil-total td{background:#fff200;}
+        .oil-report-table .oil-zero{color:#f05b5b;font-weight:800;}
+        .oil-order-panel{background:white;border:1px solid #cbd5e1;min-height:330px;}
+        .oil-order-title{background:#0d3272;color:white;text-align:center;font-weight:800;padding:13px 8px;}
+        .oil-order-kpis{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #dbe3ef;}
+        .oil-order-kpi{background:#f8fafc;border-right:1px solid #e2e8f0;text-align:center;padding:12px 4px 9px;}
+        .oil-order-kpi:last-child{border-right:0;}
+        .oil-order-kpi strong{display:block;color:#d6335c;font-size:12px;}
+        .oil-order-kpi span{color:#475569;font-size:12px;}
+        .oil-order-table{width:100%;border-collapse:collapse;}
+        .oil-order-table th,.oil-order-table td{border-bottom:1px solid #e2e8f0;padding:7px 6px;font-size:11px;text-align:center;}
+        .oil-order-table th{position:static;background:#e2e8f0;color:#0f172a;text-transform:none;}
+        .oil-order-table td:first-child{text-align:left;font-weight:700;color:#334155;}
+        .oil-order-table .oil-order-hot{color:#d6335c;font-weight:800;}
         .tire-sheet{background:#f5f8fc;}
         .tire-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:14px 12px;}
         .tire-stat{background:white;border:1px solid #d8dee8;padding:12px;text-align:center;clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);}
@@ -2711,26 +2766,23 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function exactOilHtml(){
       const report = oilRowsForPeriod();
-      const litersPerHour = report.totals.worked_hours ? report.totals.total_liters / report.totals.worked_hours : 0;
-      const activeRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0);
-      const chartRows = [...report.rows].filter(row => row.total_liters > 0).sort((a,b) => b.total_liters - a.total_liters).slice(0,12);
-      const maxValue = Math.max(...chartRows.map(row => row.total_liters), 1);
-      const bars = chartRows.map(row => `<div class="oil-bar"><b>${one(row.total_liters)}</b><i style="--h:${Math.max((row.total_liters / maxValue) * 220, 4)}px"></i><span>${esc(row.code)}</span></div>`).join("");
-      const headers = ["Equipo","Grupo","Hrs Trab", ...report.cols.map(col => col.label), "Total L"];
-      const tableRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0).map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.group)}</td><td>${one(row.worked_hours)}</td>${report.cols.map(col => `<td>${one(row[col.key])}</td>`).join("")}<td>${one(row.total_liters)}</td></tr>`).join("");
-      return `<section class="kpi-sheet oil-sheet">
-        <div class="kpi-head"><div class="kpi-logo">MGA</div><h1>KPI ACEITES - ${esc(periodTitle(report.start))}</h1></div>
-        <div class="oil-stats">
-          <div class="oil-stat"><strong>${activeRows.length}</strong><span>Equipos</span></div>
-          <div class="oil-stat"><strong>${one(report.totals.total_liters)} L</strong><span>Litros total</span></div>
-          <div class="oil-stat"><strong>${one(report.totals.worked_hours)} h</strong><span>Hrs trabajadas</span></div>
-          <div class="oil-stat"><strong>${one(litersPerHour)}</strong><span>L / hora</span></div>
-          <div class="oil-stat"><strong>${report.cols.length}</strong><span>Tipos aceite</span></div>
+      const accStart = `${String(report.end || report.start).slice(0,4)}-01-01`;
+      const accumulated = oilRowsForRange(accStart, report.end, report.cols);
+      const month = oilMonthLabel(report.end || report.start);
+      return `<section class="kpi-sheet oil-export">
+        <div class="oil-title"><span class="oil-month">${esc(month)}</span><span>Consumo de aceite de equipos "Providencia"</span><span class="oil-month">${esc(month)}</span></div>
+        <div class="kpi-format-board">
+          <div class="kpi-side">
+            ${oilMetricSection("Consumo de Aceite HCO", report.totals.oil_hco_iso68, accumulated.totals.oil_hco_iso68, "teal")}
+            ${oilMetricSection("Consumo de Aceite SAE 30", report.totals.oil_trans_sae30, accumulated.totals.oil_trans_sae30, "red")}
+          </div>
+          <div class="chart">${oilChartHtml(report)}</div>
+          <div class="kpi-side">
+            ${oilMetricSection("Consumo de Aceite de Motor", report.totals.oil_motor_15w40, accumulated.totals.oil_motor_15w40, "red")}
+            ${oilMetricSection("Consumo de Aceite SAE 50", report.totals.oil_sae50, accumulated.totals.oil_sae50, "red")}
+          </div>
         </div>
-        <div class="oil-grid">
-          <div class="oil-panel"><h2>Consumo por equipo</h2><div class="oil-bars">${bars || "Sin consumos"}</div></div>
-          <div class="oil-panel"><h2>Detalle de aceites</h2><table class="kpi-exact-table"><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tableRows}<tr><td><b>Total</b></td><td></td><td><b>${one(report.totals.worked_hours)}</b></td>${report.cols.map(col => `<td><b>${one(report.totals[col.key])}</b></td>`).join("")}<td><b>${one(report.totals.total_liters)}</b></td></tr></tbody></table></div>
-        </div>
+        <div class="table-wrap oil-bottom-wrap"><table class="oil-bottom-grid"><tbody><tr><td class="oil-report-cell">${oilReportTableHtml(report)}</td><td class="oil-order-cell">${oilOrderPanelHtml(report)}</td></tr></tbody></table></div>
       </section>`;
     }
     function exactTireHtml(){
