@@ -241,6 +241,18 @@ PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
 REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
 DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
 DIESEL_LOGO_PATH = STATIC_DIR / "mga-corner-logo.jfif"
+KPI_FORMAT_PDFS = {
+    "barrenacion": STATIC_DIR / "kpi_barrenacion_format.pdf",
+    "rezagado": STATIC_DIR / "kpi_rezagado_format.pdf",
+    "aceites": STATIC_DIR / "kpi_aceites_format.pdf",
+    "llantas": STATIC_DIR / "kpi_llantas_format.pdf",
+}
+KPI_FORMAT_FILENAMES = {
+    "barrenacion": "Formato_KPI_Equipos_de_Barrenacion.pdf",
+    "rezagado": "Formato_KPI_Equipos_de_Rezagado.pdf",
+    "aceites": "Formato_KPI_KPI_Aceites.pdf",
+    "llantas": "Formato_KPI_KPI_Llantas.pdf",
+}
 REQUISITION_UNITS = [
     "PZA", "JGO", "KIT", "SERV", "LT", "L", "GAL", "ML", "TAMBO", "TAMBOR",
     "CUBETA", "BOTE", "LATA", "CAJA", "PAQUETE", "BOLSA", "MTS", "M2", "M3",
@@ -1535,6 +1547,41 @@ def requisition_pdf_bytes(row: CloudRequisition, items: list[CloudRequisitionIte
     return stream.getvalue()
 
 
+def kpi_format_key(group: str) -> str:
+    text = normalize_text(group)
+    if "ACEITE" in text:
+        return "aceites"
+    if "LLANTA" in text:
+        return "llantas"
+    if "BARRENACION" in text:
+        return "barrenacion"
+    if "REZAGADO" in text:
+        return "rezagado"
+    return ""
+
+
+def kpi_format_pdf_path(group: str) -> tuple[str, Path]:
+    key = kpi_format_key(group)
+    if not key:
+        raise HTTPException(status_code=400, detail="Formato KPI disponible solo para Barrenacion, Rezagado, Aceites y Llantas.")
+    path = KPI_FORMAT_PDFS.get(key)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="Formato KPI no encontrado en el servidor.")
+    return key, path
+
+
+def kpi_format_image_bytes(path: Path) -> bytes:
+    if fitz is None:
+        raise HTTPException(status_code=500, detail="Renderizado de imagen PDF no disponible.")
+    doc = fitz.open(path)
+    try:
+        page = doc[0]
+        pix = page.get_pixmap(matrix=fitz.Matrix(2.4, 2.4), alpha=False)
+        return pix.tobytes("png")
+    finally:
+        doc.close()
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
@@ -1691,6 +1738,30 @@ def get_requisition_pdf(requisition_id: int) -> StreamingResponse:
             media_type="application/pdf",
             headers={"Content-Disposition": f'inline; filename="{filename}"'},
         )
+
+
+@app.get("/api/kpi-format/pdf")
+def get_kpi_format_pdf(group: str = Query(default="")) -> FileResponse:
+    key, path = kpi_format_pdf_path(group)
+    filename = KPI_FORMAT_FILENAMES.get(key, path.name)
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=filename,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+@app.get("/api/kpi-format/image")
+def get_kpi_format_image(group: str = Query(default="")) -> StreamingResponse:
+    key, path = kpi_format_pdf_path(group)
+    image = kpi_format_image_bytes(path)
+    filename = KPI_FORMAT_FILENAMES.get(key, path.name).replace(".pdf", ".png")
+    return StreamingResponse(
+        BytesIO(image),
+        media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/diesel")
@@ -1948,6 +2019,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Hasta<input id="kpiEnd" type="date"></label>
         <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
         <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
+        <button class="btn secondary" id="kpiImageBtn">Descargar imagen</button>
       </div>
       <div class="panel" id="kpiPrintArea">
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
@@ -2211,6 +2283,33 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function metricCardHtml(label, value, note, width, bad=false){
       return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
+    }
+    function kpiFormatUrl(kind){
+      return `/api/kpi-format/${kind}?group=${encodeURIComponent($("kpiGroup").value || "")}`;
+    }
+    async function openKpiPdf(){
+      const r = await fetch(kpiFormatUrl("pdf"), {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      if(!win){
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Formato_KPI_${($("kpiGroup").value || "KPI").replaceAll(" ","_")}.pdf`;
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+    async function downloadKpiImage(){
+      const r = await fetch(kpiFormatUrl("image"), {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Formato_KPI_${($("kpiGroup").value || "KPI").replaceAll(" ","_")}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
     }
     async function load(){
       const [r, p, prod, req, dieselPayload] = await Promise.all([
@@ -3110,7 +3209,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     $("renderKpiBtn").addEventListener("click", renderDashboard);
-    $("printKpiBtn").addEventListener("click", () => window.print());
+    $("printKpiBtn").addEventListener("click", () => openKpiPdf().catch(showError));
+    $("kpiImageBtn").addEventListener("click", () => downloadKpiImage().catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
