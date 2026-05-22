@@ -649,8 +649,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .exporting th, .print-export th { position:static !important; }
     .kpi-chart-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; color:#111827; font-size:11px; }
     .kpi-mini-tabs { display:grid; grid-template-columns:repeat(4, minmax(96px, 1fr)); gap:4px; flex:1; }
-    .kpi-mini-tabs span { border:1px solid #111; padding:7px 9px; background:white; color:#111; font-size:12px; }
-    .kpi-mini-tabs span.active { background:var(--teal); color:#031b1b; }
+    .kpi-mini-tabs span, .kpi-mini-tabs button { border:1px solid #111; padding:7px 9px; background:white; color:#111; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
+    .kpi-mini-tabs span.active, .kpi-mini-tabs button.active { background:var(--teal); color:#031b1b; }
     .chart-plot { min-height:258px; display:flex; align-items:end; gap:12px; overflow:auto; padding:18px 6px 8px; background:repeating-linear-gradient(to top, transparent 0, transparent 51px, rgba(100,116,139,.25) 52px); }
     .chart-bar { min-width:54px; display:grid; align-content:end; gap:6px; text-align:center; color:#344054; font-size:11px; }
     .chart-bar i { display:block; height:var(--h); min-height:4px; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#12b7b6,#078080); box-shadow:0 9px 18px rgba(0,156,154,.18); }
@@ -824,6 +824,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
     let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {} };
+    let selectedKpiMetric = "availability";
     const AUTO_REFRESH_MS = 15000;
     const EDIT_KEY_HELP = "Captura la clave de almacen asignada para registrar movimientos o importar inventario.";
     const $ = (id) => document.getElementById(id);
@@ -1580,6 +1581,57 @@ WAREHOUSE_HTML = r"""<!doctype html>
       totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
       return {group, start, end, rows, totals};
     }
+    const kpiMetricTabs = [
+      {key:"availability", label:"% Disponibilidad"},
+      {key:"utilization", label:"% Utilizacion"},
+      {key:"tmef", label:"TMEF"},
+      {key:"tmpr", label:"TMPR"},
+    ];
+    function kpiMetricValue(row, metric){
+      if(metric === "utilization") return Number(row.utilization || 0);
+      if(metric === "tmef") return Number(row.tmef || 0);
+      if(metric === "tmpr") return Number(row.tmpr || 0);
+      return Number(row.availability || 0);
+    }
+    function kpiMetricText(row, metric){
+      if((metric === "availability" || metric === "utilization") && row.out) return "FUERA";
+      return one(kpiMetricValue(row, metric));
+    }
+    function kpiMetricAxisMax(metric, rows, target){
+      if(metric === "availability" || metric === "utilization") return 120;
+      const peak = Math.max(Number(target || 0), ...rows.map(row => kpiMetricValue(row, metric)), 1);
+      if(peak <= 5) return 5;
+      if(peak <= 10) return 10;
+      const step = peak <= 30 ? 5 : 10;
+      return Math.ceil((peak * 1.18) / step) * step;
+    }
+    function kpiMetricChartHtml(report, settings){
+      const metric = kpiMetricTabs.some(item => item.key === selectedKpiMetric) ? selectedKpiMetric : "availability";
+      const targets = {
+        availability: Number(settings.meta_availability || 85),
+        utilization: Number(settings.meta_utilization || 75),
+        tmef: Number(settings.meta_tmef || 8),
+        tmpr: Number(settings.meta_tmpr || 4),
+      };
+      const axisMax = kpiMetricAxisMax(metric, report.rows, targets[metric]);
+      const chartBars = report.rows.map(row => {
+        const value = kpiMetricValue(row, metric);
+        const h = Math.max(Math.min(value / Math.max(axisMax, 1), 1) * 210, 4);
+        const outClass = row.out && (metric === "availability" || metric === "utilization") ? "out" : "";
+        const title = `${row.code} ${kpiMetricTabs.find(item => item.key === metric)?.label || ""}: ${kpiMetricText(row, metric)}`;
+        return `<div class="chart-bar ${outClass}" title="${esc(title)}"><span>${esc(kpiMetricText(row, metric))}</span><i style="--h:${h}px"></i><b>${esc(row.code)}</b></div>`;
+      }).join("") || `<p class="muted">Sin datos KPI para el periodo.</p>`;
+      const tabs = kpiMetricTabs.map(item => `<button type="button" data-kpi-metric="${esc(item.key)}" class="${item.key === metric ? "active" : ""}">${esc(item.label)}</button>`).join("");
+      return `<div class="kpi-chart-head"><b>KPI</b><div class="kpi-mini-tabs">${tabs}</div></div><div class="chart-plot">${chartBars}</div>`;
+    }
+    function bindKpiMetricTabs(){
+      document.querySelectorAll("#kpiChart [data-kpi-metric]").forEach(button => {
+        button.addEventListener("click", () => {
+          selectedKpiMetric = button.dataset.kpiMetric || "availability";
+          renderDashboard();
+        });
+      });
+    }
     function oilColumns(){
       const cols = portal.oil_kpi && Array.isArray(portal.oil_kpi.columns) && portal.oil_kpi.columns.length ? portal.oil_kpi.columns : [
         {label:"15W40", key:"oil_motor_15w40"},
@@ -1716,11 +1768,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
         metricCardHtml("TMPR", `${one(report.totals.tmpr)} h`, `Meta ${one(metaTmpr)} h`, Math.min((report.totals.tmpr / Math.max(metaTmpr, 1)) * 100, 100), report.totals.tmpr > metaTmpr),
         metricCardHtml("Meta", `${one(metaTmpr)} h`, `${one(metaTmpr - report.totals.tmpr)} h`, 100, report.totals.tmpr > metaTmpr),
       ].join("");
-      const chartBars = report.rows.map(row => {
-        const h = Math.max(Math.min(row.availability, 100), 0);
-        return `<div class="chart-bar ${row.out ? "out" : ""}" title="${esc(row.code)} ${esc(row.availabilityText)}"><span>${esc(row.availabilityText)}</span><i style="--h:${h * 2.1}px"></i><b>${esc(row.code)}</b></div>`;
-      }).join("") || `<p class="muted">Sin datos KPI para el periodo.</p>`;
-      $("kpiChart").innerHTML = `<div class="kpi-chart-head"><b>KPI</b><div class="kpi-mini-tabs"><span class="active">% Disponibilidad</span><span>% Utilizacion</span><span>TMEF</span><span>TMPR</span></div></div><div class="chart-plot">${chartBars}</div>`;
+      $("kpiChart").innerHTML = kpiMetricChartHtml(report, settings);
+      bindKpiMetricTabs();
       $("kpiTable").innerHTML = `<thead><tr><th># Eco</th><th>Equipo</th><th>Hrs periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>` +
         report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td>${esc(row.availabilityText)}</td><td>${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("") +
         `<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody>`;
