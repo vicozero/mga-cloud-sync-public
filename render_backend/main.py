@@ -834,6 +834,13 @@ def diesel_equipment_match_key(value: Any) -> str:
     return "".join(ch for ch in normalize_text(value) if ch.isalnum())
 
 
+def diesel_equipment_code_key(value: Any) -> str:
+    match = re.search(r"([A-Z]{1,4})[- ]?0*(\d{1,4})", normalize_text(value))
+    if not match:
+        return ""
+    return f"{match.group(1)}{int(match.group(2))}"
+
+
 def diesel_canonical_equipment(value: Any, aliases: dict[str, str] | None = None) -> str:
     text = normalize_text(value)
     if not text:
@@ -904,9 +911,9 @@ def diesel_template_equipment_keys(value: Any) -> list[str]:
     candidates.extend(re.findall(r"[A-Z]{1,4}[- ]?\d{2,4}", text))
     keys: list[str] = []
     for candidate in candidates:
-        key = diesel_equipment_match_key(candidate)
-        if key and key not in keys:
-            keys.append(key)
+        for key in (diesel_equipment_match_key(candidate), diesel_equipment_code_key(candidate)):
+            if key and key not in keys:
+                keys.append(key)
     return keys
 
 
@@ -3284,13 +3291,17 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function dieselEquipmentKey(value){
       return String(value || "").trim().toUpperCase().replace(/\([^)]*\)/g, " ").replace(/[^A-Z0-9]+/g, "");
     }
+    function dieselEquipmentCodeKey(value){
+      const match = String(value || "").trim().toUpperCase().match(/([A-Z]{1,4})[- ]?0*(\d{1,4})/);
+      return match ? `${match[1]}${Number(match[2])}` : "";
+    }
     function dieselEquipmentCandidates(value){
       const text = String(value || "").trim().toUpperCase();
       if(!text) return [];
       const withoutParentheses = text.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
       const firstToken = text.split(/[\s(]+/)[0].trim();
       const codeMatches = text.match(/[A-Z]{1,4}[- ]?\d{2,4}/g) || [];
-      return [...new Set([text, withoutParentheses, firstToken, ...codeMatches].map(dieselEquipmentKey).filter(Boolean))];
+      return [...new Set([text, withoutParentheses, firstToken, ...codeMatches].flatMap(item => [dieselEquipmentKey(item), dieselEquipmentCodeKey(item)]).filter(Boolean))];
     }
     function dieselFallbackEquipment(value){
       const text = String(value || "").trim().toUpperCase();
@@ -3312,6 +3323,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const code = String(eq.code || eq.equipment_code || "").trim().toUpperCase();
         const description = String(eq.description || eq.family || "").trim().toUpperCase();
         if(code) addDieselEquipmentAlias(aliasMap, code, [description ? `${code} ${description}` : "", description ? `${code} (${description})` : ""]);
+      });
+      (diesel.equipment || []).forEach(value => {
+        const canonical = dieselCanonicalEquipment(value, aliasMap) || dieselFallbackEquipment(value);
+        addDieselEquipmentAlias(aliasMap, canonical, [value]);
       });
       return aliasMap;
     }
