@@ -2192,6 +2192,72 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .kpi-special-mode .kpi-side { border:0; background:transparent; }
     .kpi-special-mode #kpiCards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
     .kpi-special-mode #kpiSideCards { display:none; }
+    .kpi-diesel-mode { background:#f4f7fb; border-color:#dbe3ef; color:#172033; }
+    .kpi-diesel-mode > .subtle-title { align-items:flex-start; margin-bottom:14px; padding:0 2px; }
+    .kpi-diesel-mode #kpiTitle { color:#071f49; font-size:22px; line-height:1.15; }
+    .kpi-diesel-mode #portalUpdated { color:#667085; font-size:12px; padding-top:4px; }
+    .kpi-diesel-mode .kpi-format-board { display:grid; grid-template-columns:1fr; gap:12px; }
+    .kpi-diesel-mode .kpi-side { display:block; border:0; background:transparent; }
+    .kpi-diesel-mode #kpiCards, .diesel-card-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; }
+    .kpi-diesel-mode #kpiSideCards { display:none; }
+    .kpi-diesel-mode .chart { display:block; min-height:0; padding:0; border:0; border-radius:0; background:transparent; overflow:visible; }
+    .kpi-diesel-mode .kpi-report-table { margin-top:12px; max-height:none; overflow:visible; border:0; background:transparent; }
+    .diesel-card { position:relative; min-height:122px; overflow:hidden; border:1px solid #dbe3ef; border-radius:8px; padding:14px 14px 12px; background:linear-gradient(180deg,#fff,#f8fbff); box-shadow:0 12px 26px rgba(7,31,73,.07); }
+    .diesel-card::before { content:""; position:absolute; inset:0 auto 0 0; width:4px; background:#009c9a; }
+    .diesel-card.is-bad::before { background:#c81e1e; }
+    .diesel-card span { display:block; color:#667085; font-size:11px; font-weight:800; letter-spacing:0; text-transform:uppercase; }
+    .diesel-card strong { display:block; margin-top:8px; color:#071f49; font-size:25px; line-height:1; }
+    .diesel-card small { display:block; min-height:28px; margin-top:7px; color:#475569; font-size:12px; line-height:1.2; }
+    .diesel-meter { height:7px; margin-top:10px; overflow:hidden; border-radius:999px; background:#e8eef6; }
+    .diesel-meter i { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#009c9a,#18b7a6); }
+    .diesel-card.is-bad .diesel-meter i { background:linear-gradient(90deg,#e11d48,#c81e1e); }
+    .diesel-visual-grid { display:grid; grid-template-columns:1.45fr .95fr; gap:12px; align-items:stretch; }
+    .diesel-panel { min-width:0; border:1px solid #dbe3ef; border-radius:8px; padding:14px; background:white; box-shadow:0 12px 26px rgba(7,31,73,.06); }
+    .diesel-panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .diesel-panel-head span { color:#071f49; font-size:15px; font-weight:800; }
+    .diesel-panel-head b { color:#667085; font-size:11px; font-weight:800; text-transform:uppercase; }
+    .diesel-bars-list { display:grid; gap:8px; }
+    .diesel-bar-row { display:grid; grid-template-columns:132px minmax(110px,1fr) 76px 70px; gap:10px; align-items:center; min-height:32px; }
+    .diesel-bar-label { min-width:0; }
+    .diesel-bar-label b { display:block; overflow:hidden; color:#071f49; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+    .diesel-bar-label span { display:block; overflow:hidden; color:#667085; font-size:10px; font-weight:800; text-overflow:ellipsis; text-transform:uppercase; white-space:nowrap; }
+    .diesel-bar-track { height:12px; overflow:hidden; border-radius:999px; background:#edf2f7; }
+    .diesel-bar-track i { display:block; height:100%; min-width:3px; border-radius:999px; background:linear-gradient(90deg,#009c9a,#18b7a6); }
+    .diesel-bar-row.is-bad .diesel-bar-track i { background:linear-gradient(90deg,#e11d48,#c81e1e); }
+    .diesel-bar-row strong { color:#172033; font-size:12px; text-align:right; white-space:nowrap; }
+    .diesel-bar-row em { color:#475569; font-size:11px; font-style:normal; text-align:right; white-space:nowrap; }
+    .diesel-performance-grid { display:grid; gap:12px; }
+    .diesel-target { border:1px solid #e2e8f0; border-radius:8px; padding:13px; background:#f8fafc; }
+    .diesel-target-top { display:flex; align-items:end; justify-content:space-between; gap:10px; margin-bottom:11px; }
+    .diesel-target-top span { color:#667085; font-size:11px; font-weight:800; text-transform:uppercase; }
+    .diesel-target-top strong { color:#071f49; font-size:32px; line-height:1; white-space:nowrap; }
+    .diesel-target-top small { color:#475569; font-size:12px; text-align:right; }
+    .diesel-target-meter { position:relative; height:16px; overflow:hidden; border-radius:999px; background:#e8eef6; }
+    .diesel-target-meter i { display:block; height:100%; min-width:3px; border-radius:999px; background:linear-gradient(90deg,#009c9a,#f59e0b,#e11d48); }
+    .diesel-target-meter .diesel-target-marker { position:absolute; top:-5px; bottom:-5px; left:var(--target); width:2px; background:#071f49; box-shadow:0 0 0 2px rgba(255,255,255,.85); }
+    .diesel-split { border:1px solid #e2e8f0; border-radius:8px; padding:13px; background:white; }
+    .diesel-split h4 { margin:0 0 10px; color:#071f49; font-size:14px; }
+    .diesel-split-track { display:flex; height:20px; overflow:hidden; border-radius:999px; background:#e8eef6; }
+    .diesel-split-track i { display:block; height:100%; min-width:0; }
+    .diesel-split-track .mga { background:#009c9a; }
+    .diesel-split-track .pro { background:#f59e0b; }
+    .diesel-split-legend { display:grid; gap:7px; margin-top:10px; }
+    .diesel-split-legend > span { display:flex; align-items:center; justify-content:space-between; gap:10px; color:#475569; font-size:12px; }
+    .diesel-split-legend em { font-style:normal; }
+    .diesel-split-legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
+    .diesel-split-legend .mga { background:#009c9a; }
+    .diesel-split-legend .pro { background:#f59e0b; }
+    .diesel-watch-list { display:grid; gap:7px; }
+    .diesel-watch-item { display:flex; justify-content:space-between; gap:10px; padding:8px 10px; border-radius:7px; background:#f8fafc; color:#475569; font-size:12px; }
+    .diesel-watch-item b { color:#071f49; }
+    .diesel-empty { display:grid; min-height:210px; place-items:center; color:#667085; font-weight:700; }
+    .diesel-table { width:100%; border-collapse:separate; border-spacing:0; overflow:hidden; border:1px solid #dbe3ef; border-radius:8px; background:white; color:#172033; }
+    .diesel-table th { position:static; padding:9px 8px; background:#e8eef7; color:#243042; font-size:11px; text-align:center; text-transform:uppercase; }
+    .diesel-table td { padding:8px 8px; border-bottom:1px solid #e5ebf3; color:#334155; font-size:12px; text-align:center; vertical-align:middle; }
+    .diesel-table tbody tr:last-child td { border-bottom:0; }
+    .diesel-table .diesel-eq { color:#071f49; font-weight:800; text-align:left; }
+    .diesel-table .diesel-number { font-variant-numeric:tabular-nums; text-align:right; }
+    .diesel-table .diesel-total td { background:#f0fdfa; color:#071f49; font-weight:800; }
     .kpi-oil-mode { background:#eeeeee; box-shadow:none; border-color:#d8d8d8; color:#333; }
     .kpi-oil-mode > .subtle-title { display:block; height:34px; margin:-2px -2px 12px; background:white; }
     .kpi-oil-mode #kpiTitle { display:grid; grid-template-columns:1fr 2fr 1fr; align-items:center; margin:0; height:34px; color:#333; text-align:center; font-size:20px; }
@@ -2290,7 +2356,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       .print-only { display:block; }
     }
     @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
-    @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards { grid-template-columns:1fr; } }
+    @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
   </style>
 </head>
 <body>
@@ -2583,6 +2649,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       area.classList.toggle("kpi-format-mode", mode === "format");
       area.classList.toggle("kpi-special-mode", mode === "special");
       area.classList.toggle("kpi-oil-mode", mode === "oil");
+      area.classList.toggle("kpi-diesel-mode", mode === "diesel");
       $("kpiSideCards").innerHTML = "";
       $("kpiTable").className = "";
       const tableWrap = $("kpiTable").closest(".table-wrap");
@@ -2600,6 +2667,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const group = String($("kpiGroup").value || "").toUpperCase();
       if(group.includes("ACEITE")) return "oil";
       if(group.includes("LLANTA")) return "tire";
+      if(group.includes("DIESEL")) return "diesel";
       if(group.includes("REZAGADO")) return "machine";
       return "machine";
     }
@@ -2643,6 +2711,76 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .kpi-exact-table th{background:white;color:#555;border:1px solid #111;font-weight:800;text-align:center;padding:7px 5px;}
         .kpi-exact-table td{border:1px solid #111;text-align:center;padding:6px 5px;background:white;}
         .kpi-exact-table .badtext{color:#e11d48}.kpi-exact-table .oktext{color:#0aa6a6}
+        .diesel-export{background:#f4f7fb;padding:18px;color:#172033;}
+        .diesel-export-head{height:82px;display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:12px;padding:16px 18px;border-radius:8px;background:#071f49;color:white;}
+        .diesel-export-head h1{margin:0;font-size:30px;line-height:1;font-weight:800;text-transform:uppercase;}
+        .diesel-export-head span{display:block;color:#93c5fd;font-size:12px;font-weight:800;text-transform:uppercase;}
+        .diesel-export-head em{display:block;margin-top:5px;color:#dbeafe;font-size:13px;font-style:normal;}
+        .diesel-export-score{min-width:260px;text-align:right;}
+        .diesel-export-score strong{display:block;font-size:31px;line-height:1;}
+        .diesel-export-score small{display:block;margin-top:5px;color:#dbeafe;font-size:12px;}
+        .diesel-card-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px;}
+        .diesel-card{position:relative;min-height:106px;overflow:hidden;border:1px solid #dbe3ef;border-radius:8px;padding:12px 12px 10px;background:linear-gradient(180deg,#fff,#f8fbff);box-shadow:0 8px 18px rgba(7,31,73,.06);}
+        .diesel-card::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:#009c9a;}
+        .diesel-card.is-bad::before{background:#c81e1e;}
+        .diesel-card span{display:block;color:#667085;font-size:10px;font-weight:800;text-transform:uppercase;}
+        .diesel-card strong{display:block;margin-top:7px;color:#071f49;font-size:23px;line-height:1;}
+        .diesel-card small{display:block;min-height:24px;margin-top:6px;color:#475569;font-size:11px;line-height:1.15;}
+        .diesel-meter{height:6px;margin-top:8px;overflow:hidden;border-radius:999px;background:#e8eef6;}
+        .diesel-meter i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#009c9a,#18b7a6);}
+        .diesel-card.is-bad .diesel-meter i{background:linear-gradient(90deg,#e11d48,#c81e1e);}
+        .diesel-visual-grid{display:grid;grid-template-columns:1.45fr .95fr;gap:12px;align-items:stretch;margin-bottom:12px;}
+        .diesel-panel{min-width:0;border:1px solid #dbe3ef;border-radius:8px;padding:13px;background:white;box-shadow:0 8px 18px rgba(7,31,73,.05);}
+        .diesel-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px;}
+        .diesel-panel-head span{color:#071f49;font-size:14px;font-weight:800;}
+        .diesel-panel-head b{color:#667085;font-size:10px;font-weight:800;text-transform:uppercase;}
+        .diesel-bars-list{display:grid;gap:7px;}
+        .diesel-bar-row{display:grid;grid-template-columns:128px minmax(110px,1fr) 72px 66px;gap:9px;align-items:center;min-height:28px;}
+        .diesel-bar-label{min-width:0;}
+        .diesel-bar-label b{display:block;overflow:hidden;color:#071f49;font-size:12px;text-overflow:ellipsis;white-space:nowrap;}
+        .diesel-bar-label span{display:block;overflow:hidden;color:#667085;font-size:9px;font-weight:800;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap;}
+        .diesel-bar-track{height:11px;overflow:hidden;border-radius:999px;background:#edf2f7;}
+        .diesel-bar-track i{display:block;height:100%;min-width:3px;border-radius:999px;background:linear-gradient(90deg,#009c9a,#18b7a6);}
+        .diesel-bar-row.is-bad .diesel-bar-track i{background:linear-gradient(90deg,#e11d48,#c81e1e);}
+        .diesel-bar-row strong{color:#172033;font-size:11px;text-align:right;white-space:nowrap;}
+        .diesel-bar-row em{color:#475569;font-size:10px;font-style:normal;text-align:right;white-space:nowrap;}
+        .diesel-performance-grid{display:grid;gap:10px;}
+        .diesel-target{border:1px solid #e2e8f0;border-radius:8px;padding:12px;background:#f8fafc;}
+        .diesel-target-top{display:flex;align-items:end;justify-content:space-between;gap:10px;margin-bottom:10px;}
+        .diesel-target-top span{color:#667085;font-size:10px;font-weight:800;text-transform:uppercase;}
+        .diesel-target-top strong{color:#071f49;font-size:30px;line-height:1;white-space:nowrap;}
+        .diesel-target-top small{color:#475569;font-size:11px;text-align:right;}
+        .diesel-target-meter{position:relative;height:15px;overflow:hidden;border-radius:999px;background:#e8eef6;}
+        .diesel-target-meter i{display:block;height:100%;min-width:3px;border-radius:999px;background:linear-gradient(90deg,#009c9a,#f59e0b,#e11d48);}
+        .diesel-target-meter .diesel-target-marker{position:absolute;top:-5px;bottom:-5px;left:var(--target);width:2px;background:#071f49;box-shadow:0 0 0 2px rgba(255,255,255,.85);}
+        .diesel-split{border:1px solid #e2e8f0;border-radius:8px;padding:12px;background:white;}
+        .diesel-split h4{margin:0 0 9px;color:#071f49;font-size:13px;}
+        .diesel-split-track{display:flex;height:18px;overflow:hidden;border-radius:999px;background:#e8eef6;}
+        .diesel-split-track i{display:block;height:100%;min-width:0;}
+        .diesel-split-track .mga{background:#009c9a;}
+        .diesel-split-track .pro{background:#f59e0b;}
+        .diesel-split-legend{display:grid;gap:6px;margin-top:9px;}
+        .diesel-split-legend > span{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#475569;font-size:11px;}
+        .diesel-split-legend em{font-style:normal;}
+        .diesel-split-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px;}
+        .diesel-split-legend .mga{background:#009c9a;}
+        .diesel-split-legend .pro{background:#f59e0b;}
+        .diesel-watch-list{display:grid;gap:6px;}
+        .diesel-watch-item{display:flex;justify-content:space-between;gap:10px;padding:7px 9px;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;}
+        .diesel-watch-item b{color:#071f49;}
+        .diesel-empty{display:grid;min-height:190px;place-items:center;color:#667085;font-weight:700;}
+        .diesel-table-wrap{border:0;background:transparent;overflow:visible;}
+        .diesel-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid #dbe3ef;border-radius:8px;background:white;color:#172033;}
+        .diesel-table th{position:static;padding:8px 7px;background:#e8eef7;color:#243042;font-size:10px;text-align:center;text-transform:uppercase;}
+        .diesel-table td{padding:7px;border-bottom:1px solid #e5ebf3;color:#334155;font-size:11px;text-align:center;vertical-align:middle;}
+        .diesel-table tbody tr:last-child td{border-bottom:0;}
+        .diesel-table .diesel-eq{color:#071f49;font-weight:800;text-align:left;}
+        .diesel-table .diesel-number{font-variant-numeric:tabular-nums;text-align:right;}
+        .diesel-table .diesel-total td{background:#f0fdfa;color:#071f49;font-weight:800;}
+        .pill{display:inline-block;padding:2px 7px;border-radius:999px;font-weight:700;font-size:10px;}
+        .ok{color:#047857;background:#d1fae5;}
+        .bad{color:#b91c1c;background:#fee2e2;}
+        .warn{color:#92400e;background:#fef3c7;}
         .oil-sheet{background:#f6f8fb;}
         .oil-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:14px 18px;}
         .oil-stat{background:white;border:1px solid #d6dee9;padding:12px;text-align:center;}
@@ -2807,10 +2945,24 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div style="padding:0 12px 18px;"><table class="tire-table"><thead><tr><th>Equipo</th><th>Llanta</th><th>Pos.</th><th>Hrs uso</th><th>Hrs rest.</th><th>% vida</th><th>% piso</th><th>KPI</th></tr></thead><tbody>${tableRows || `<tr><td colspan="8">Sin llantas registradas</td></tr>`}</tbody></table></div>
       </section>`;
     }
+    function exactDieselHtml(){
+      const report = dieselKpiRowsForPeriod();
+      const avg = report.totals.rendimiento_lh;
+      return `<section class="kpi-sheet diesel-export">
+        <div class="diesel-export-head">
+          <div><span>MGA Mantenimiento</span><h1>KPI Diesel</h1><em>${esc(report.start)} a ${esc(report.end)}</em></div>
+          <div class="diesel-export-score"><span>Rendimiento promedio</span><strong>${avg == null ? "S/H" : `${one(avg)} L/H`}</strong><small>Meta ${one(report.meta)} L/H</small></div>
+        </div>
+        <div class="diesel-card-grid">${dieselCardsHtml(report)}</div>
+        ${dieselVisualHtml(report)}
+        <div class="diesel-table-wrap"><table class="diesel-table">${dieselTableHtml(report)}</table></div>
+      </section>`;
+    }
     function buildExactKpiHtml(){
       const kind = kpiSheetKind();
       if(kind === "oil") return {kind, width:1200, height:927, html:exactOilHtml()};
       if(kind === "tire") return {kind, width:1200, height:1295, html:exactTireHtml()};
+      if(kind === "diesel") return {kind, width:1200, height:927, html:exactDieselHtml()};
       return {kind, width:1200, height:927, html:exactMachineHtml()};
     }
     function printExactKpi(){
@@ -3460,34 +3612,91 @@ WAREHOUSE_HTML = r"""<!doctype html>
       Object.assign(totals, dieselSupplierTotals(periodRecords));
       return {start, end, meta, rows, totals};
     }
+    function dieselPctValue(value){ return Math.max(Math.min(Number(value || 0), 100), 0); }
+    function dieselPeriodDays(report){
+      const start = parseIsoDate(report.start);
+      const end = parseIsoDate(report.end);
+      return Math.max(Math.round((end - start) / 86400000) + 1, 1);
+    }
+    function dieselKpiCardHtml(label, value, note, width, bad=false){
+      return `<article class="diesel-card ${bad ? "is-bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small><div class="diesel-meter"><i style="width:${dieselPctValue(width)}%"></i></div></article>`;
+    }
+    function dieselCardsHtml(report){
+      const totals = report.totals || {};
+      const avg = totals.rendimiento_lh;
+      const liters = Number(totals.diesel_liters || 0);
+      const mga = Number(totals.mga_liters || 0);
+      const prosermin = Number(totals.prosermin_liters || 0);
+      const supplierTotal = Math.max(mga + prosermin, 1);
+      const days = dieselPeriodDays(report);
+      return [
+        dieselKpiCardHtml("Equipos", `${report.rows.length}`, "con captura diesel", Math.min((report.rows.length / 18) * 100, 100)),
+        dieselKpiCardHtml("Consumo total", `${one(liters)} L`, `${days} dias analizados`, liters > 0 ? 100 : 0),
+        dieselKpiCardHtml("Diesel MGA", `${one(mga)} L`, `${one((mga / supplierTotal) * 100)}% del origen`, (mga / supplierTotal) * 100),
+        dieselKpiCardHtml("Diesel PROSERMIN", `${one(prosermin)} L`, `${one((prosermin / supplierTotal) * 100)}% del origen`, (prosermin / supplierTotal) * 100),
+        dieselKpiCardHtml("Horas trabajadas", `${one(totals.worked_hours)} h`, "horas del periodo", Math.min(Number(totals.worked_hours || 0) / Math.max(report.rows.length * 10, 1) * 100, 100)),
+        dieselKpiCardHtml("Rendimiento", avg == null ? "S/H" : `${one(avg)} L/H`, `Meta ${one(report.meta)} L/H`, avg == null ? 0 : Math.min((avg / Math.max(report.meta, 1)) * 100, 100), avg != null && avg > report.meta),
+      ].join("");
+    }
+    function dieselConsumptionPanelHtml(report){
+      const chartRows = report.rows.filter(row => Number(row.diesel_liters || 0) > 0 || Number(row.worked_hours || 0) > 0).slice(0, 12);
+      const maxLiters = Math.max(1, ...chartRows.map(row => Number(row.diesel_liters || 0)));
+      const body = chartRows.map(row => {
+        const liters = Number(row.diesel_liters || 0);
+        const width = Math.max((liters / maxLiters) * 100, 2);
+        const status = dieselStatusClass(row.status);
+        const rend = row.rendimiento_lh == null ? "S/H" : `${one(row.rendimiento_lh)} L/H`;
+        return `<div class="diesel-bar-row ${status === "bad" ? "is-bad" : ""}" title="${esc(row.equipment)} ${one(liters)} L | ${esc(rend)}"><div class="diesel-bar-label"><b>${esc(row.equipment)}</b><span>${esc(row.status)}</span></div><div class="diesel-bar-track"><i style="width:${dieselPctValue(width)}%"></i></div><strong>${one(liters)} L</strong><em>${esc(rend)}</em></div>`;
+      }).join("");
+      return `<section class="diesel-panel"><div class="diesel-panel-head"><span>Consumo por equipo</span><b>Top ${chartRows.length || 0}</b></div>${body ? `<div class="diesel-bars-list">${body}</div>` : `<div class="diesel-empty">Sin capturas diesel en el periodo.</div>`}</section>`;
+    }
+    function dieselPerformancePanelHtml(report){
+      const totals = report.totals || {};
+      const avg = totals.rendimiento_lh;
+      const maxScale = Math.max(report.meta * 1.6, 1);
+      const avgPct = avg == null ? 0 : dieselPctValue((avg / maxScale) * 100);
+      const targetPct = dieselPctValue((report.meta / maxScale) * 100);
+      const mga = Number(totals.mga_liters || 0);
+      const prosermin = Number(totals.prosermin_liters || 0);
+      const supplierTotal = Math.max(mga + prosermin, 1);
+      const mgaPct = (mga / supplierTotal) * 100;
+      const proPct = (prosermin / supplierTotal) * 100;
+      const watch = report.rows.filter(row => ["ALTO","SIN HORAS"].includes(String(row.status || "").toUpperCase())).slice(0, 4);
+      const watchHtml = watch.length
+        ? watch.map(row => `<div class="diesel-watch-item"><b>${esc(row.equipment)}</b><span>${esc(row.status)} | ${row.rendimiento_lh == null ? "S/H" : `${one(row.rendimiento_lh)} L/H`}</span></div>`).join("")
+        : `<div class="diesel-watch-item"><b>Sin alertas</b><span>Dentro de meta</span></div>`;
+      return `<section class="diesel-panel diesel-performance-grid">
+        <div class="diesel-target">
+          <div class="diesel-target-top"><div><span>Rendimiento promedio</span><strong>${avg == null ? "S/H" : `${one(avg)} L/H`}</strong></div><small>Meta ${one(report.meta)} L/H</small></div>
+          <div class="diesel-target-meter"><i style="width:${avgPct}%"></i><span class="diesel-target-marker" style="--target:${targetPct}%"></span></div>
+        </div>
+        <div class="diesel-split">
+          <h4>Origen del diesel</h4>
+          <div class="diesel-split-track"><i class="mga" style="width:${dieselPctValue(mgaPct)}%"></i><i class="pro" style="width:${dieselPctValue(proPct)}%"></i></div>
+          <div class="diesel-split-legend"><span><em><i class="mga"></i>MGA</em><b>${one(mga)} L</b></span><span><em><i class="pro"></i>PROSERMIN</em><b>${one(prosermin)} L</b></span></div>
+        </div>
+        <div class="diesel-watch-list">${watchHtml}</div>
+      </section>`;
+    }
+    function dieselVisualHtml(report){
+      return `<div class="diesel-visual-grid">${dieselConsumptionPanelHtml(report)}${dieselPerformancePanelHtml(report)}</div>`;
+    }
+    function dieselTableHtml(report){
+      const body = report.rows.map(row => {
+        const cls = dieselStatusClass(row.status);
+        return `<tr><td class="diesel-eq">${esc(row.equipment)}</td><td>${esc(row.condition)}</td><td class="diesel-number">${one(row.horometer_initial)}</td><td class="diesel-number">${one(row.horometer_final)}</td><td class="diesel-number">${one(row.worked_hours)}</td><td class="diesel-number">${one(row.diesel_liters)}</td><td class="diesel-number">${row.rendimiento_lh == null ? "S/H" : one(row.rendimiento_lh)}</td><td class="diesel-number">${one(report.meta)}</td><td><span class="pill ${cls}">${esc(row.status)}</span></td></tr>`;
+      }).join("") || `<tr><td colspan="9">Sin capturas diesel en el periodo.</td></tr>`;
+      return `<thead><tr><th>Equipo</th><th>Condicion</th><th>HI</th><th>HF</th><th>Hrs Trab</th><th>Diesel L</th><th>Rend. L/H</th><th>Meta</th><th>KPI</th></tr></thead><tbody>${body}<tr class="diesel-total"><td>Total</td><td></td><td></td><td></td><td class="diesel-number">${one(report.totals.worked_hours)}</td><td class="diesel-number">${one(report.totals.diesel_liters)}</td><td class="diesel-number">${report.totals.rendimiento_lh == null ? "S/H" : one(report.totals.rendimiento_lh)}</td><td class="diesel-number">${one(report.meta)}</td><td>${report.totals.critical} revision</td></tr></tbody>`;
+    }
     function renderDieselDashboard(){
-      setDashboardMode("special");
+      setDashboardMode("diesel");
       const report = dieselKpiRowsForPeriod();
       $("portalUpdated").textContent = diesel.updated_at ? `Actualizado ${diesel.updated_at}` : (portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar");
       $("kpiTitle").textContent = `KPI Diesel | ${report.start} a ${report.end}`;
-      const avg = report.totals.rendimiento_lh;
-      $("kpiCards").innerHTML = [
-        ["Equipos", `${report.rows.length}`, "con captura diesel", 100, false],
-        ["Consumo total", `${one(report.totals.diesel_liters)} L`, "litros capturados", Math.min(report.totals.diesel_liters / 500, 100), false],
-        ["Diesel MGA", `${one(report.totals.mga_liters)} L`, "consumo diario MGA", Math.min(report.totals.mga_liters / 500, 100), false],
-        ["Diesel PROSERMIN", `${one(report.totals.prosermin_liters)} L`, "consumo diario PROSERMIN", Math.min(report.totals.prosermin_liters / 500, 100), false],
-        ["Horas trabajadas", `${one(report.totals.worked_hours)} h`, "horas diesel", Math.min(report.totals.worked_hours / 10, 100), false],
-        ["Rendimiento", avg == null ? "S/H" : `${one(avg)} L/H`, `Meta ${one(report.meta)} L/H`, avg != null ? Math.min((avg / Math.max(report.meta, 1)) * 100, 100) : 0, avg != null && avg > report.meta],
-      ].map(([label, value, note, width, bad]) => metricCardHtml(label, value, note, width, bad)).join("");
-      const chartRows = report.rows.filter(row => row.diesel_liters > 0 || row.worked_hours > 0).slice(0,18);
-      const maxLiters = Math.max(...chartRows.map(row => Number(row.diesel_liters || 0)), 1);
-      $("kpiChart").innerHTML = chartRows.map(row => {
-        const h = Math.max((Number(row.diesel_liters || 0) / maxLiters) * 210, 4);
-        const bad = ["ALTO","SIN HORAS"].includes(String(row.status || ""));
-        const rend = row.rendimiento_lh == null ? "S/H" : `${one(row.rendimiento_lh)} L/H`;
-        return `<div class="chart-bar ${bad ? "out" : ""}" title="${esc(row.equipment)} ${one(row.diesel_liters)} L | ${esc(rend)}"><span>${one(row.diesel_liters)} L</span><i style="--h:${h}px"></i><b>${esc(row.equipment)}</b></div>`;
-      }).join("") || `<p class="muted">Sin capturas diesel en el periodo.</p>`;
-      $("kpiTable").innerHTML = `<thead><tr><th>Equipo</th><th>Condicion</th><th>HI</th><th>HF</th><th>Hrs Trab</th><th>Diesel L</th><th>Rend. L/H</th><th>Meta</th><th>KPI</th></tr></thead><tbody>` +
-        report.rows.map(row => {
-          const cls = row.status === "OK" ? "ok" : (row.status === "SIN CONSUMO" ? "warn" : "bad");
-          return `<tr><td>${esc(row.equipment)}</td><td>${esc(row.condition)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${row.rendimiento_lh == null ? "S/H" : one(row.rendimiento_lh)}</td><td>${one(report.meta)}</td><td><span class="pill ${cls}">${esc(row.status)}</span></td></tr>`;
-        }).join("") +
-        `<tr><td><b>Total</b></td><td></td><td></td><td></td><td><b>${one(report.totals.worked_hours)}</b></td><td><b>${one(report.totals.diesel_liters)}</b></td><td><b>${report.totals.rendimiento_lh == null ? "S/H" : one(report.totals.rendimiento_lh)}</b></td><td><b>${one(report.meta)}</b></td><td><b>${report.totals.critical} revision</b></td></tr></tbody>`;
+      $("kpiCards").innerHTML = dieselCardsHtml(report);
+      $("kpiChart").innerHTML = dieselVisualHtml(report);
+      $("kpiTable").className = "diesel-table";
+      $("kpiTable").innerHTML = dieselTableHtml(report);
     }
     function renderDashboard(){
       const selectedGroup = $("kpiGroup").value || "";
