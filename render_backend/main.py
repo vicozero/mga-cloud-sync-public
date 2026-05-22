@@ -661,6 +661,10 @@ def clean_diesel_day_dict(row: dict[str, Any], source: str = "desktop") -> dict[
     }
 
 
+def diesel_supplier_owner(value: Any) -> str:
+    return "PROSERMIN" if "PROSERMIN" in normalize_text(value) else "MGA"
+
+
 def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: float | None = None) -> dict[str, Any]:
     start_iso, end_iso = diesel_period_bounds(session, start, end)
     portal = latest_portal_payload(session)
@@ -762,6 +766,8 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
     while cursor <= finish:
         key = cursor.isoformat()
         day = days_by_date.get(key, {})
+        supplier = day.get("supplier") or ""
+        owner = diesel_supplier_owner(supplier)
         daily_rows.append(
             {
                 "work_date": key,
@@ -769,7 +775,8 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
                 "diesel_received": parse_float(day.get("diesel_received"), 0),
                 "initial_stock": parse_float(day.get("initial_stock"), 0),
                 "final_stock": parse_float(day.get("final_stock"), 0),
-                "supplier": day.get("supplier") or "",
+                "supplier": supplier,
+                "supplier_owner": owner,
                 "notes": day.get("notes") or "",
             }
         )
@@ -777,6 +784,10 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
 
     total_liters = sum(parse_float(row["diesel_liters"], 0) for row in rows)
     total_hours = sum(parse_float(row["worked_hours"], 0) for row in rows)
+    mga_liters = sum(parse_float(row.get("diesel_liters"), 0) for row in daily_rows if row.get("supplier_owner") == "MGA")
+    prosermin_liters = sum(parse_float(row.get("diesel_liters"), 0) for row in daily_rows if row.get("supplier_owner") == "PROSERMIN")
+    mga_received = sum(parse_float(row.get("diesel_received"), 0) for row in daily_rows if row.get("supplier_owner") == "MGA")
+    prosermin_received = sum(parse_float(row.get("diesel_received"), 0) for row in daily_rows if row.get("supplier_owner") == "PROSERMIN")
     equipment_codes = sorted(
         {
             normalize_text(item.get("code") or item.get("equipment_code") or "")
@@ -799,6 +810,10 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
             "worked_hours": total_hours,
             "rendimiento_lh": total_liters / total_hours if total_hours > 0 else None,
             "received": sum(parse_float(row.get("diesel_received"), 0) for row in daily_rows),
+            "mga_liters": mga_liters,
+            "prosermin_liters": prosermin_liters,
+            "mga_received": mga_received,
+            "prosermin_received": prosermin_received,
             "critical": sum(1 for row in rows if row["status"] in {"ALTO", "SIN HORAS"}),
         },
         "updated_at": portal.get("updated_at") or portal.get("generated_at") or utc_now().isoformat(timespec="seconds"),
@@ -2876,7 +2891,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const end = $("kpiEnd").value;
       const meta = Number($("dieselMeta").value || diesel.meta_lh || (portal.settings || {}).meta_diesel_lh || 25);
       const grouped = {};
-      (diesel.records || []).filter(row => inRange(row.work_date, start, end)).forEach(record => {
+      const periodRecords = (diesel.records || []).filter(row => inRange(row.work_date, start, end));
+      periodRecords.forEach(record => {
         const equipment = String(record.equipment || "").trim().toUpperCase();
         if(!equipment) return;
         if(!grouped[equipment]){
@@ -2912,6 +2928,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         return acc;
       }, {diesel_liters:0, worked_hours:0, critical:0});
       totals.rendimiento_lh = totals.worked_hours > 0 ? totals.diesel_liters / totals.worked_hours : null;
+      Object.assign(totals, dieselSupplierTotals(periodRecords));
       return {start, end, meta, rows, totals};
     }
     function renderDieselDashboard(){
@@ -2923,6 +2940,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("kpiCards").innerHTML = [
         ["Equipos", `${report.rows.length}`, "con captura diesel", 100, false],
         ["Consumo total", `${one(report.totals.diesel_liters)} L`, "litros capturados", Math.min(report.totals.diesel_liters / 500, 100), false],
+        ["Diesel MGA", `${one(report.totals.mga_liters)} L`, "consumo diario MGA", Math.min(report.totals.mga_liters / 500, 100), false],
+        ["Diesel PROSERMIN", `${one(report.totals.prosermin_liters)} L`, "consumo diario PROSERMIN", Math.min(report.totals.prosermin_liters / 500, 100), false],
         ["Horas trabajadas", `${one(report.totals.worked_hours)} h`, "horas diesel", Math.min(report.totals.worked_hours / 10, 100), false],
         ["Rendimiento", avg == null ? "S/H" : `${one(avg)} L/H`, `Meta ${one(report.meta)} L/H`, avg != null ? Math.min((avg / Math.max(report.meta, 1)) * 100, 100) : 0, avg != null && avg > report.meta],
       ].map(([label, value, note, width, bad]) => metricCardHtml(label, value, note, width, bad)).join("");
@@ -3226,25 +3245,47 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const rows = diesel.records || [];
       return selected === "Todos" ? rows : rows.filter(row => String(row.equipment || "").toUpperCase() === selected.toUpperCase());
     }
-    function dieselTotalsForRows(rows){
+    function dieselDayOwner(row){
+      const text = String(row?.supplier || "").toUpperCase();
+      return text.includes("PROSERMIN") ? "PROSERMIN" : "MGA";
+    }
+    function dieselSupplierTotals(records){
+      const ownerByDate = {};
+      (diesel.days || []).forEach(row => {
+        if(row.work_date) ownerByDate[row.work_date] = row.supplier_owner || dieselDayOwner(row);
+      });
+      return (records || []).reduce((acc, row) => {
+        const owner = ownerByDate[row.work_date] || "MGA";
+        const liters = Number(row.diesel_liters || 0);
+        if(owner === "PROSERMIN") acc.prosermin_liters += liters;
+        else acc.mga_liters += liters;
+        return acc;
+      }, {mga_liters:0, prosermin_liters:0});
+    }
+    function dieselTotalsForRows(rows, records){
       const liters = rows.reduce((sum,row) => sum + Number(row.diesel_liters || 0), 0);
       const hours = rows.reduce((sum,row) => sum + Number(row.worked_hours || 0), 0);
+      const split = dieselSupplierTotals(records || []);
       return {
         diesel_liters: liters,
         worked_hours: hours,
         rendimiento_lh: hours > 0 ? liters / hours : null,
         critical: rows.filter(row => ["ALTO","SIN HORAS"].includes(String(row.status || "").toUpperCase())).length,
+        mga_liters: split.mga_liters,
+        prosermin_liters: split.prosermin_liters,
       };
     }
     function renderDiesel(){
       renderDieselSelectors();
       const rows = filteredDieselRows();
       const records = filteredDieselRecords();
-      const totals = dieselTotalsForRows(rows);
+      const totals = dieselTotalsForRows(rows, records);
       $("dieselTitle").textContent = `Rendimiento diesel | ${diesel.start || $("dieselStart").value} a ${diesel.end || $("dieselEnd").value}`;
       $("dieselUpdated").textContent = diesel.updated_at ? `Actualizado ${diesel.updated_at}` : "";
       $("dieselStats").innerHTML = [
         ["Consumo diesel", `${one(totals.diesel_liters)} L`],
+        ["Diesel MGA", `${one(totals.mga_liters)} L`],
+        ["Diesel PROSERMIN", `${one(totals.prosermin_liters)} L`],
         ["Horas trabajadas", `${one(totals.worked_hours)} h`],
         ["Rendimiento prom.", dieselRendText(totals.rendimiento_lh) + (totals.rendimiento_lh == null ? "" : " L/H")],
         ["Equipos revision", totals.critical],
@@ -3253,8 +3294,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("dieselReportTable").innerHTML = `<thead><tr><th>Equipo</th><th>Condicion actual</th><th>Horometro inicial</th><th>Horometro final</th><th>Horas trabajadas</th><th>Consumo diesel</th><th>Rendimiento L/H</th><th>KPI</th></tr></thead><tbody>` +
         rows.map(row => `<tr><td>${esc(row.equipment)}</td><td>${esc(row.condition)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${dieselRendText(row.rendimiento_lh)}</td><td><span class="pill ${dieselStatusClass(row.status)}">${esc(row.status)}</span></td></tr>`).join("") +
         `</tbody>`;
-      $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>Proveedor</th></tr></thead><tbody>` +
-        (diesel.days || []).map(row => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${esc(row.supplier)}</td></tr>`).join("") +
+      $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Origen</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>Proveedor</th></tr></thead><tbody>` +
+        (diesel.days || []).map(row => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.supplier_owner || dieselDayOwner(row))}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${esc(row.supplier)}</td></tr>`).join("") +
         `</tbody>`;
       $("dieselRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Turno</th><th>HI</th><th>HF</th><th>Hrs</th><th>Diesel L</th><th>Origen</th></tr></thead><tbody>` +
         records.map((row, idx) => `<tr data-diesel-index="${idx}" style="cursor:pointer"><td>${esc(row.work_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.shift)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.source || "desktop")}</td></tr>`).join("") +
