@@ -687,7 +687,17 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
     for row in db_records:
         record = diesel_record_payload(row)
         records_by_key[diesel_record_key(record)] = record
-    records = sorted(records_by_key.values(), key=lambda row: (row["work_date"], row["equipment"], row["shift"]), reverse=True)
+    equipment_aliases = diesel_equipment_alias_map(portal, list(records_by_key.values()))
+    records = []
+    for record in records_by_key.values():
+        normalized_record = dict(record)
+        raw_equipment = normalize_text(normalized_record.get("equipment"))
+        canonical_equipment = diesel_canonical_equipment(raw_equipment, equipment_aliases)
+        if canonical_equipment and raw_equipment and canonical_equipment != raw_equipment:
+            normalized_record["raw_equipment"] = raw_equipment
+        normalized_record["equipment"] = canonical_equipment or raw_equipment
+        records.append(normalized_record)
+    records = sorted(records, key=lambda row: (row["work_date"], row["equipment"], row["shift"]), reverse=True)
 
     days_by_date: dict[str, dict[str, Any]] = {}
     if isinstance(diesel_portal, dict):
@@ -822,6 +832,65 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
 
 def diesel_equipment_match_key(value: Any) -> str:
     return "".join(ch for ch in normalize_text(value) if ch.isalnum())
+
+
+def diesel_canonical_equipment(value: Any, aliases: dict[str, str] | None = None) -> str:
+    text = normalize_text(value)
+    if not text:
+        return ""
+    aliases = aliases or {}
+    for key in diesel_template_equipment_keys(text):
+        if key in aliases:
+            return aliases[key]
+    without_parentheses = re.sub(r"\([^)]*\)", "", text).strip()
+    first_token = re.split(r"[\s(]+", text, 1)[0].strip()
+    if first_token and any(ch.isdigit() for ch in first_token):
+        return first_token
+    return without_parentheses or text
+
+
+def diesel_equipment_alias_map(
+    portal: dict[str, Any] | None,
+    records: list[dict[str, Any]] | None = None,
+) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+
+    def add_alias(canonical: Any, *values: Any) -> None:
+        canonical_text = normalize_text(canonical)
+        if not canonical_text:
+            return
+        for value in (canonical_text, *values):
+            for key in diesel_template_equipment_keys(value):
+                aliases.setdefault(key, canonical_text)
+            key = diesel_equipment_match_key(value)
+            if key:
+                aliases.setdefault(key, canonical_text)
+
+    equipment_rows = portal.get("equipment") if isinstance(portal, dict) else []
+    if isinstance(equipment_rows, list):
+        for item in equipment_rows:
+            if not isinstance(item, dict):
+                continue
+            code = normalize_text(item.get("code") or item.get("equipment_code") or "")
+            description = normalize_text(item.get("description") or item.get("family") or "")
+            if not code:
+                continue
+            add_alias(code, f"{code} {description}", f"{code} ({description})")
+
+    diesel_portal = portal.get("diesel") if isinstance(portal, dict) else {}
+    diesel_equipment = diesel_portal.get("equipment") if isinstance(diesel_portal, dict) else []
+    if isinstance(diesel_equipment, list):
+        for item in diesel_equipment:
+            text = normalize_text(item)
+            if text:
+                add_alias(diesel_canonical_equipment(text, aliases), text)
+
+    for record in records or []:
+        text = normalize_text(record.get("equipment") if isinstance(record, dict) else record)
+        if text:
+            add_alias(diesel_canonical_equipment(text, aliases), text)
+
+    return aliases
 
 
 def diesel_template_equipment_keys(value: Any) -> list[str]:
@@ -1823,6 +1892,7 @@ async def save_diesel_record_cloud(request: Request, _auth: str | None = Header(
     if worked < 0:
         worked = max(hf - hi, 0) if hi and hf and hf >= hi else 0
     with SessionLocal() as session:
+        equipment = diesel_canonical_equipment(equipment, diesel_equipment_alias_map(latest_portal_payload(session))) or equipment
         record_id = int(parse_float(payload.get("id"), 0) or 0)
         row = session.get(DieselRecord, record_id) if record_id else None
         if row is None:
@@ -2891,10 +2961,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const end = $("kpiEnd").value;
       const meta = Number($("dieselMeta").value || diesel.meta_lh || (portal.settings || {}).meta_diesel_lh || 25);
       const grouped = {};
+      const aliasMap = dieselBaseEquipmentAliasMap();
       const periodRecords = (diesel.records || []).filter(row => inRange(row.work_date, start, end));
       periodRecords.forEach(record => {
-        const equipment = String(record.equipment || "").trim().toUpperCase();
+        const equipment = dieselCanonicalEquipment(record.equipment, aliasMap);
         if(!equipment) return;
+        addDieselEquipmentAlias(aliasMap, equipment, [record.equipment]);
         if(!grouped[equipment]){
           grouped[equipment] = {equipment, condition:record.condition || "DISPONIBLE", hi:[], hf:[], worked_hours:0, diesel_liters:0};
         }
@@ -3209,22 +3281,69 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderReqList();
       renderReqItems();
     }
-    function dieselEquipmentOptions(){
-      const set = new Set();
-      (diesel.equipment || []).forEach(code => { if(String(code || "").trim()) set.add(String(code).trim().toUpperCase()); });
-      portalEquipment().forEach(eq => {
-        const code = eq.code || eq.equipment_code || "";
-        if(code) set.add(String(code).trim().toUpperCase());
+    function dieselEquipmentKey(value){
+      return String(value || "").trim().toUpperCase().replace(/\([^)]*\)/g, " ").replace(/[^A-Z0-9]+/g, "");
+    }
+    function dieselEquipmentCandidates(value){
+      const text = String(value || "").trim().toUpperCase();
+      if(!text) return [];
+      const withoutParentheses = text.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+      const firstToken = text.split(/[\s(]+/)[0].trim();
+      const codeMatches = text.match(/[A-Z]{1,4}[- ]?\d{2,4}/g) || [];
+      return [...new Set([text, withoutParentheses, firstToken, ...codeMatches].map(dieselEquipmentKey).filter(Boolean))];
+    }
+    function dieselFallbackEquipment(value){
+      const text = String(value || "").trim().toUpperCase();
+      if(!text) return "";
+      const withoutParentheses = text.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+      const firstToken = text.split(/[\s(]+/)[0].trim();
+      return firstToken && /\d/.test(firstToken) ? firstToken : (withoutParentheses || text);
+    }
+    function addDieselEquipmentAlias(aliasMap, canonical, aliases=[]){
+      const clean = String(canonical || "").trim().toUpperCase();
+      if(!clean) return;
+      [clean, ...aliases].forEach(alias => {
+        dieselEquipmentCandidates(alias).forEach(key => aliasMap.set(key, clean));
       });
-      (diesel.records || []).forEach(row => { if(row.equipment) set.add(String(row.equipment).trim().toUpperCase()); });
+    }
+    function dieselBaseEquipmentAliasMap(){
+      const aliasMap = new Map();
+      [...portalEquipment(), ...(Array.isArray(data.equipment) ? data.equipment : [])].forEach(eq => {
+        const code = String(eq.code || eq.equipment_code || "").trim().toUpperCase();
+        const description = String(eq.description || eq.family || "").trim().toUpperCase();
+        if(code) addDieselEquipmentAlias(aliasMap, code, [description ? `${code} ${description}` : "", description ? `${code} (${description})` : ""]);
+      });
+      return aliasMap;
+    }
+    function dieselCanonicalEquipment(value, aliasMap=dieselBaseEquipmentAliasMap()){
+      const text = String(value || "").trim().toUpperCase();
+      if(!text) return "";
+      for(const key of dieselEquipmentCandidates(text)){
+        if(aliasMap.has(key)) return aliasMap.get(key);
+      }
+      return dieselFallbackEquipment(text);
+    }
+    function dieselEquipmentOptions(){
+      const aliasMap = dieselBaseEquipmentAliasMap();
+      const set = new Set();
+      function addOption(value){
+        const canonical = dieselCanonicalEquipment(value, aliasMap);
+        if(!canonical) return;
+        addDieselEquipmentAlias(aliasMap, canonical, [value]);
+        set.add(canonical);
+      }
+      (diesel.equipment || []).forEach(addOption);
+      portalEquipment().forEach(eq => addOption(eq.code || eq.equipment_code || ""));
+      (diesel.records || []).forEach(row => addOption(row.equipment));
       return [...set].sort();
     }
     function renderDieselSelectors(){
       const codes = dieselEquipmentOptions();
-      const currentFilter = $("dieselFilterEquipment").value || "Todos";
+      const rawFilter = $("dieselFilterEquipment").value || "Todos";
+      const currentFilter = rawFilter === "Todos" ? "Todos" : dieselCanonicalEquipment(rawFilter);
       $("dieselFilterEquipment").innerHTML = `<option>Todos</option>` + codes.map(code => `<option>${esc(code)}</option>`).join("");
       $("dieselFilterEquipment").value = codes.includes(currentFilter) || currentFilter === "Todos" ? currentFilter : "Todos";
-      const currentEquipment = $("dieselEquipment").value;
+      const currentEquipment = dieselCanonicalEquipment($("dieselEquipment").value);
       $("dieselEquipment").innerHTML = `<option value=""></option>` + codes.map(code => `<option>${esc(code)}</option>`).join("");
       if(codes.includes(currentEquipment)) $("dieselEquipment").value = currentEquipment;
     }
@@ -3235,15 +3354,58 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(text.includes("SIN CONSUMO")) return "warn";
       return "ok";
     }
+    function groupedDieselRows(rows){
+      const aliasMap = dieselBaseEquipmentAliasMap();
+      const grouped = new Map();
+      (rows || []).forEach(raw => {
+        const equipment = dieselCanonicalEquipment(raw.equipment, aliasMap);
+        if(!equipment) return;
+        addDieselEquipmentAlias(aliasMap, equipment, [raw.equipment]);
+        if(!grouped.has(equipment)){
+          grouped.set(equipment, {equipment, condition:raw.condition || "DISPONIBLE", hi_values:[], hf_values:[], worked_hours:0, diesel_liters:0});
+        }
+        const row = grouped.get(equipment);
+        row.condition = raw.condition || row.condition;
+        const hi = Number(raw.horometer_initial || 0);
+        const hf = Number(raw.horometer_final || 0);
+        if(hi > 0) row.hi_values.push(hi);
+        if(hf > 0) row.hf_values.push(hf);
+        row.worked_hours += Number(raw.worked_hours || 0);
+        row.diesel_liters += Number(raw.diesel_liters || 0);
+      });
+      const meta = Number($("dieselMeta").value || diesel.meta_lh || 25);
+      return [...grouped.values()].map(row => {
+        const rendimiento = row.worked_hours > 0 ? row.diesel_liters / row.worked_hours : null;
+        let status = "OK";
+        if(row.diesel_liters <= 0) status = "SIN CONSUMO";
+        else if(row.worked_hours <= 0) status = "SIN HORAS";
+        else if(rendimiento !== null && rendimiento > meta) status = "ALTO";
+        return {
+          equipment: row.equipment,
+          condition: row.condition,
+          horometer_initial: row.hi_values.length ? Math.min(...row.hi_values) : 0,
+          horometer_final: row.hf_values.length ? Math.max(...row.hf_values) : 0,
+          worked_hours: row.worked_hours,
+          diesel_liters: row.diesel_liters,
+          rendimiento_lh: rendimiento,
+          status,
+        };
+      }).sort((a,b) => b.diesel_liters - a.diesel_liters || a.equipment.localeCompare(b.equipment));
+    }
     function filteredDieselRows(){
       const selected = $("dieselFilterEquipment").value || "Todos";
-      const rows = diesel.rows || [];
-      return selected === "Todos" ? rows : rows.filter(row => String(row.equipment || "").toUpperCase() === selected.toUpperCase());
+      const rows = groupedDieselRows(diesel.rows || []);
+      if(selected === "Todos") return rows;
+      const selectedKey = dieselEquipmentKey(dieselCanonicalEquipment(selected));
+      return rows.filter(row => dieselEquipmentKey(row.equipment) === selectedKey);
     }
     function filteredDieselRecords(){
       const selected = $("dieselFilterEquipment").value || "Todos";
       const rows = diesel.records || [];
-      return selected === "Todos" ? rows : rows.filter(row => String(row.equipment || "").toUpperCase() === selected.toUpperCase());
+      if(selected === "Todos") return rows;
+      const aliasMap = dieselBaseEquipmentAliasMap();
+      const selectedKey = dieselEquipmentKey(dieselCanonicalEquipment(selected, aliasMap));
+      return rows.filter(row => dieselEquipmentKey(dieselCanonicalEquipment(row.equipment, aliasMap)) === selectedKey);
     }
     function dieselDayOwner(row){
       const text = String(row?.supplier || "").toUpperCase();
@@ -3297,8 +3459,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Origen</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>Proveedor</th></tr></thead><tbody>` +
         (diesel.days || []).map(row => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.supplier_owner || dieselDayOwner(row))}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${esc(row.supplier)}</td></tr>`).join("") +
         `</tbody>`;
+      const recordAliasMap = dieselBaseEquipmentAliasMap();
       $("dieselRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Turno</th><th>HI</th><th>HF</th><th>Hrs</th><th>Diesel L</th><th>Origen</th></tr></thead><tbody>` +
-        records.map((row, idx) => `<tr data-diesel-index="${idx}" style="cursor:pointer"><td>${esc(row.work_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.shift)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.source || "desktop")}</td></tr>`).join("") +
+        records.map((row, idx) => `<tr data-diesel-index="${idx}" style="cursor:pointer"><td>${esc(row.work_date)}</td><td>${esc(dieselCanonicalEquipment(row.equipment, recordAliasMap))}</td><td>${esc(row.shift)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.source || "desktop")}</td></tr>`).join("") +
         `</tbody>`;
       document.querySelectorAll("[data-diesel-index]").forEach(tr => tr.addEventListener("click", () => editDieselRecord(Number(tr.dataset.dieselIndex))));
     }
@@ -3318,7 +3481,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       currentDieselId = row.source === "web" ? Number(row.id || 0) || null : null;
       $("dieselEditStatus").textContent = currentDieselId ? `Editando captura web #${currentDieselId}` : "Editando copia sincronizada; al guardar se crea/actualiza captura web";
       $("dieselDate").value = row.work_date || "";
-      $("dieselEquipment").value = row.equipment || "";
+      $("dieselEquipment").value = dieselCanonicalEquipment(row.equipment) || "";
       $("dieselCondition").value = row.condition || "DISPONIBLE";
       $("dieselShift").value = row.shift || "1";
       $("dieselHi").value = row.horometer_initial || 0;
