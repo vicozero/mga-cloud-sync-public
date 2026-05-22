@@ -21,6 +21,11 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engin
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
+try:
+    import fitz
+except Exception:
+    fitz = None
+
 
 SERVICE_NAME = "mga-cloud-sync"
 
@@ -195,6 +200,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
+REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
 REQUISITION_UNITS = [
     "PZA", "JGO", "KIT", "SERV", "LT", "L", "GAL", "ML", "TAMBO", "TAMBOR",
     "CUBETA", "BOTE", "LATA", "CAJA", "PAQUETE", "BOLSA", "MTS", "M2", "M3",
@@ -291,6 +297,18 @@ def product_rows(session: Session | None = None, query: str = "", limit: int = 1
 def fmt_qty(value: Any) -> str:
     qty = parse_float(value, 0)
     return str(int(qty)) if float(qty).is_integer() else f"{qty:g}"
+
+
+def requisition_field(row: Any, key: str) -> str:
+    if isinstance(row, dict):
+        return str(row.get(key) or "")
+    return str(getattr(row, key, "") or "")
+
+
+def requisition_item_field(item: Any, key: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(key)
+    return getattr(item, key, None)
 
 
 def inventory_field_for(header: Any) -> str | None:
@@ -722,7 +740,176 @@ def draw_wrapped(c: pdf_canvas.Canvas, text: str, x: float, top: float, w: float
             draw_text(c, line_text, x, y_top, size, bold)
 
 
+MONTH_ABBR_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+
+
+def requisition_pdf_parse_date(value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def requisition_pdf_header_date(value: str | None) -> str:
+    parsed = requisition_pdf_parse_date(value)
+    if not parsed:
+        return value or ""
+    parsed_date = datetime.strptime(parsed, "%Y-%m-%d").date()
+    return f"{parsed_date.day:02d}-{MONTH_ABBR_ES[parsed_date.month - 1]}-{str(parsed_date.year)[-2:]}"
+
+
+def requisition_pdf_cell_date(value: str | None) -> str:
+    parsed = requisition_pdf_parse_date(value)
+    if not parsed:
+        return value or ""
+    parsed_date = datetime.strptime(parsed, "%Y-%m-%d").date()
+    return f"{parsed_date.day:02d}/{parsed_date.month:02d}/{parsed_date.year}"
+
+
+def requisition_pdf_template_bytes(row: CloudRequisition, items: list[CloudRequisitionItem], template_path: Path) -> bytes:
+    if fitz is None:
+        raise RuntimeError("PyMuPDF no esta disponible para usar la plantilla PDF.")
+    template = fitz.open(str(template_path))
+    output = fitz.open()
+    rows_per_page = 14
+    chunks = [items[idx:idx + rows_per_page] for idx in range(0, len(items), rows_per_page)] or [[]]
+
+    def clear(page, rect) -> None:
+        page.draw_rect(fitz.Rect(*rect), color=None, fill=(1, 1, 1), overlay=True)
+
+    def text(page, rect, value: str, size: float = 7.2, align: int | None = None) -> None:
+        page.insert_textbox(
+            fitz.Rect(*rect),
+            str(value or ""),
+            fontsize=size,
+            fontname="helv",
+            color=(0, 0, 0),
+            align=fitz.TEXT_ALIGN_CENTER if align is None else align,
+            overlay=True,
+        )
+
+    def centered_line(page, rect, value: str, size: float = 7.0) -> None:
+        value = str(value or "")
+        if not value:
+            return
+        x0, y0, x1, y1 = rect
+        while size > 4.8 and fitz.get_text_length(value, fontname="helv", fontsize=size) > (x1 - x0 - 2):
+            size -= 0.3
+        text_width_value = fitz.get_text_length(value, fontname="helv", fontsize=size)
+        x = x0 + max((x1 - x0 - text_width_value) / 2, 0)
+        y = y0 + ((y1 - y0 + size) / 2) - 1
+        page.insert_text((x, y), value, fontsize=size, fontname="helv", color=(0, 0, 0), overlay=True)
+
+    def line_text(page, rect, value: str, size: float = 7.0, align: int = 1) -> None:
+        value = str(value or "")
+        if not value:
+            return
+        x0, y0, x1, y1 = rect
+        while size > 4.8 and fitz.get_text_length(value, fontname="helv", fontsize=size) > (x1 - x0 - 2):
+            size -= 0.3
+        text_width_value = fitz.get_text_length(value, fontname="helv", fontsize=size)
+        if align == 0:
+            x = x0
+        elif align == 2:
+            x = x1 - text_width_value
+        else:
+            x = x0 + max((x1 - x0 - text_width_value) / 2, 0)
+        y = y0 + ((y1 - y0 + size) / 2) - 1
+        page.insert_text((x, y), value, fontsize=size, fontname="helv", color=(0, 0, 0), overlay=True)
+
+    def split_two_lines(value: str) -> tuple[str, str]:
+        words = str(value or "").split()
+        if len(words) <= 1:
+            return str(value or ""), ""
+        if len(words) == 2:
+            return words[0], words[1]
+        split_at = max(1, len(words) // 2)
+        return " ".join(words[:split_at]), " ".join(words[split_at:])
+
+    def two_line_value(page, rect_top, rect_bottom, value: str, size: float = 7.0) -> None:
+        first, second = split_two_lines(value)
+        line_text(page, rect_top, first, size)
+        if second:
+            line_text(page, rect_bottom, second, size)
+
+    def clear_template_values(page) -> None:
+        rects = [
+            (452, 89, 482, 98),
+            (141, 165, 180, 185),
+            (312, 169, 366, 181),
+            (462, 168, 503, 181),
+            (558, 168, 600, 181),
+            (145, 208, 196, 221),
+            (395, 208, 434, 221),
+            (102, 234, 141, 245),
+            (326, 230, 365, 242),
+            (529, 230, 582, 242),
+            (29, 294, 38, 305),
+            (69, 294, 86, 305),
+            (342, 294, 455, 305),
+            (29, 310, 38, 321),
+            (69, 310, 86, 321),
+            (340, 310, 488, 321),
+        ]
+        for rect in rects:
+            clear(page, rect)
+
+    try:
+        for chunk in chunks:
+            output.insert_pdf(template, from_page=0, to_page=0)
+            page = output[-1]
+            clear_template_values(page)
+
+            line_text(page, (453, 91, 486, 97), requisition_pdf_header_date(requisition_field(row, "request_date")), 5.3, 0)
+            two_line_value(page, (140, 166, 181, 174), (140, 175, 181, 183), requisition_field(row, "requesting_unit"), 7.2)
+            line_text(page, (303, 168, 373, 183), requisition_field(row, "operating_unit"), 8.0)
+            line_text(page, (456, 169, 509, 181), requisition_pdf_cell_date(requisition_field(row, "authorization_date")), 8.0)
+            line_text(page, (562, 169, 607, 181), requisition_pdf_cell_date(requisition_field(row, "request_date")), 7.1)
+            line_text(page, (95, 193, 593, 201), requisition_field(row, "cost_center"), 8.0)
+            line_text(page, (107, 211, 238, 220), requisition_field(row, "equipment"), 8.2)
+            line_text(page, (378, 211, 450, 220), requisition_field(row, "priority"), 8.2)
+            line_text(page, (105, 236, 149, 243), requisition_field(row, "folio"), 7.1)
+            line_text(page, (227, 235, 450, 243), requisition_field(row, "request_area"), 7.8)
+            line_text(page, (514, 235, 593, 243), requisition_field(row, "location"), 7.6)
+
+            notes = requisition_field(row, "notes")
+            if notes:
+                line_text(page, (80, 540, 594, 548), notes, 7.0, 0)
+            else:
+                clear(page, (80, 540, 594, 548))
+
+            row_top = 292.0
+            row_h = 16.2
+            for idx in range(rows_per_page):
+                y = row_top + idx * row_h
+                clear(page, (18, y + 2.0, 49, y + 14.0))
+                clear(page, (54, y + 2.0, 101, y + 14.0))
+                clear(page, (106, y + 2.0, 237, y + 14.0))
+                clear(page, (241, y + 2.0, 595, y + 14.0))
+                if idx >= len(chunk):
+                    continue
+                item = chunk[idx]
+                centered_line(page, (18, y + 1.4, 49, y + 15.0), fmt_qty(requisition_item_field(item, "quantity")), 7.0)
+                centered_line(page, (54, y + 1.4, 101, y + 15.0), requisition_item_field(item, "unit"), 7.0)
+                centered_line(page, (106, y + 1.4, 237, y + 15.0), requisition_item_field(item, "part_number"), 6.8)
+                centered_line(page, (241, y + 1.2, 595, y + 15.2), requisition_item_field(item, "description"), 6.8)
+
+        pdf = output.tobytes(garbage=4, deflate=True)
+    finally:
+        output.close()
+        template.close()
+    return pdf
+
+
 def requisition_pdf_bytes(row: CloudRequisition, items: list[CloudRequisitionItem]) -> bytes:
+    if fitz is not None and REQUISITION_TEMPLATE_PATH.exists():
+        return requisition_pdf_template_bytes(row, items, REQUISITION_TEMPLATE_PATH)
+
     stream = BytesIO()
     width, height = landscape(letter)
     c = pdf_canvas.Canvas(stream, pagesize=landscape(letter))
