@@ -19,7 +19,7 @@ from openpyxl.drawing.image import Image as ExcelImage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas as pdf_canvas
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select, text as sql_text
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
@@ -215,6 +215,7 @@ class DieselDay(Base):
     diesel_received: Mapped[float] = mapped_column(Float, default=0)
     initial_stock: Mapped[float] = mapped_column(Float, default=0)
     final_stock: Mapped[float] = mapped_column(Float, default=0)
+    prosermin_stock: Mapped[float] = mapped_column(Float, default=0)
     supplier: Mapped[str] = mapped_column(String(180), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(80), default="web")
@@ -243,6 +244,26 @@ class DieselDeletedDay(Base):
 engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
+
+
+def ensure_cloud_schema() -> None:
+    if database_url().startswith("sqlite"):
+        try:
+            with engine.begin() as conn:
+                columns = {row[1] for row in conn.execute(sql_text("PRAGMA table_info(mga_diesel_day)")).fetchall()}
+                if "prosermin_stock" not in columns:
+                    conn.execute(sql_text("ALTER TABLE mga_diesel_day ADD COLUMN prosermin_stock FLOAT DEFAULT 0"))
+        except Exception:
+            pass
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(sql_text("ALTER TABLE mga_diesel_day ADD COLUMN IF NOT EXISTS prosermin_stock DOUBLE PRECISION DEFAULT 0"))
+    except Exception:
+        pass
+
+
+ensure_cloud_schema()
 
 app = FastAPI(title="MGA Cloud Sync", version="1.3.1")
 app.add_middleware(
@@ -697,6 +718,7 @@ def diesel_day_payload(row: DieselDay) -> dict[str, Any]:
         "diesel_received": row.diesel_received,
         "initial_stock": row.initial_stock,
         "final_stock": row.final_stock,
+        "prosermin_stock": row.prosermin_stock,
         "supplier": row.supplier,
         "notes": row.notes,
         "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
@@ -736,6 +758,7 @@ def clean_diesel_day_dict(row: dict[str, Any], source: str = "desktop") -> dict[
         "diesel_received": max(parse_float(row.get("diesel_received"), 0), 0),
         "initial_stock": max(parse_float(row.get("initial_stock"), 0), 0),
         "final_stock": max(parse_float(row.get("final_stock"), 0), 0),
+        "prosermin_stock": max(parse_float(row.get("prosermin_stock"), 0), 0),
         "supplier": normalize_text(row.get("supplier")),
         "notes": str(row.get("notes") or "").strip(),
         "updated_at": str(row.get("updated_at") or ""),
@@ -877,6 +900,7 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
                 "diesel_received": parse_float(day.get("diesel_received"), 0),
                 "initial_stock": parse_float(day.get("initial_stock"), 0),
                 "final_stock": parse_float(day.get("final_stock"), 0),
+                "prosermin_stock": parse_float(day.get("prosermin_stock"), 0),
                 "supplier": supplier,
                 "supplier_owner": owner,
                 "notes": day.get("notes") or "",
@@ -890,6 +914,20 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
     prosermin_liters = sum(parse_float(row.get("diesel_liters"), 0) for row in daily_rows if row.get("supplier_owner") == "PROSERMIN")
     mga_received = sum(parse_float(row.get("diesel_received"), 0) for row in daily_rows if row.get("supplier_owner") == "MGA")
     prosermin_received = sum(parse_float(row.get("diesel_received"), 0) for row in daily_rows if row.get("supplier_owner") == "PROSERMIN")
+    stock_candidates = [
+        row for row in daily_rows
+        if parse_float(row.get("final_stock"), 0) > 0
+        or parse_float(row.get("initial_stock"), 0) > 0
+        or parse_float(row.get("diesel_received"), 0) > 0
+        or parse_float(row.get("diesel_liters"), 0) > 0
+    ]
+    latest_stock_row = stock_candidates[-1] if stock_candidates else {}
+    total_stock = parse_float(latest_stock_row.get("final_stock"), 0)
+    prosermin_stock = parse_float(latest_stock_row.get("prosermin_stock"), 0)
+    if prosermin_stock <= 0 and isinstance(diesel_portal, dict):
+        prosermin_stock = parse_float((diesel_portal.get("totals") or {}).get("prosermin_stock"), 0)
+    prosermin_stock = max(min(prosermin_stock, total_stock), 0)
+    mga_stock = max(total_stock - prosermin_stock, 0)
     equipment_codes = sorted(
         {
             normalize_text(item.get("code") or item.get("equipment_code") or "")
@@ -916,6 +954,9 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
             "prosermin_liters": prosermin_liters,
             "mga_received": mga_received,
             "prosermin_received": prosermin_received,
+            "total_stock": total_stock,
+            "mga_stock": mga_stock,
+            "prosermin_stock": prosermin_stock,
             "critical": sum(1 for row in rows if row["status"] in {"ALTO", "SIN HORAS"}),
         },
         "updated_at": portal.get("updated_at") or portal.get("generated_at") or utc_now().isoformat(timespec="seconds"),
@@ -1141,6 +1182,11 @@ def populate_diesel_workbook(wb, payload: dict[str, Any]) -> None:
             except ValueError:
                 continue
             ws.cell(row_idx, 6).value = (days_by_date.get(work_date, {}).get("supplier") or None)
+        totals = payload.get("totals") or {}
+        ws["F23"] = "MGA"
+        ws["G23"] = parse_float(totals.get("mga_stock"), 0) or 0
+        ws["F36"] = "PROSERMIN"
+        ws["G36"] = parse_float(totals.get("prosermin_stock"), 0) or 0
 
     if "RENDIMIENTO" in wb.sheetnames:
         ws = wb["RENDIMIENTO"]
@@ -2092,6 +2138,7 @@ async def save_diesel_day_cloud(request: Request, _auth: str | None = Header(def
         row.diesel_received = max(parse_float(payload.get("diesel_received"), 0), 0)
         row.initial_stock = max(parse_float(payload.get("initial_stock"), 0), 0)
         row.final_stock = max(parse_float(payload.get("final_stock"), 0), 0)
+        row.prosermin_stock = max(parse_float(payload.get("prosermin_stock"), 0), 0)
         row.supplier = normalize_text(payload.get("supplier"))
         row.notes = str(payload.get("notes") or "").strip()
         row.source = "web"
@@ -2524,6 +2571,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Llegada diesel L<input id="dieselReceived" type="number" step="0.1" value="0"></label>
             <label>Existencia inicial L<input id="dieselInitial" type="number" step="0.1" value="0"></label>
             <label>Existencia final L<input id="dieselFinal" type="number" step="0.1" value="0"></label>
+            <label>Exist. PROSERMIN<input id="dieselProserminStock" type="number" step="0.1" value="0"></label>
             <label class="wide">Proveedor / zona<input id="dieselSupplier"></label>
             <label class="wide">Notas<textarea id="dieselDayNotes" rows="2"></textarea></label>
             <button class="btn wide" id="dieselDaySaveBtn">Guardar dia</button>
@@ -3610,6 +3658,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }, {diesel_liters:0, worked_hours:0, critical:0});
       totals.rendimiento_lh = totals.worked_hours > 0 ? totals.diesel_liters / totals.worked_hours : null;
       Object.assign(totals, dieselSupplierTotals(periodRecords));
+      Object.assign(totals, dieselInventoryTotals(start, end));
       return {start, end, meta, rows, totals};
     }
     function dieselPctValue(value){ return Math.max(Math.min(Number(value || 0), 100), 0); }
@@ -3625,15 +3674,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const totals = report.totals || {};
       const avg = totals.rendimiento_lh;
       const liters = Number(totals.diesel_liters || 0);
-      const mga = Number(totals.mga_liters || 0);
-      const prosermin = Number(totals.prosermin_liters || 0);
-      const supplierTotal = Math.max(mga + prosermin, 1);
+      const totalStock = Number(totals.total_stock || 0);
+      const mga = Number(totals.mga_stock || 0);
+      const prosermin = Number(totals.prosermin_stock || 0);
+      const supplierTotal = Math.max(totalStock || (mga + prosermin), 1);
       const days = dieselPeriodDays(report);
       return [
         dieselKpiCardHtml("Equipos", `${report.rows.length}`, "con captura diesel", Math.min((report.rows.length / 18) * 100, 100)),
         dieselKpiCardHtml("Consumo total", `${one(liters)} L`, `${days} dias analizados`, liters > 0 ? 100 : 0),
-        dieselKpiCardHtml("Diesel MGA", `${one(mga)} L`, `${one((mga / supplierTotal) * 100)}% del origen`, (mga / supplierTotal) * 100),
-        dieselKpiCardHtml("Diesel PROSERMIN", `${one(prosermin)} L`, `${one((prosermin / supplierTotal) * 100)}% del origen`, (prosermin / supplierTotal) * 100),
+        dieselKpiCardHtml("Diesel MGA", `${one(mga)} L`, "disponible MGA", (mga / supplierTotal) * 100),
+        dieselKpiCardHtml("Diesel PROSERMIN", `${one(prosermin)} L`, "disponible PROSERMIN", (prosermin / supplierTotal) * 100),
         dieselKpiCardHtml("Horas trabajadas", `${one(totals.worked_hours)} h`, "horas del periodo", Math.min(Number(totals.worked_hours || 0) / Math.max(report.rows.length * 10, 1) * 100, 100)),
         dieselKpiCardHtml("Rendimiento", avg == null ? "S/H" : `${one(avg)} L/H`, `Meta ${one(report.meta)} L/H`, avg == null ? 0 : Math.min((avg / Math.max(report.meta, 1)) * 100, 100), avg != null && avg > report.meta),
       ].join("");
@@ -3656,9 +3706,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const maxScale = Math.max(report.meta * 1.6, 1);
       const avgPct = avg == null ? 0 : dieselPctValue((avg / maxScale) * 100);
       const targetPct = dieselPctValue((report.meta / maxScale) * 100);
-      const mga = Number(totals.mga_liters || 0);
-      const prosermin = Number(totals.prosermin_liters || 0);
-      const supplierTotal = Math.max(mga + prosermin, 1);
+      const totalStock = Number(totals.total_stock || 0);
+      const mga = Number(totals.mga_stock || 0);
+      const prosermin = Number(totals.prosermin_stock || 0);
+      const supplierTotal = Math.max(totalStock || (mga + prosermin), 1);
       const mgaPct = (mga / supplierTotal) * 100;
       const proPct = (prosermin / supplierTotal) * 100;
       const watch = report.rows.filter(row => ["ALTO","SIN HORAS"].includes(String(row.status || "").toUpperCase())).slice(0, 4);
@@ -3671,7 +3722,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="diesel-target-meter"><i style="width:${avgPct}%"></i><span class="diesel-target-marker" style="--target:${targetPct}%"></span></div>
         </div>
         <div class="diesel-split">
-          <h4>Origen del diesel</h4>
+          <h4>Existencia disponible</h4>
           <div class="diesel-split-track"><i class="mga" style="width:${dieselPctValue(mgaPct)}%"></i><i class="pro" style="width:${dieselPctValue(proPct)}%"></i></div>
           <div class="diesel-split-legend"><span><em><i class="mga"></i>MGA</em><b>${one(mga)} L</b></span><span><em><i class="pro"></i>PROSERMIN</em><b>${one(prosermin)} L</b></span></div>
         </div>
@@ -4098,10 +4149,25 @@ WAREHOUSE_HTML = r"""<!doctype html>
         return acc;
       }, {mga_liters:0, prosermin_liters:0});
     }
+    function dieselInventoryTotals(start, end){
+      const rows = [...(diesel.days || [])].filter(row => !start || inRange(row.work_date, start, end)).sort((a,b) => String(a.work_date || "").localeCompare(String(b.work_date || "")));
+      const candidates = rows.filter(row => Number(row.final_stock || 0) > 0 || Number(row.initial_stock || 0) > 0 || Number(row.diesel_received || 0) > 0 || Number(row.diesel_liters || 0) > 0);
+      const last = candidates[candidates.length - 1] || {};
+      const totalStock = Number(last.final_stock || 0);
+      let proserminStock = Number(last.prosermin_stock || 0);
+      if(!proserminStock && diesel.totals) proserminStock = Number(diesel.totals.prosermin_stock || 0);
+      proserminStock = Math.max(Math.min(proserminStock, totalStock), 0);
+      return {
+        total_stock: totalStock,
+        mga_stock: Math.max(totalStock - proserminStock, 0),
+        prosermin_stock: proserminStock,
+      };
+    }
     function dieselTotalsForRows(rows, records){
       const liters = rows.reduce((sum,row) => sum + Number(row.diesel_liters || 0), 0);
       const hours = rows.reduce((sum,row) => sum + Number(row.worked_hours || 0), 0);
       const split = dieselSupplierTotals(records || []);
+      const stock = dieselInventoryTotals(diesel.start || $("dieselStart").value, diesel.end || $("dieselEnd").value);
       return {
         diesel_liters: liters,
         worked_hours: hours,
@@ -4109,6 +4175,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
         critical: rows.filter(row => ["ALTO","SIN HORAS"].includes(String(row.status || "").toUpperCase())).length,
         mga_liters: split.mga_liters,
         prosermin_liters: split.prosermin_liters,
+        total_stock: stock.total_stock,
+        mga_stock: stock.mga_stock,
+        prosermin_stock: stock.prosermin_stock,
       };
     }
     function dieselDayConsumption(date){
@@ -4151,8 +4220,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("dieselUpdated").textContent = diesel.updated_at ? `Actualizado ${diesel.updated_at}` : "";
       $("dieselStats").innerHTML = [
         ["Consumo diesel", `${one(totals.diesel_liters)} L`],
-        ["Diesel MGA", `${one(totals.mga_liters)} L`],
-        ["Diesel PROSERMIN", `${one(totals.prosermin_liters)} L`],
+        ["Remanente total", `${one(totals.total_stock)} L`],
+        ["Diesel MGA", `${one(totals.mga_stock)} L`],
+        ["Diesel PROSERMIN", `${one(totals.prosermin_stock)} L`],
         ["Horas trabajadas", `${one(totals.worked_hours)} h`],
         ["Rendimiento prom.", dieselRendText(totals.rendimiento_lh) + (totals.rendimiento_lh == null ? "" : " L/H")],
         ["Equipos revision", totals.critical],
@@ -4161,8 +4231,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("dieselReportTable").innerHTML = `<thead><tr><th>Equipo</th><th>Condicion actual</th><th>Horometro inicial</th><th>Horometro final</th><th>Horas trabajadas</th><th>Consumo diesel</th><th>Rendimiento L/H</th><th>KPI</th></tr></thead><tbody>` +
         rows.map(row => `<tr><td>${esc(row.equipment)}</td><td>${esc(row.condition)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${dieselRendText(row.rendimiento_lh)}</td><td><span class="pill ${dieselStatusClass(row.status)}">${esc(row.status)}</span></td></tr>`).join("") +
         `</tbody>`;
-      $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Origen</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>Proveedor</th><th>Accion</th></tr></thead><tbody>` +
-        (diesel.days || []).map((row, idx) => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.supplier_owner || dieselDayOwner(row))}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${esc(row.supplier)}</td><td><button type="button" class="btn danger small" data-diesel-day-delete="${idx}">Eliminar</button></td></tr>`).join("") +
+      $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Origen</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>PROSERMIN disp.</th><th>Proveedor</th><th>Accion</th></tr></thead><tbody>` +
+        (diesel.days || []).map((row, idx) => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.supplier_owner || dieselDayOwner(row))}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${one(row.prosermin_stock)}</td><td>${esc(row.supplier)}</td><td><button type="button" class="btn danger small" data-diesel-day-delete="${idx}">Eliminar</button></td></tr>`).join("") +
         `</tbody>`;
       const recordAliasMap = dieselBaseEquipmentAliasMap();
       $("dieselRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Turno</th><th>HI</th><th>HF</th><th>Hrs</th><th>Diesel L</th><th>Origen</th><th>Accion</th></tr></thead><tbody>` +
@@ -4281,6 +4351,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         diesel_received:$("dieselReceived").value,
         initial_stock:$("dieselInitial").value,
         final_stock:$("dieselFinal").value,
+        prosermin_stock:$("dieselProserminStock").value,
         supplier:$("dieselSupplier").value,
         notes:$("dieselDayNotes").value,
       };
@@ -4299,6 +4370,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         $("dieselReceived").value = "0";
         $("dieselInitial").value = "0";
         $("dieselFinal").value = "0";
+        $("dieselProserminStock").value = "0";
         $("dieselSupplier").value = "";
         $("dieselDayNotes").value = "";
       }
