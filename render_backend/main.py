@@ -1364,7 +1364,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Folio<input id="reqFolio"></label>
             <label>Fecha solicitada<input id="reqDate" type="date"></label>
             <label>Fecha autorizacion<input id="reqAuthDate" type="date"></label>
-            <label>Equipo<input id="reqEquipment" value="PARA STOCK"></label>
+            <label>Equipo<select id="reqEquipment"><option>PARA STOCK</option></select></label>
             <label>Centro costos<input id="reqCostCenter"></label>
             <label>Area solicita<input id="reqArea" value="MTTO"></label>
             <label>Ubicacion<input id="reqLocation" value="PROVIDENCIA"></label>
@@ -1648,6 +1648,28 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const rows = Array.isArray(portal.equipment) ? portal.equipment : [];
       return rows.filter(e => e && (e.code || e.equipment_code));
     }
+    function renderReqEquipmentOptions(){
+      const select = $("reqEquipment");
+      const current = select.value || "PARA STOCK";
+      const seen = new Set();
+      const options = [];
+      function addOption(value, label){
+        const cleanValue = String(value || "").trim();
+        if(!cleanValue || seen.has(cleanValue)) return;
+        seen.add(cleanValue);
+        options.push({value: cleanValue, label: label || cleanValue});
+      }
+      addOption("PARA STOCK", "PARA STOCK");
+      addOption("TALLER", "TALLER");
+      [...portalEquipment(), ...(Array.isArray(data.equipment) ? data.equipment : [])].forEach(e => {
+        const code = e.code || e.equipment_code || "";
+        const description = e.description || e.family || "";
+        addOption(code, description ? `${code} - ${description}` : code);
+      });
+      if(current && !seen.has(current)) addOption(current, current);
+      select.innerHTML = options.map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join("");
+      select.value = seen.has(current) ? current : "PARA STOCK";
+    }
     function renderPortalSelectors(){
       const period = portal.period || {};
       const today = toIsoDate(new Date());
@@ -1665,6 +1687,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
+      renderReqEquipmentOptions();
     }
     function calculateKpiRows(){
       const group = $("kpiGroup").value || "Todos los equipos";
