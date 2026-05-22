@@ -222,6 +222,24 @@ class DieselDay(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class DieselDeletedRecord(Base):
+    __tablename__ = "mga_diesel_deleted_record"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    equipment: Mapped[str] = mapped_column(String(120), default="", index=True)
+    shift: Mapped[str] = mapped_column(String(40), default="1")
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DieselDeletedDay(Base):
+    __tablename__ = "mga_diesel_deleted_day"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
@@ -588,6 +606,69 @@ def diesel_record_key(row: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def diesel_deleted_record_keys(session: Session) -> set[tuple[str, str, str]]:
+    rows = session.scalars(select(DieselDeletedRecord)).all()
+    return {
+        (
+            row.work_date or "",
+            normalize_text(row.equipment),
+            normalize_text(row.shift or "1"),
+        )
+        for row in rows
+    }
+
+
+def diesel_deleted_day_dates(session: Session) -> set[str]:
+    return {row.work_date for row in session.scalars(select(DieselDeletedDay)).all() if row.work_date}
+
+
+def mark_diesel_record_deleted(session: Session, row: dict[str, Any]) -> tuple[str, str, str]:
+    key = diesel_record_key(row)
+    if not key[0] or not key[1]:
+        raise HTTPException(status_code=400, detail="Captura diesel invalida.")
+    existing = session.scalar(
+        select(DieselDeletedRecord).where(
+            DieselDeletedRecord.work_date == key[0],
+            DieselDeletedRecord.equipment == key[1],
+            DieselDeletedRecord.shift == key[2],
+        )
+    )
+    if existing is None:
+        session.add(DieselDeletedRecord(work_date=key[0], equipment=key[1], shift=key[2], deleted_at=utc_now()))
+    else:
+        existing.deleted_at = utc_now()
+    return key
+
+
+def unmark_diesel_record_deleted(session: Session, row: dict[str, Any]) -> None:
+    key = diesel_record_key(row)
+    for deleted in session.scalars(
+        select(DieselDeletedRecord).where(
+            DieselDeletedRecord.work_date == key[0],
+            DieselDeletedRecord.equipment == key[1],
+            DieselDeletedRecord.shift == key[2],
+        )
+    ).all():
+        session.delete(deleted)
+
+
+def mark_diesel_day_deleted(session: Session, work_date: str) -> None:
+    if not work_date:
+        raise HTTPException(status_code=400, detail="Fecha requerida.")
+    existing = session.scalar(select(DieselDeletedDay).where(DieselDeletedDay.work_date == work_date))
+    if existing is None:
+        session.add(DieselDeletedDay(work_date=work_date, deleted_at=utc_now()))
+    else:
+        existing.deleted_at = utc_now()
+
+
+def unmark_diesel_day_deleted(session: Session, work_date: str) -> None:
+    if not work_date:
+        return
+    for deleted in session.scalars(select(DieselDeletedDay).where(DieselDeletedDay.work_date == work_date)).all():
+        session.delete(deleted)
+
+
 def diesel_record_payload(row: DieselRecord) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -671,13 +752,15 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
     settings = portal.get("settings") if isinstance(portal, dict) else {}
     diesel_portal = portal.get("diesel") if isinstance(portal, dict) else {}
     meta = parse_float(meta_lh, 0) or parse_float((settings or {}).get("meta_diesel_lh"), 25) or 25
+    deleted_record_keys = diesel_deleted_record_keys(session)
+    deleted_day_dates = diesel_deleted_day_dates(session)
     records_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
     if isinstance(diesel_portal, dict):
         for raw in diesel_portal.get("records") or []:
             if not isinstance(raw, dict):
                 continue
             record = clean_diesel_record_dict(raw, "desktop")
-            if record["work_date"] and start_iso <= record["work_date"] <= end_iso:
+            if record["work_date"] and start_iso <= record["work_date"] <= end_iso and diesel_record_key(record) not in deleted_record_keys:
                 records_by_key[diesel_record_key(record)] = record
     db_records = session.scalars(
         select(DieselRecord)
@@ -686,7 +769,8 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
     ).all()
     for row in db_records:
         record = diesel_record_payload(row)
-        records_by_key[diesel_record_key(record)] = record
+        if diesel_record_key(record) not in deleted_record_keys:
+            records_by_key[diesel_record_key(record)] = record
     equipment_aliases = diesel_equipment_alias_map(portal, list(records_by_key.values()))
     records = []
     for record in records_by_key.values():
@@ -696,6 +780,8 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
         if canonical_equipment and raw_equipment and canonical_equipment != raw_equipment:
             normalized_record["raw_equipment"] = raw_equipment
         normalized_record["equipment"] = canonical_equipment or raw_equipment
+        if diesel_record_key(normalized_record) in deleted_record_keys:
+            continue
         records.append(normalized_record)
     records = sorted(records, key=lambda row: (row["work_date"], row["equipment"], row["shift"]), reverse=True)
 
@@ -705,14 +791,15 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
             if not isinstance(raw, dict):
                 continue
             day = clean_diesel_day_dict(raw, "desktop")
-            if day["work_date"] and start_iso <= day["work_date"] <= end_iso:
+            if day["work_date"] and start_iso <= day["work_date"] <= end_iso and day["work_date"] not in deleted_day_dates:
                 days_by_date[day["work_date"]] = day
     db_days = session.scalars(
         select(DieselDay).where(DieselDay.work_date >= start_iso, DieselDay.work_date <= end_iso)
     ).all()
     for row in db_days:
         day = diesel_day_payload(row)
-        days_by_date[day["work_date"]] = day
+        if day["work_date"] not in deleted_day_dates:
+            days_by_date[day["work_date"]] = day
 
     buckets: dict[str, dict[str, Any]] = {}
     consumption_by_date: dict[str, float] = {}
@@ -775,11 +862,16 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
     finish = datetime.strptime(end_iso, "%Y-%m-%d").date()
     while cursor <= finish:
         key = cursor.isoformat()
+        if key in deleted_day_dates:
+            cursor += timedelta(days=1)
+            continue
         day = days_by_date.get(key, {})
         supplier = day.get("supplier") or ""
         owner = diesel_supplier_owner(supplier)
         daily_rows.append(
             {
+                "id": day.get("id") or "",
+                "source": day.get("source") or ("desktop" if day else ""),
                 "work_date": key,
                 "diesel_liters": consumption_by_date.get(key, 0),
                 "diesel_received": parse_float(day.get("diesel_received"), 0),
@@ -1927,6 +2019,10 @@ async def save_diesel_record_cloud(request: Request, _auth: str | None = Header(
         row.notes = str(payload.get("notes") or "").strip()
         row.source = "web"
         row.updated_at = utc_now()
+        unmark_diesel_record_deleted(
+            session,
+            {"work_date": row.work_date, "equipment": row.equipment, "shift": row.shift},
+        )
         session.commit()
         session.refresh(row)
         return {"ok": True, "record": diesel_record_payload(row), "diesel": diesel_payload(session, work_date, work_date)}
@@ -1939,7 +2035,43 @@ def delete_diesel_record_cloud(record_id: int, _auth: str | None = Header(defaul
         row = session.get(DieselRecord, record_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Captura diesel no encontrada.")
+        mark_diesel_record_deleted(
+            session,
+            {"work_date": row.work_date, "equipment": row.equipment, "shift": row.shift},
+        )
         session.delete(row)
+        session.commit()
+        return {"ok": True}
+
+
+@app.post("/api/diesel/records/delete")
+async def delete_diesel_record_by_key_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Captura diesel invalida.")
+    work_date = iso_date(payload.get("work_date"))
+    equipment = normalize_text(payload.get("equipment"))
+    shift = normalize_text(payload.get("shift") or "1")
+    if not equipment:
+        raise HTTPException(status_code=400, detail="Equipo requerido.")
+    with SessionLocal() as session:
+        equipment = diesel_canonical_equipment(equipment, diesel_equipment_alias_map(latest_portal_payload(session))) or equipment
+        row = None
+        record_id = int(parse_float(payload.get("id"), 0) or 0)
+        if record_id:
+            row = session.get(DieselRecord, record_id)
+        if row is None:
+            row = session.scalar(
+                select(DieselRecord).where(
+                    DieselRecord.work_date == work_date,
+                    DieselRecord.equipment == equipment,
+                    DieselRecord.shift == shift,
+                )
+            )
+        mark_diesel_record_deleted(session, {"work_date": work_date, "equipment": equipment, "shift": shift})
+        if row is not None:
+            session.delete(row)
         session.commit()
         return {"ok": True}
 
@@ -1964,9 +2096,26 @@ async def save_diesel_day_cloud(request: Request, _auth: str | None = Header(def
         row.notes = str(payload.get("notes") or "").strip()
         row.source = "web"
         row.updated_at = utc_now()
+        unmark_diesel_day_deleted(session, work_date)
         session.commit()
         session.refresh(row)
         return {"ok": True, "day": diesel_day_payload(row), "diesel": diesel_payload(session, work_date, work_date)}
+
+
+@app.post("/api/diesel/days/delete")
+async def delete_diesel_day_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Control diario invalido.")
+    work_date = iso_date(payload.get("work_date"))
+    with SessionLocal() as session:
+        row = session.scalar(select(DieselDay).where(DieselDay.work_date == work_date))
+        mark_diesel_day_deleted(session, work_date)
+        if row is not None:
+            session.delete(row)
+        session.commit()
+        return {"ok": True}
 
 
 WAREHOUSE_HTML = r"""<!doctype html>
@@ -1996,6 +2145,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .tabs button.active { background:linear-gradient(135deg,var(--teal),#0b7877); }
     .btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
     .btn.danger { background:linear-gradient(135deg,#b31212,var(--red)); }
+    .btn.small { padding:5px 8px; border-radius:5px; font-size:11px; white-space:nowrap; }
     .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.92); border:1px solid rgba(216,222,232,.9); border-radius:8px; padding:16px; box-shadow:var(--shadow); }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
@@ -2042,6 +2192,66 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .kpi-special-mode .kpi-side { border:0; background:transparent; }
     .kpi-special-mode #kpiCards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
     .kpi-special-mode #kpiSideCards { display:none; }
+    .kpi-oil-mode { background:#eeeeee; box-shadow:none; border-color:#d8d8d8; color:#333; }
+    .kpi-oil-mode > .subtle-title { display:block; height:34px; margin:-2px -2px 12px; background:white; }
+    .kpi-oil-mode #kpiTitle { display:grid; grid-template-columns:1fr 2fr 1fr; align-items:center; margin:0; height:34px; color:#333; text-align:center; font-size:20px; }
+    .kpi-oil-mode #portalUpdated { display:none; }
+    .kpi-oil-mode .kpi-format-board { grid-template-columns:minmax(260px,.7fr) minmax(430px,1.2fr) minmax(260px,.7fr); gap:22px; align-items:start; }
+    .kpi-oil-mode .kpi-side { display:grid; grid-template-columns:1fr; gap:40px; border:0; background:transparent; align-self:start; }
+    .oil-head { display:grid; grid-template-columns:1fr 2fr 1fr; align-items:center; height:34px; margin:-2px -2px 12px; background:white; color:#111; font-weight:800; text-align:center; }
+    .oil-head h2 { margin:0; font-size:20px; color:#333; }
+    .oil-month { font-size:14px; }
+    .oil-metric-section { background:white; border:1px solid #e5e7eb; }
+    .oil-metric-title { height:34px; display:flex; align-items:center; justify-content:center; color:#707780; font-weight:800; font-size:18px; }
+    .oil-metric-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; background:#eeeeee; }
+    .oil-metric-cell { min-height:92px; background:white; display:grid; align-content:center; justify-items:center; gap:8px; padding:8px 6px; }
+    .oil-metric-cell strong { color:#777d86; font-size:31px; line-height:1; }
+    .oil-metric-line { height:10px; width:100%; background:#eef1f4; }
+    .oil-metric-line i { display:block; height:100%; width:100%; background:var(--teal); }
+    .oil-metric-line.oil-red i { background:#d76f75; }
+    .oil-metric-line.oil-darkred i { background:#a40000; }
+    .oil-metric-cell span { color:#4b5563; font-size:12px; }
+    .kpi-oil-mode .chart { min-height:330px; padding:14px 18px 10px; border-radius:0; background:white; display:block; overflow:hidden; }
+    .oil-chart-grid { display:grid; grid-template-columns:42px 1fr; grid-template-rows:250px 38px; column-gap:8px; }
+    .oil-axis { grid-row:1; display:flex; flex-direction:column; justify-content:space-between; align-items:end; padding:0 2px 0 0; color:#111; font-size:12px; }
+    .oil-plot { position:relative; grid-column:2; grid-row:1; display:flex; align-items:stretch; gap:14px; padding:0 8px; border-bottom:1px solid #d9d9d9; background:repeating-linear-gradient(to top, transparent 0, transparent 49px, #d9d9d9 50px); }
+    .oil-cluster { flex:1 1 62px; min-width:54px; display:grid; grid-template-rows:1fr auto; justify-items:center; gap:8px; }
+    .oil-bars-stack { height:100%; display:flex; align-items:flex-end; gap:2px; }
+    .oil-series-bar { width:9px; min-height:1px; position:relative; }
+    .oil-series-bar b { position:absolute; left:50%; transform:translateX(-50%); top:-15px; color:#111; font-size:10px; font-weight:500; white-space:nowrap; }
+    .oil-cluster-label { color:#111; font-size:12px; text-align:center; white-space:nowrap; }
+    .oil-legend { grid-column:2; grid-row:2; display:flex; align-items:end; justify-content:center; gap:18px; color:#333; font-size:12px; }
+    .oil-legend span { display:flex; align-items:center; gap:5px; white-space:nowrap; }
+    .oil-legend i { display:block; width:10px; height:10px; }
+    .oil-bottom-wrap { margin-top:28px; max-height:none; overflow:visible; border:0; background:transparent; }
+    #kpiTable.oil-bottom-grid { border-collapse:separate; border-spacing:0; background:transparent; }
+    #kpiTable.oil-bottom-grid > tbody > tr:hover { background:transparent; }
+    #kpiTable.oil-bottom-grid > tbody > tr > td { border:0; padding:0 8px; vertical-align:top; }
+    .oil-report-cell { width:72%; }
+    .oil-order-cell { width:28%; }
+    .oil-report-header { background:#f3f3f3; text-align:center; padding:10px 8px 8px; }
+    .oil-report-header h3 { margin:0 0 8px; color:#111; font-size:17px; }
+    .oil-days { display:flex; justify-content:center; gap:72px; color:#707780; font-size:12px; font-weight:800; }
+    .oil-days b { display:inline-block; min-width:58px; margin-left:8px; padding:5px 16px; background:white; color:#111; }
+    .oil-report-table { width:100%; border-collapse:collapse; background:white; color:#555; }
+    .oil-report-table th, .oil-report-table td { border:1px solid #111; padding:4px 5px; font-size:10px; text-align:center; vertical-align:middle; }
+    .oil-report-table th { position:static; background:white; color:#555; font-weight:800; text-transform:none; line-height:1.05; }
+    .oil-report-table td { background:#efefef; }
+    .oil-report-table .oil-subtotal td { background:#ffd966; }
+    .oil-report-table .oil-total td { background:#fff200; }
+    .oil-report-table .oil-zero { color:#f05b5b; font-weight:800; }
+    .oil-order-panel { background:white; border:1px solid #cbd5e1; min-height:330px; }
+    .oil-order-title { background:var(--blue2); color:white; text-align:center; font-weight:800; padding:13px 8px; }
+    .oil-order-kpis { display:grid; grid-template-columns:repeat(3,1fr); border-bottom:1px solid #dbe3ef; }
+    .oil-order-kpi { background:#f8fafc; border-right:1px solid #e2e8f0; text-align:center; padding:12px 4px 9px; }
+    .oil-order-kpi:last-child { border-right:0; }
+    .oil-order-kpi strong { display:block; color:#d6335c; font-size:12px; }
+    .oil-order-kpi span { color:#475569; font-size:12px; }
+    .oil-order-table { width:100%; border-collapse:collapse; }
+    .oil-order-table th, .oil-order-table td { border-bottom:1px solid #e2e8f0; padding:7px 6px; font-size:11px; text-align:center; }
+    .oil-order-table th { position:static; background:#e2e8f0; color:#0f172a; text-transform:none; }
+    .oil-order-table td:first-child { text-align:left; font-weight:700; color:#334155; }
+    .oil-order-table .oil-order-hot { color:#d6335c; font-weight:800; }
     .kpi-report-table { margin-top:14px; max-height:420px; }
     .chart { display:flex; align-items:end; gap:12px; min-height:270px; padding:20px 16px 28px; border:1px solid var(--line); border-radius:8px; background:linear-gradient(180deg,#fff,#f8fbff); overflow:auto; }
     .kpi-format-mode .chart { display:block; min-height:330px; padding:12px 14px 18px; }
@@ -2238,7 +2448,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="req-actions">
             <button class="btn secondary" id="dieselNewBtn">Nueva captura</button>
             <button class="btn" id="dieselSaveBtn">Guardar captura</button>
-            <button class="btn danger" id="dieselDeleteBtn">Eliminar captura web</button>
+            <button class="btn danger" id="dieselDeleteBtn">Eliminar captura</button>
           </div>
         </div>
         <div class="panel">
@@ -2329,6 +2539,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentReqItemIndex = null;
     let currentReqItems = [];
     let currentDieselId = null;
+    let currentDieselRecord = null;
     let selectedKpiMetric = "availability";
     const AUTO_REFRESH_MS = 15000;
     const $ = (id) => document.getElementById(id);
@@ -2370,8 +2581,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function setDashboardMode(mode){
       const area = $("kpiPrintArea");
       area.classList.toggle("kpi-format-mode", mode === "format");
-      area.classList.toggle("kpi-special-mode", mode !== "format");
+      area.classList.toggle("kpi-special-mode", mode === "special");
+      area.classList.toggle("kpi-oil-mode", mode === "oil");
       $("kpiSideCards").innerHTML = "";
+      $("kpiTable").className = "";
+      const tableWrap = $("kpiTable").closest(".table-wrap");
+      if(tableWrap) tableWrap.classList.remove("oil-bottom-wrap");
     }
     function metricCardHtml(label, value, note, width, bad=false){
       return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
@@ -2880,20 +3095,75 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(code.startsWith("ST") || text.includes("SCOOP") || text.includes("CATERPILLAR") || text.includes("EPROC") || text.includes("R1300") || text.includes("R1600")) return "REZAGADO";
       return "UTILITARIO";
     }
-    function oilRowsForPeriod(){
-      const start = $("kpiStart").value;
-      const end = $("kpiEnd").value;
-      const cols = oilColumns();
+    function oilMainColumns(){
+      const available = oilColumns();
+      return [
+        {label:"Motor 15W40", key:"oil_motor_15w40"},
+        {label:"ISO 68", key:"oil_hco_iso68"},
+        {label:"SAE 30", key:"oil_trans_sae30"},
+        {label:"SAE 50", key:"oil_sae50"},
+        {label:"85W140", key:"oil_85w140"},
+      ].map(item => available.find(col => col.key === item.key) || item);
+    }
+    function oilOrderColumns(){
+      return [
+        {label:"ALMO", key:"almo_liters"},
+        {label:"85W140", key:"oil_85w140"},
+        {label:"Compresor ISO 32", key:"oil_compressor_iso32"},
+        {label:"HCO ISO 68", key:"oil_hco_iso68"},
+        {label:"Motor 15W40", key:"oil_motor_15w40"},
+        {label:"Trans. SAE 30", key:"oil_trans_sae30"},
+        {label:"sin clasificar", key:"oil_liters"},
+        {label:"Refrigerante", key:"coolant_liters"},
+      ];
+    }
+    function oilDays(start, end){
+      const a = parseIsoDate(start);
+      const b = parseIsoDate(end);
+      return Math.max(Math.round((b - a) / 86400000) + 1, 1);
+    }
+    function two(v){ return `${Number(v || 0).toFixed(2)}`; }
+    function oilRowsForRange(start, end, cols=oilMainColumns()){
+      const source = portal.oil_kpi || {};
+      if(source.start === start && source.end === end && Array.isArray(source.rows) && source.rows.length){
+        const rows = source.rows.map(row => {
+          const out = {
+            code: row.code || "",
+            description: row.description || "",
+            group: row.group || "UTILITARIO",
+            period_hours: Number(row.period_hours || row.period || 0),
+            worked_hours: Number(row.worked_hours || row.worked || 0),
+            total_liters: 0,
+          };
+          cols.forEach(col => {
+            out[col.key] = Number(row[col.key] || 0);
+            out.total_liters += out[col.key];
+          });
+          return out;
+        });
+        const totals = rows.reduce((acc, row) => {
+          acc.period += Number(row.period_hours || 0);
+          acc.worked += Number(row.worked_hours || 0);
+          acc.worked_hours += Number(row.worked_hours || 0);
+          acc.total_liters += Number(row.total_liters || 0);
+          cols.forEach(col => acc[col.key] = (acc[col.key] || 0) + Number(row[col.key] || 0));
+          return acc;
+        }, {period:0, worked:0, worked_hours:0, total_liters:0});
+        return {start, end, cols, rows, totals, days:oilDays(start, end)};
+      }
+      const days = oilDays(start, end);
+      const settings = portal.settings || {};
+      const dailyHours = (Number(settings.shift_hours || 9) || 9) * (Number(settings.turns_per_day || 2) || 2);
       const grouped = {};
       portalEquipment().forEach(eq => {
         const code = eq.code || eq.equipment_code || "";
-        grouped[code] = {code, description:eq.description || "", group:oilGroupFor(eq), worked_hours:0, total_liters:0};
+        grouped[code] = {code, description:eq.description || "", group:oilGroupFor(eq), period_hours:days * dailyHours, worked_hours:0, total_liters:0};
         cols.forEach(col => grouped[code][col.key] = 0);
       });
       (portal.captures || []).filter(row => inRange(row.work_date, start, end)).forEach(row => {
         const code = row.equipment_code || row.code || "";
         if(!grouped[code]) {
-          grouped[code] = {code, description:"", group:"UTILITARIO", worked_hours:0, total_liters:0};
+          grouped[code] = {code, description:"", group:"UTILITARIO", period_hours:days * dailyHours, worked_hours:0, total_liters:0};
           cols.forEach(col => grouped[code][col.key] = 0);
         }
         grouped[code].worked_hours += Number(row.worked_hours || 0);
@@ -2903,38 +3173,165 @@ WAREHOUSE_HTML = r"""<!doctype html>
           grouped[code].total_liters += value;
         });
       });
-      const rows = Object.values(grouped).sort((a,b) => `${a.group} ${a.code}`.localeCompare(`${b.group} ${b.code}`));
+      const groupRank = {BARRENACION:1, REZAGADO:2, UTILITARIO:3};
+      const rows = Object.values(grouped).sort((a,b) => (groupRank[a.group] || 9) - (groupRank[b.group] || 9) || a.code.localeCompare(b.code));
       const totals = rows.reduce((acc, row) => {
+        acc.period += Number(row.period_hours || 0);
+        acc.worked += row.worked_hours;
         acc.worked_hours += row.worked_hours;
         acc.total_liters += row.total_liters;
         cols.forEach(col => acc[col.key] = (acc[col.key] || 0) + Number(row[col.key] || 0));
         return acc;
-      }, {worked_hours:0, total_liters:0});
-      return {start, end, cols, rows, totals};
+      }, {period:0, worked:0, worked_hours:0, total_liters:0});
+      return {start, end, cols, rows, totals, days};
+    }
+    function oilRowsForPeriod(){
+      return oilRowsForRange($("kpiStart").value, $("kpiEnd").value);
+    }
+    function oilMonthLabel(value){
+      const months = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+      const date = parseIsoDate(value);
+      return `${months[date.getMonth()]}-${String(date.getFullYear()).slice(-2)}`;
+    }
+    function oilMetricSection(title, periodValue, accumulatedValue, tone="teal"){
+      const periodLine = tone === "teal" ? "" : "oil-red";
+      const totalLine = tone === "teal" ? "" : "oil-darkred";
+      return `<div class="oil-metric-section">
+        <div class="oil-metric-title">${esc(title)}</div>
+        <div class="oil-metric-grid">
+          <div class="oil-metric-cell"><strong>${two(periodValue)}</strong><div class="oil-metric-line ${periodLine}"><i></i></div><span>Consumo semanal</span></div>
+          <div class="oil-metric-cell"><strong>${two(accumulatedValue)}</strong><div class="oil-metric-line ${totalLine}"><i></i></div><span>Consumo total acumulado</span></div>
+        </div>
+      </div>`;
+    }
+    function oilChartHtml(report){
+      const cols = oilMainColumns();
+      const colors = {
+        oil_motor_15w40:"#4472c4",
+        oil_hco_iso68:"#ed7d31",
+        oil_trans_sae30:"#a5a5a5",
+        oil_sae50:"#ffc000",
+        oil_85w140:"#5b9bd5",
+      };
+      let chartRows = [...report.rows].filter(row => cols.some(col => Number(row[col.key] || 0) > 0));
+      chartRows.sort((a,b) => cols.reduce((sum,col) => sum + Number(b[col.key] || 0), 0) - cols.reduce((sum,col) => sum + Number(a[col.key] || 0), 0));
+      chartRows = chartRows.slice(0, 6);
+      if(!chartRows.length) chartRows = report.rows.slice(0, 6);
+      const peak = Math.max(1, ...chartRows.flatMap(row => cols.map(col => Number(row[col.key] || 0))));
+      const axisMax = Math.max(100, Math.ceil((peak * 1.25) / 10) * 10);
+      const ticks = Array.from({length:6}, (_, idx) => Math.round(axisMax - (axisMax / 5) * idx));
+      const clusters = chartRows.map(row => `<div class="oil-cluster">
+        <div class="oil-bars-stack">${cols.map(col => {
+          const value = Number(row[col.key] || 0);
+          const height = Math.max((value / axisMax) * 250, value ? 2 : 1);
+          const label = Math.abs(value - Math.round(value)) < .01 ? String(Math.round(value)) : one(value);
+          return `<div class="oil-series-bar" style="height:${height}px;background:${colors[col.key] || "#64748b"}"><b>${esc(label)}</b></div>`;
+        }).join("")}</div>
+        <div class="oil-cluster-label">${esc(row.code || "-")}</div>
+      </div>`).join("") || `<p class="muted">Sin datos de aceites.</p>`;
+      return `<div class="oil-chart-grid">
+        <div class="oil-axis">${ticks.map(value => `<span>${esc(value)}</span>`).join("")}</div>
+        <div class="oil-plot">${clusters}</div>
+        <div class="oil-legend">${cols.map(col => `<span><i style="background:${colors[col.key] || "#64748b"}"></i>${esc(col.label)}</span>`).join("")}</div>
+      </div>`;
+    }
+    function oilGroupTotals(report){
+      const order = ["BARRENACION","REZAGADO","UTILITARIO"];
+      const totals = {};
+      order.forEach(group => {
+        totals[group] = {period:0, worked:0};
+        report.cols.forEach(col => totals[group][col.key] = 0);
+      });
+      report.rows.forEach(row => {
+        const group = totals[row.group] ? row.group : "UTILITARIO";
+        totals[group].period += Number(row.period_hours || 0);
+        totals[group].worked += Number(row.worked_hours || 0);
+        report.cols.forEach(col => totals[group][col.key] += Number(row[col.key] || 0));
+      });
+      return totals;
+    }
+    function oilValueCell(value, zeroClass=true){
+      const numeric = Number(value || 0);
+      return `<td class="${zeroClass && numeric === 0 ? "oil-zero" : ""}">${two(numeric)}</td>`;
+    }
+    function oilReportTableHtml(report){
+      const groupOrder = ["BARRENACION","REZAGADO","UTILITARIO"];
+      const groupLabels = {BARRENACION:"ACUMULADO EQ'S DE<br>BARRENACION", REZAGADO:"EQUIPO REZAGADO", UTILITARIO:"EQUIPO UTILITARIO"};
+      const groupTotals = oilGroupTotals(report);
+      const body = [];
+      groupOrder.forEach(group => {
+        report.rows.filter(row => row.group === group).forEach(row => {
+          body.push(`<tr><td>${esc(row.code)}</td><td>${esc(row.description || "")}</td><td>${one(row.period_hours)}</td><td>${Number(row.worked_hours || 0) ? one(row.worked_hours) : ""}</td>${report.cols.map(col => oilValueCell(row[col.key])).join("")}</tr>`);
+        });
+        const subtotal = groupTotals[group];
+        if(report.rows.some(row => row.group === group)){
+          body.push(`<tr class="oil-subtotal"><td></td><td><b>${groupLabels[group]}</b></td><td><b>${one(subtotal.period)}</b></td><td><b>${one(subtotal.worked)}</b></td>${report.cols.map(col => `<td><b>${two(subtotal[col.key])}</b></td>`).join("")}</tr>`);
+        }
+      });
+      body.push(`<tr class="oil-total"><td></td><td><b>Total de Aceite Utilizado</b></td><td></td><td><b>${one(report.totals.worked_hours || report.totals.worked)}</b></td>${report.cols.map(col => `<td><b>${two(report.totals[col.key])}</b></td>`).join("")}</tr>`);
+      return `<div class="oil-report-header"><h3>REPORTE SEMANAL CONSUMO DE ACEITES</h3><div class="oil-days"><span>Dia Inicial:<b>${Number(String(report.start).slice(-2))}</b></span><span>Dia Final:<b>${Number(String(report.end).slice(-2))}</b></span></div></div>
+        <table class="oil-report-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs<br>Periodo</th><th>Hrs<br>Trab</th><th>Consumo<br>Motor<br>15W40</th><th>Consumo<br>ISO 68</th><th>SAE30</th><th>SAE 50</th><th>85W140</th></tr></thead><tbody>${body.join("")}</tbody></table>`;
+    }
+    function oilTotalsForColumns(start, end, cols){
+      const totals = {};
+      cols.forEach(col => totals[col.key] = 0);
+      (portal.captures || []).filter(row => inRange(row.work_date, start, end)).forEach(row => {
+        cols.forEach(col => totals[col.key] += Number(row[col.key] || 0));
+      });
+      return totals;
+    }
+    function oilOrderPanelHtml(report){
+      const cols = oilOrderColumns();
+      const totals = oilTotalsForColumns(report.start, report.end, cols);
+      report.cols.forEach(col => totals[col.key] = Number(report.totals[col.key] || totals[col.key] || 0));
+      const days = Math.max(Number(report.days || 1), 1);
+      const rows = cols.map(col => {
+        const daily = Number(totals[col.key] || 0) / days;
+        const need7 = daily * 7;
+        return {
+          label: col.label,
+          need7,
+          ped7: need7 * 1.05,
+          ped15: daily * 15 * 1.05,
+          ped30: daily * 30 * 1.05,
+        };
+      });
+      const total7 = rows.reduce((sum,row) => sum + row.ped7, 0);
+      const total15 = rows.reduce((sum,row) => sum + row.ped15, 0);
+      const total30 = rows.reduce((sum,row) => sum + row.ped30, 0);
+      return `<div class="oil-order-panel">
+        <div class="oil-order-title">PEDIDO DE LUBRICANTES</div>
+        <div class="oil-order-kpis">
+          <div class="oil-order-kpi"><strong>${one(total7)} L</strong><span>Pedido 7d</span></div>
+          <div class="oil-order-kpi"><strong>${one(total15)} L</strong><span>Pedido 15d</span></div>
+          <div class="oil-order-kpi"><strong>${one(total30)} L</strong><span>Pedido 30d</span></div>
+        </div>
+        <table class="oil-order-table"><thead><tr><th>Lubricante</th><th>Nec. 7d</th><th>Ped. 7d</th><th>Ped. 15d</th><th>Ped. 30d</th></tr></thead><tbody>
+          ${rows.map(row => `<tr><td>${esc(row.label)}</td><td>${one(row.need7)}</td><td>${one(row.ped7)}</td><td>${one(row.ped15)}</td><td class="oil-order-hot">${one(row.ped30)}</td></tr>`).join("")}
+        </tbody></table>
+      </div>`;
     }
     function renderOilDashboard(){
-      setDashboardMode("special");
+      setDashboardMode("oil");
       const report = oilRowsForPeriod();
-      $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
-      $("kpiTitle").textContent = `KPI Aceites | ${report.start} a ${report.end}`;
-      const litersPerHour = report.totals.worked_hours ? report.totals.total_liters / report.totals.worked_hours : 0;
-      const activeRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0);
+      const accStart = `${String(report.end || report.start).slice(0,4)}-01-01`;
+      const accumulated = oilRowsForRange(accStart, report.end, report.cols);
+      const month = oilMonthLabel(report.end || report.start);
+      $("portalUpdated").textContent = "";
+      $("kpiTitle").innerHTML = `<span class="oil-month">${esc(month)}</span><span>Consumo de aceite de equipos "Providencia"</span><span class="oil-month">${esc(month)}</span>`;
       $("kpiCards").innerHTML = [
-        ["Equipos", `${activeRows.length}`, "con consumo o trabajo", 100, false],
-        ["Litros total", `${one(report.totals.total_liters)} L`, "acumulado periodo", Math.min(report.totals.total_liters / 10, 100), false],
-        ["Hrs trabajadas", `${one(report.totals.worked_hours)} h`, "capturas", Math.min(report.totals.worked_hours / 10, 100), false],
-        ["L / hora", `${one(litersPerHour)}`, "consumo promedio", Math.min(litersPerHour * 20, 100), litersPerHour > 1.5],
-      ].map(([label, value, note, width, bad]) => metricCardHtml(label, value, note, width, bad)).join("");
-      const chartRows = [...report.rows].filter(row => row.total_liters > 0).sort((a,b) => b.total_liters - a.total_liters).slice(0,18);
-      const maxValue = Math.max(...chartRows.map(row => row.total_liters), 1);
-      $("kpiChart").innerHTML = chartRows.map(row => {
-        const h = Math.max((row.total_liters / maxValue) * 210, 4);
-        return `<div class="chart-bar" title="${esc(row.code)} ${one(row.total_liters)} L"><span>${one(row.total_liters)} L</span><i style="--h:${h}px"></i><b>${esc(row.code)}</b></div>`;
-      }).join("") || `<p class="muted">Sin consumos de aceite en el periodo.</p>`;
-      const headers = ["Equipo","Grupo","Hrs Trab", ...report.cols.map(col => col.label), "Total L"];
-      $("kpiTable").innerHTML = `<thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
-        report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.group)}</td><td>${one(row.worked_hours)}</td>${report.cols.map(col => `<td>${one(row[col.key])}</td>`).join("")}<td>${one(row.total_liters)}</td></tr>`).join("") +
-        `<tr><td><b>Total</b></td><td></td><td><b>${one(report.totals.worked_hours)}</b></td>${report.cols.map(col => `<td><b>${one(report.totals[col.key])}</b></td>`).join("")}<td><b>${one(report.totals.total_liters)}</b></td></tr></tbody>`;
+        oilMetricSection("Consumo de Aceite HCO", report.totals.oil_hco_iso68, accumulated.totals.oil_hco_iso68, "teal"),
+        oilMetricSection("Consumo de Aceite SAE 30", report.totals.oil_trans_sae30, accumulated.totals.oil_trans_sae30, "red"),
+      ].join("");
+      $("kpiSideCards").innerHTML = [
+        oilMetricSection("Consumo de Aceite de Motor", report.totals.oil_motor_15w40, accumulated.totals.oil_motor_15w40, "red"),
+        oilMetricSection("Consumo de Aceite SAE 50", report.totals.oil_sae50, accumulated.totals.oil_sae50, "red"),
+      ].join("");
+      $("kpiChart").innerHTML = oilChartHtml(report);
+      const tableWrap = $("kpiTable").closest(".table-wrap");
+      if(tableWrap) tableWrap.classList.add("oil-bottom-wrap");
+      $("kpiTable").className = "oil-bottom-grid";
+      $("kpiTable").innerHTML = `<tbody><tr><td class="oil-report-cell">${oilReportTableHtml(report)}</td><td class="oil-order-cell">${oilOrderPanelHtml(report)}</td></tr></tbody>`;
     }
     function renderTireDashboard(){
       setDashboardMode("special");
@@ -3502,17 +3899,26 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("dieselReportTable").innerHTML = `<thead><tr><th>Equipo</th><th>Condicion actual</th><th>Horometro inicial</th><th>Horometro final</th><th>Horas trabajadas</th><th>Consumo diesel</th><th>Rendimiento L/H</th><th>KPI</th></tr></thead><tbody>` +
         rows.map(row => `<tr><td>${esc(row.equipment)}</td><td>${esc(row.condition)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${dieselRendText(row.rendimiento_lh)}</td><td><span class="pill ${dieselStatusClass(row.status)}">${esc(row.status)}</span></td></tr>`).join("") +
         `</tbody>`;
-      $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Origen</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>Proveedor</th></tr></thead><tbody>` +
-        (diesel.days || []).map(row => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.supplier_owner || dieselDayOwner(row))}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${esc(row.supplier)}</td></tr>`).join("") +
+      $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Origen</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>Proveedor</th><th>Accion</th></tr></thead><tbody>` +
+        (diesel.days || []).map((row, idx) => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.supplier_owner || dieselDayOwner(row))}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${esc(row.supplier)}</td><td><button type="button" class="btn danger small" data-diesel-day-delete="${idx}">Eliminar</button></td></tr>`).join("") +
         `</tbody>`;
       const recordAliasMap = dieselBaseEquipmentAliasMap();
-      $("dieselRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Turno</th><th>HI</th><th>HF</th><th>Hrs</th><th>Diesel L</th><th>Origen</th></tr></thead><tbody>` +
-        records.map((row, idx) => `<tr data-diesel-index="${idx}" style="cursor:pointer"><td>${esc(row.work_date)}</td><td>${esc(dieselCanonicalEquipment(row.equipment, recordAliasMap))}</td><td>${esc(row.shift)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.source || "desktop")}</td></tr>`).join("") +
+      $("dieselRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Turno</th><th>HI</th><th>HF</th><th>Hrs</th><th>Diesel L</th><th>Origen</th><th>Accion</th></tr></thead><tbody>` +
+        records.map((row, idx) => `<tr data-diesel-index="${idx}" style="cursor:pointer"><td>${esc(row.work_date)}</td><td>${esc(dieselCanonicalEquipment(row.equipment, recordAliasMap))}</td><td>${esc(row.shift)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.source || "desktop")}</td><td><button type="button" class="btn danger small" data-diesel-record-delete="${idx}">Eliminar</button></td></tr>`).join("") +
         `</tbody>`;
       document.querySelectorAll("[data-diesel-index]").forEach(tr => tr.addEventListener("click", () => editDieselRecord(Number(tr.dataset.dieselIndex))));
+      document.querySelectorAll("[data-diesel-record-delete]").forEach(button => button.addEventListener("click", event => {
+        event.stopPropagation();
+        deleteDieselRecordAt(Number(button.dataset.dieselRecordDelete)).catch(showError);
+      }));
+      document.querySelectorAll("[data-diesel-day-delete]").forEach(button => button.addEventListener("click", event => {
+        event.stopPropagation();
+        deleteDieselDayAt(Number(button.dataset.dieselDayDelete)).catch(showError);
+      }));
     }
     function clearDieselRecord(){
       currentDieselId = null;
+      currentDieselRecord = null;
       $("dieselEditStatus").textContent = "Nueva captura";
       $("dieselDate").value = toIsoDate(new Date());
       $("dieselEquipment").value = "";
@@ -3525,7 +3931,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const row = filteredDieselRecords()[index];
       if(!row) return;
       currentDieselId = row.source === "web" ? Number(row.id || 0) || null : null;
-      $("dieselEditStatus").textContent = currentDieselId ? `Editando captura web #${currentDieselId}` : "Editando copia sincronizada; al guardar se crea/actualiza captura web";
+      currentDieselRecord = row;
+      $("dieselEditStatus").textContent = currentDieselId ? `Editando captura web #${currentDieselId}` : "Editando captura sincronizada";
       $("dieselDate").value = row.work_date || "";
       $("dieselEquipment").value = dieselCanonicalEquipment(row.equipment) || "";
       $("dieselCondition").value = row.condition || "DISPONIBLE";
@@ -3576,11 +3983,30 @@ WAREHOUSE_HTML = r"""<!doctype html>
       clearDieselRecord();
       await refreshDiesel();
     }
-    async function deleteDieselRecord(){
-      if(!currentDieselId) return alert("Selecciona una captura creada en la web para eliminar.");
+    function dieselRecordDeletePayload(row){
+      return {
+        id: Number(row?.id || 0) || "",
+        work_date: row?.work_date || "",
+        equipment: dieselCanonicalEquipment(row?.equipment || "") || row?.equipment || "",
+        shift: row?.shift || "1",
+      };
+    }
+    async function deleteDieselRecordAt(index){
+      const row = filteredDieselRecords()[index];
+      if(!row) return alert("Selecciona una captura diesel para eliminar.");
       if(!hasApiKey(true)) return;
-      if(!confirm("Se eliminara la captura diesel web seleccionada.")) return;
-      const r = await fetch(`/api/diesel/records/${currentDieselId}`, {method:"DELETE", headers:headers()});
+      const label = `${row.work_date || ""} ${dieselCanonicalEquipment(row.equipment || "") || row.equipment || ""} turno ${row.shift || "1"}`.trim();
+      if(!confirm(`Se eliminara la captura diesel ${label}.`)) return;
+      const r = await fetch("/api/diesel/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify(dieselRecordDeletePayload(row))});
+      if(!r.ok) return alert(await apiError(r));
+      clearDieselRecord();
+      await refreshDiesel();
+    }
+    async function deleteDieselRecord(){
+      if(!currentDieselRecord) return alert("Selecciona una captura diesel para eliminar.");
+      if(!hasApiKey(true)) return;
+      if(!confirm("Se eliminara la captura diesel seleccionada.")) return;
+      const r = await fetch("/api/diesel/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify(dieselRecordDeletePayload(currentDieselRecord))});
       if(!r.ok) return alert(await apiError(r));
       clearDieselRecord();
       await refreshDiesel();
@@ -3598,6 +4024,22 @@ WAREHOUSE_HTML = r"""<!doctype html>
       };
       const r = await fetch("/api/diesel/days", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!r.ok) return alert(await apiError(r));
+      await refreshDiesel();
+    }
+    async function deleteDieselDayAt(index){
+      const row = (diesel.days || [])[index];
+      if(!row || !row.work_date) return alert("Selecciona un dia para eliminar.");
+      if(!hasApiKey(true)) return;
+      if(!confirm(`Se eliminara el consumo diario del ${row.work_date}.`)) return;
+      const r = await fetch("/api/diesel/days/delete", {method:"POST", headers:headers(true), body:JSON.stringify({work_date:row.work_date})});
+      if(!r.ok) return alert(await apiError(r));
+      if($("dieselDayDate").value === row.work_date){
+        $("dieselReceived").value = "0";
+        $("dieselInitial").value = "0";
+        $("dieselFinal").value = "0";
+        $("dieselSupplier").value = "";
+        $("dieselDayNotes").value = "";
+      }
       await refreshDiesel();
     }
     async function downloadDieselExcel(){
