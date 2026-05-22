@@ -2824,7 +2824,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     async function downloadKpiImage(){
       const doc = buildExactKpiHtml();
       const css = kpiExactCss(doc.kind, false);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.width}" height="${doc.height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${css}</style>${doc.html}</div></foreignObject></svg>`;
+      const safeHtml = doc.html.replaceAll("<br>", "<br/>");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.width}" height="${doc.height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${css}</style>${safeHtml}</div></foreignObject></svg>`;
       const image = new Image();
       image.onload = () => {
         const canvas = document.createElement("canvas");
@@ -3308,7 +3309,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function oilReportTableHtml(report){
       const groupOrder = ["BARRENACION","REZAGADO","UTILITARIO"];
-      const groupLabels = {BARRENACION:"ACUMULADO EQ'S DE<br>BARRENACION", REZAGADO:"EQUIPO REZAGADO", UTILITARIO:"EQUIPO UTILITARIO"};
+      const groupLabels = {BARRENACION:"ACUMULADO EQ'S DE<br/>BARRENACION", REZAGADO:"EQUIPO REZAGADO", UTILITARIO:"EQUIPO UTILITARIO"};
       const groupTotals = oilGroupTotals(report);
       const body = [];
       groupOrder.forEach(group => {
@@ -3322,7 +3323,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       });
       body.push(`<tr class="oil-total"><td></td><td><b>Total de Aceite Utilizado</b></td><td></td><td><b>${one(report.totals.worked_hours || report.totals.worked)}</b></td>${report.cols.map(col => `<td><b>${two(report.totals[col.key])}</b></td>`).join("")}</tr>`);
       return `<div class="oil-report-header"><h3>REPORTE SEMANAL CONSUMO DE ACEITES</h3><div class="oil-days"><span>Dia Inicial:<b>${Number(String(report.start).slice(-2))}</b></span><span>Dia Final:<b>${Number(String(report.end).slice(-2))}</b></span></div></div>
-        <table class="oil-report-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs<br>Periodo</th><th>Hrs<br>Trab</th><th>Consumo<br>Motor<br>15W40</th><th>Consumo<br>ISO 68</th><th>SAE30</th><th>SAE 50</th><th>85W140</th></tr></thead><tbody>${body.join("")}</tbody></table>`;
+        <table class="oil-report-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs<br/>Periodo</th><th>Hrs<br/>Trab</th><th>Consumo<br/>Motor<br/>15W40</th><th>Consumo<br/>ISO 68</th><th>SAE30</th><th>SAE 50</th><th>85W140</th></tr></thead><tbody>${body.join("")}</tbody></table>`;
     }
     function oilTotalsForColumns(start, end, cols){
       const totals = {};
