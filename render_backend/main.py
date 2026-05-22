@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import json
+import math
 import os
 from datetime import datetime, timezone
 from io import BytesIO
@@ -12,6 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import landscape, letter
+from reportlab.pdfgen import canvas as pdf_canvas
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -132,11 +137,53 @@ class FilterInventoryMovement(Base):
     item: Mapped[FilterInventoryItem] = relationship(back_populates="movements")
 
 
+class CloudRequisition(Base):
+    __tablename__ = "mga_requisition"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    folio: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    request_date: Mapped[str] = mapped_column(String(20), default="")
+    authorization_date: Mapped[str] = mapped_column(String(20), default="")
+    equipment: Mapped[str] = mapped_column(String(180), default="")
+    cost_center: Mapped[str] = mapped_column(String(180), default="")
+    request_area: Mapped[str] = mapped_column(String(180), default="MTTO")
+    location: Mapped[str] = mapped_column(String(180), default="PROVIDENCIA")
+    requesting_unit: Mapped[str] = mapped_column(String(180), default="TALLER CENTRAL")
+    operating_unit: Mapped[str] = mapped_column(String(180), default="PROVIDENCIA")
+    priority: Mapped[str] = mapped_column(String(80), default="URGENTE")
+    recommendation: Mapped[str] = mapped_column(String(80), default="ORIGINAL")
+    status: Mapped[str] = mapped_column(String(80), default="Abierta")
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    items: Mapped[list["CloudRequisitionItem"]] = relationship(
+        back_populates="requisition",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class CloudRequisitionItem(Base):
+    __tablename__ = "mga_requisition_item"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    requisition_id: Mapped[int] = mapped_column(ForeignKey("mga_requisition.id", ondelete="CASCADE"), index=True)
+    quantity: Mapped[float] = mapped_column(Float, default=1)
+    unit: Mapped[str] = mapped_column(String(40), default="PZA")
+    part_number: Mapped[str] = mapped_column(String(180), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[int] = mapped_column(Integer, default=1)
+
+    requisition: Mapped[CloudRequisition] = relationship(back_populates="items")
+
+
 engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.7")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -147,6 +194,12 @@ app.add_middleware(
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
+REQUISITION_UNITS = [
+    "PZA", "JGO", "KIT", "SERV", "LT", "L", "GAL", "ML", "TAMBO", "TAMBOR",
+    "CUBETA", "BOTE", "LATA", "CAJA", "PAQUETE", "BOLSA", "MTS", "M2", "M3",
+    "KG", "GR", "TON", "ROLLO",
+]
 
 
 def json_dumps(value: Any) -> str:
@@ -184,6 +237,60 @@ def normalize_text(value: Any) -> str:
 def normalize_part_key(value: Any) -> str:
     text = normalize_text(value)
     return "".join(ch for ch in text if ch.isalnum())
+
+
+def product_search_text(item: dict[str, Any]) -> str:
+    return normalize_text(f"{item.get('code') or item.get('clave') or ''} {item.get('product') or item.get('producto') or ''}")
+
+
+def static_products() -> list[dict[str, str]]:
+    if not PRODUCT_CATALOG_PATH.exists():
+        return []
+    try:
+        payload = json.loads(PRODUCT_CATALOG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = payload.get("products") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return []
+    products: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or row.get("clave") or "").strip().upper()
+        product = str(row.get("product") or row.get("producto") or "").strip().upper()
+        if code and product:
+            products.append({"code": code, "product": product})
+    return products
+
+
+def product_rows(session: Session | None = None, query: str = "", limit: int = 120) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if session is not None:
+        try:
+            portal = latest_portal_payload(session)
+            portal_products = portal.get("products") if isinstance(portal, dict) else []
+            if isinstance(portal_products, list):
+                for item in portal_products:
+                    if not isinstance(item, dict):
+                        continue
+                    code = str(item.get("code") or item.get("clave") or "").strip().upper()
+                    product = str(item.get("product") or item.get("producto") or "").strip().upper()
+                    if code and product:
+                        rows.append({"code": code, "product": product})
+        except Exception:
+            rows = []
+    if not rows:
+        rows = static_products()
+    needle = normalize_text(query)
+    if needle:
+        rows = [row for row in rows if needle in product_search_text(row)]
+    return rows[: max(1, min(int(limit or 120), 25000))]
+
+
+def fmt_qty(value: Any) -> str:
+    qty = parse_float(value, 0)
+    return str(int(qty)) if float(qty).is_integer() else f"{qty:g}"
 
 
 def inventory_field_for(header: Any) -> str | None:
@@ -476,18 +583,6 @@ def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="API key invalida.")
 
 
-def require_inventory_key(x_mga_api_key: str | None = None, x_mga_warehouse_key: str | None = None) -> None:
-    if os.getenv("MGA_REQUIRE_API_KEY", "").strip().lower() not in {"1", "true", "yes", "si"}:
-        return
-    expected_api = os.getenv("MGA_API_KEY", "").strip()
-    expected_warehouse = os.getenv("MGA_WAREHOUSE_KEY", "MGA4lmacen").strip()
-    if expected_api and x_mga_api_key == expected_api:
-        return
-    if expected_warehouse and x_mga_warehouse_key == expected_warehouse:
-        return
-    raise HTTPException(status_code=401, detail="Clave de almacen invalida.")
-
-
 def database_status() -> dict[str, Any]:
     return {
         "engine": engine.dialect.name,
@@ -510,6 +605,218 @@ def capture_counts(session: Session) -> dict[str, int]:
         "imported": int(imported),
         "photos": int(photos),
     }
+
+
+def iso_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return utc_now().date().isoformat()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return text[:20]
+
+
+def next_requisition_folio(session: Session) -> str:
+    rows = session.scalars(select(CloudRequisition.folio).where(CloudRequisition.folio.like("REQ-%"))).all()
+    last = 0
+    for folio in rows:
+        try:
+            last = max(last, int(str(folio).split("-")[-1]))
+        except ValueError:
+            pass
+    return f"REQ-{last + 1:04d}"
+
+
+def requisition_payload(row: CloudRequisition, include_items: bool = False) -> dict[str, Any]:
+    payload = {
+        "id": row.id,
+        "folio": row.folio,
+        "request_date": row.request_date,
+        "authorization_date": row.authorization_date,
+        "equipment": row.equipment,
+        "cost_center": row.cost_center,
+        "request_area": row.request_area,
+        "location": row.location,
+        "requesting_unit": row.requesting_unit,
+        "operating_unit": row.operating_unit,
+        "priority": row.priority,
+        "recommendation": row.recommendation,
+        "status": row.status,
+        "notes": row.notes,
+        "items_count": len([item for item in row.items if item.active]),
+        "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else "",
+        "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
+    }
+    if include_items:
+        payload["items"] = [
+            {
+                "id": item.id,
+                "quantity": item.quantity,
+                "unit": item.unit,
+                "part_number": item.part_number,
+                "description": item.description,
+                "sort_order": item.sort_order,
+            }
+            for item in sorted(row.items, key=lambda item: (item.sort_order, item.id))
+            if item.active
+        ]
+    return payload
+
+
+def text_width(c: pdf_canvas.Canvas, text: str, size: float, bold: bool = False) -> float:
+    return c.stringWidth(str(text or ""), "Helvetica-Bold" if bold else "Helvetica", size)
+
+
+def draw_text(c: pdf_canvas.Canvas, text: str, x: float, top: float, size: float = 7, bold: bool = False, align: str = "left") -> None:
+    font = "Helvetica-Bold" if bold else "Helvetica"
+    c.setFont(font, size)
+    value = str(text or "")
+    y = landscape(letter)[1] - top - size
+    if align == "center":
+        x -= text_width(c, value, size, bold) / 2
+    elif align == "right":
+        x -= text_width(c, value, size, bold)
+    c.drawString(x, y, value)
+
+
+def draw_box(c: pdf_canvas.Canvas, x: float, top: float, w: float, h: float, fill=None, stroke: int = 1) -> None:
+    width, height = landscape(letter)
+    if fill is not None:
+        c.setFillColor(fill)
+    else:
+        c.setFillColor(colors.white)
+    c.setStrokeColor(colors.black)
+    c.rect(x, height - top - h, w, h, fill=1 if fill is not None else 0, stroke=stroke)
+
+
+def draw_wrapped(c: pdf_canvas.Canvas, text: str, x: float, top: float, w: float, h: float, size: float = 6.2, bold: bool = False, align: str = "left") -> None:
+    words = str(text or "").split()
+    lines: list[str] = []
+    line = ""
+    for word in words:
+        candidate = f"{line} {word}".strip()
+        if text_width(c, candidate, size, bold) <= w or not line:
+            line = candidate
+        else:
+            lines.append(line)
+            line = word
+    if line:
+        lines.append(line)
+    max_lines = max(1, int(h // (size + 2)))
+    for idx, line_text in enumerate(lines[:max_lines]):
+        y_top = top + 3 + idx * (size + 2)
+        if align == "center":
+            draw_text(c, line_text, x + w / 2, y_top, size, bold, "center")
+        else:
+            draw_text(c, line_text, x, y_top, size, bold)
+
+
+def requisition_pdf_bytes(row: CloudRequisition, items: list[CloudRequisitionItem]) -> bytes:
+    stream = BytesIO()
+    width, height = landscape(letter)
+    c = pdf_canvas.Canvas(stream, pagesize=landscape(letter))
+    c.setLineWidth(0.75)
+    chunks = [items[idx:idx + 8] for idx in range(0, len(items), 8)] or [[]]
+
+    def cell(x: float, top: float, w: float, h: float, value: str = "", size: float = 6.2, bold: bool = False, fill=None, align: str = "left") -> None:
+        draw_box(c, x, top, w, h, fill=fill)
+        if value:
+            if align == "center":
+                draw_wrapped(c, value, x + 2, top + 2, w - 4, h - 4, size, bold, "center")
+            else:
+                draw_wrapped(c, value, x + 3, top + 3, w - 6, h - 6, size, bold)
+
+    def check_option(label: str, selected: str, x: float, top: float, w: float) -> None:
+        cell(x, top, w, 18, label, 5.8, align="center")
+        marked = "X" if normalize_text(label) in normalize_text(selected) else ""
+        cell(x + w, top, 18, 18, marked, 8, bold=True, align="center")
+
+    def header(page_number: int, total_pages: int) -> None:
+        c.setFillColor(colors.white)
+        c.rect(0, 0, width, height, fill=1, stroke=0)
+        logo = STATIC_DIR / "mga-corner-logo.jfif"
+        if logo.exists():
+            c.drawImage(str(logo), 28, height - 54, width=68, height=28, preserveAspectRatio=True, mask="auto")
+        draw_text(c, "MGA CONTRATISTA MINERA S.A. DE C.V.", width / 2, 25, 10, bold=True, align="center")
+        draw_text(c, "REQUISICION DE INSUMOS", width / 2, 78, 12, bold=True, align="center")
+        draw_text(c, "Fecha:", 590, 25, 6.4, bold=True)
+        draw_text(c, row.request_date, 640, 25, 7)
+        draw_text(c, "Elaboro:", 590, 42, 6.4, bold=True)
+        draw_text(c, "Aux De Compras", 640, 42, 7)
+        draw_text(c, "Reviso:", 590, 59, 6.4, bold=True)
+        draw_text(c, "Coord De Compras", 640, 59, 7)
+        draw_text(c, "Aprobo:", 590, 76, 6.4, bold=True)
+        draw_text(c, "Director Administrativo", 640, 76, 7)
+        draw_text(c, "Codigo:", 590, 93, 6.4, bold=True)
+        draw_text(c, "MGA_0016    Rev:00", 640, 93, 7)
+        draw_text(c, f"Pagina {page_number} de {total_pages}", 760, 93, 6.3, align="right")
+
+        top = 118
+        cell(28, top, 230, 24, "UNIDAD OPERATIVA QUE SOLICITA EL INSUMO:", 5.8, bold=True)
+        cell(258, top, 118, 24, row.requesting_unit, 6.4, align="center")
+        cell(376, top, 92, 24, "UNIDAD OPERATIVA", 5.8, bold=True)
+        cell(468, top, 95, 24, row.operating_unit, 6.4, align="center")
+        cell(563, top, 100, 24, "FECHA DE AUTORIZACION:", 5.4, bold=True)
+        cell(663, top, 96, 24, row.authorization_date, 6.2, align="center")
+        cell(28, top + 30, 160, 24, "CENTRO DE COSTOS:", 5.8, bold=True)
+        cell(188, top + 30, 185, 24, row.cost_center, 6.4, align="center")
+        cell(373, top + 30, 116, 24, "FECHA SOLICITADA:", 5.8, bold=True)
+        cell(489, top + 30, 100, 24, row.request_date, 6.4, align="center")
+        cell(28, top + 60, 262, 24, "EQUIPO QUE REQUIERE LA PARTE O PIEZA SOLICITADA:", 5.5, bold=True)
+        cell(290, top + 60, 160, 24, row.equipment, 7.2, bold=True, align="center")
+        cell(470, top + 60, 165, 24, "PRIORIDAD EN SU ADQUISICION:", 5.5, bold=True)
+        check_option("URGENTE", row.priority, 635, top + 60, 70)
+        check_option("ORDINARIA", row.priority, 723, top + 60, 48)
+        cell(28, top + 90, 125, 24, "FOLIO CONSECUTIVO:", 5.8, bold=True)
+        cell(153, top + 90, 100, 24, row.folio, 7.2, bold=True, align="center")
+        cell(253, top + 90, 110, 24, "AREA QUE SOLICITA:", 5.8, bold=True)
+        cell(363, top + 90, 150, 24, row.request_area, 6.4, align="center")
+        cell(513, top + 90, 80, 24, "UBICACION:", 5.8, bold=True)
+        cell(593, top + 90, 178, 24, row.location, 6.4, align="center")
+        cell(28, top + 120, 345, 24, "RECOMENDACION PARA LA OBTENCION DE LA PARTE O PIEZA SOLICITADA:", 5.4, bold=True)
+        check_option("ORIGINAL", row.recommendation, 373, top + 120, 78)
+        check_option("FABRICACION LOCAL", row.recommendation, 469, top + 120, 116)
+
+    def draw_table(chunk: list[CloudRequisitionItem]) -> None:
+        table_top = 278
+        widths = [64, 112, 142, 445]
+        headers = ["Cant.", "Unidad o Medida", "No de Parte", "Material Requerido (refaccion o insumos)"]
+        x = 28
+        cx = x
+        for head, col_w in zip(headers, widths):
+            cell(cx, table_top, col_w, 24, head, 6.4, bold=True, fill=colors.HexColor("#E5E7EB"), align="center")
+            cx += col_w
+        row_h = 28
+        for offset in range(8):
+            item = chunk[offset] if offset < len(chunk) else None
+            top = table_top + 24 + offset * row_h
+            fill = colors.white if offset % 2 == 0 else colors.HexColor("#F8FAFC")
+            values = ["", "", "", ""]
+            if item:
+                values = [fmt_qty(item.quantity), item.unit, item.part_number, item.description]
+            cx = x
+            for value, col_w in zip(values, widths):
+                cell(cx, top, col_w, row_h, str(value), 6.1, fill=fill, align="center" if col_w < 150 else "left")
+                cx += col_w
+        if row.notes:
+            cell(28, 532, 745, 28, f"Notas: {row.notes}", 6.3)
+        footer_top = 570
+        for sig_x, label in ((155, "SOLICITA"), (390, "REVISA"), (625, "AUTORIZA")):
+            c.setStrokeColor(colors.black)
+            c.line(sig_x - 80, height - footer_top, sig_x + 80, height - footer_top)
+            draw_text(c, label, sig_x, footer_top + 8, 7, bold=True, align="center")
+
+    total = len(chunks)
+    for page_idx, chunk in enumerate(chunks, start=1):
+        header(page_idx, total)
+        draw_table(chunk)
+        if page_idx < total:
+            c.showPage()
+    c.save()
+    return stream.getvalue()
 
 
 @app.get("/health")
@@ -558,6 +865,118 @@ def get_portal() -> dict[str, Any]:
         return latest_portal_payload(session)
 
 
+@app.get("/api/products")
+def get_products(q: str = Query(default=""), limit: int = Query(default=120, ge=1, le=25000)) -> dict[str, Any]:
+    with SessionLocal() as session:
+        rows = product_rows(session, q, limit)
+        return {"ok": True, "products": rows, "count": len(rows)}
+
+
+@app.get("/api/requisitions")
+def get_requisitions() -> dict[str, Any]:
+    with SessionLocal() as session:
+        rows = session.scalars(select(CloudRequisition).order_by(CloudRequisition.request_date.desc(), CloudRequisition.id.desc()).limit(300)).all()
+        return {
+            "ok": True,
+            "next_folio": next_requisition_folio(session),
+            "requisitions": [requisition_payload(row) for row in rows],
+        }
+
+
+@app.get("/api/requisitions/{requisition_id}")
+def get_requisition(requisition_id: int) -> dict[str, Any]:
+    with SessionLocal() as session:
+        row = session.get(CloudRequisition, requisition_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Requisicion no encontrada.")
+        return {"ok": True, "requisition": requisition_payload(row, include_items=True)}
+
+
+@app.post("/api/requisitions")
+async def save_requisition(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Requisicion invalida.")
+    with SessionLocal() as session:
+        requisition_id = int(parse_float(payload.get("id"), 0) or 0)
+        row = session.get(CloudRequisition, requisition_id) if requisition_id else None
+        folio = normalize_text(payload.get("folio")) or next_requisition_folio(session)
+        existing = session.scalar(select(CloudRequisition).where(CloudRequisition.folio == folio))
+        if existing is not None and (row is None or existing.id != row.id):
+            row = existing
+        if row is None:
+            row = CloudRequisition(folio=folio, created_at=utc_now())
+            session.add(row)
+        row.folio = folio
+        row.request_date = iso_date(payload.get("request_date"))
+        row.authorization_date = iso_date(payload.get("authorization_date") or payload.get("request_date"))
+        row.equipment = normalize_text(payload.get("equipment") or "PARA STOCK")
+        row.cost_center = normalize_text(payload.get("cost_center"))
+        row.request_area = normalize_text(payload.get("request_area") or "MTTO")
+        row.location = normalize_text(payload.get("location") or "PROVIDENCIA")
+        row.requesting_unit = normalize_text(payload.get("requesting_unit") or "TALLER CENTRAL")
+        row.operating_unit = normalize_text(payload.get("operating_unit") or "PROVIDENCIA")
+        row.priority = normalize_text(payload.get("priority") or "URGENTE")
+        row.recommendation = normalize_text(payload.get("recommendation") or "ORIGINAL")
+        row.status = str(payload.get("status") or "Abierta").strip() or "Abierta"
+        row.notes = str(payload.get("notes") or "").strip()
+        row.updated_at = utc_now()
+        items = payload.get("items")
+        if isinstance(items, list):
+            row.items.clear()
+            for idx, item in enumerate(items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                part_number = normalize_text(item.get("part_number"))
+                description = normalize_text(item.get("description"))
+                if not part_number and not description:
+                    continue
+                row.items.append(
+                    CloudRequisitionItem(
+                        quantity=parse_float(item.get("quantity"), 1) or 1,
+                        unit=normalize_text(item.get("unit") or "PZA"),
+                        part_number=part_number,
+                        description=description,
+                        sort_order=idx,
+                        active=1,
+                    )
+                )
+        session.commit()
+        session.refresh(row)
+        return {"ok": True, "requisition": requisition_payload(row, include_items=True), "next_folio": next_requisition_folio(session)}
+
+
+@app.delete("/api/requisitions/{requisition_id}")
+def delete_requisition(requisition_id: int, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    with SessionLocal() as session:
+        row = session.get(CloudRequisition, requisition_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Requisicion no encontrada.")
+        session.delete(row)
+        session.commit()
+        return {"ok": True}
+
+
+@app.get("/api/requisitions/{requisition_id}/pdf")
+def get_requisition_pdf(requisition_id: int) -> StreamingResponse:
+    with SessionLocal() as session:
+        row = session.get(CloudRequisition, requisition_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Requisicion no encontrada.")
+        items = [item for item in sorted(row.items, key=lambda item: (item.sort_order, item.id)) if item.active]
+        if not items:
+            raise HTTPException(status_code=400, detail="Agrega al menos una partida antes de generar PDF.")
+        pdf = requisition_pdf_bytes(row, items)
+        filename = f"Requisicion_{row.folio}.pdf".replace(" ", "_")
+        return StreamingResponse(
+            BytesIO(pdf),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
+
 WAREHOUSE_HTML = r"""<!doctype html>
 <html lang="es">
 <head>
@@ -576,23 +995,17 @@ WAREHOUSE_HTML = r"""<!doctype html>
     header p { margin:7px 0 0; color:#dbeafe; font-size:14px; }
     .key-card { position:relative; z-index:1; min-width:280px; padding:12px; border:1px solid rgba(255,255,255,.16); border-radius:8px; background:rgba(255,255,255,.08); backdrop-filter:blur(10px); }
     .key-card label { color:#dbeafe; }
-    .key-card.missing { border-color:rgba(225,29,72,.55); box-shadow:0 0 0 3px rgba(225,29,72,.16); }
-    .edit-status { display:block; margin-top:7px; color:#bfdbfe; font-size:12px; font-weight:700; }
-    .edit-status.active { color:#99f6e4; }
     header input { min-width:260px; padding:10px 11px; border:1px solid rgba(255,255,255,.28); border-radius:6px; color:white; background:rgba(255,255,255,.1); outline:none; }
     header input::placeholder { color:#cbd5e1; }
     main { width:min(1480px, 100%); margin:0 auto; padding:18px; display:grid; gap:14px; }
     .tabs { display:flex; gap:8px; flex-wrap:wrap; padding:6px; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.78); box-shadow:0 8px 28px rgba(7,31,73,.08); }
     .tabs button, .btn { border:0; background:var(--blue); color:white; padding:10px 14px; border-radius:6px; font-weight:700; cursor:pointer; transition:transform .15s ease, box-shadow .15s ease, background .15s ease; }
     .tabs button:hover, .btn:hover { transform:translateY(-1px); box-shadow:0 10px 20px rgba(7,31,73,.16); }
-    .tabs button:disabled, .btn:disabled { opacity:.65; cursor:wait; transform:none; box-shadow:none; }
     .tabs button.active { background:linear-gradient(135deg,var(--teal),#0b7877); }
     .btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
     .btn.danger { background:linear-gradient(135deg,#b31212,var(--red)); }
     .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.92); border:1px solid rgba(216,222,232,.9); border-radius:8px; padding:16px; box-shadow:var(--shadow); }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
-    .dashboard-controls { grid-template-columns:1.05fr 1fr 1fr 1fr .95fr .95fr; }
-    .disp-controls { grid-template-columns:1fr 1fr 1fr 1fr; }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
     input, select, textarea { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; background:white; outline:none; transition:border .15s ease, box-shadow .15s ease; }
     input:focus, select:focus, textarea:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(0,156,154,.14); }
@@ -614,11 +1027,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .muted { color:var(--muted); }
     .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
+    .req-header-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+    .req-item-grid { display:grid; grid-template-columns:110px 150px 1fr 1.6fr; gap:10px; align-items:end; }
+    .req-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
     .wide { grid-column:1 / -1; }
-    .form-message { display:none; grid-column:1 / -1; padding:10px 12px; border-radius:6px; font-size:13px; font-weight:700; }
-    .form-message.show { display:block; }
-    .form-message.error { color:#991b1b; background:#fee2e2; border:1px solid #fecaca; }
-    .form-message.ok { color:#065f46; background:#d1fae5; border:1px solid #a7f3d0; }
     .dashboard-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .metric-card { border:1px solid var(--line); border-radius:8px; padding:13px; background:linear-gradient(180deg,#fff,#f8fbff); }
     .metric-card span { display:block; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }
@@ -641,12 +1053,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .kpi-report-table { margin-top:14px; max-height:420px; }
     .chart { display:flex; align-items:end; gap:12px; min-height:270px; padding:20px 16px 28px; border:1px solid var(--line); border-radius:8px; background:linear-gradient(180deg,#fff,#f8fbff); overflow:auto; }
     .kpi-format-mode .chart { display:block; min-height:330px; padding:12px 14px 18px; }
-    .report-export-head { display:none; align-items:center; justify-content:space-between; gap:16px; margin-bottom:10px; padding:4px 0 10px; border-bottom:3px solid var(--blue); }
-    .report-export-head .brand-mark { display:flex; align-items:center; gap:10px; color:var(--blue); font-weight:900; font-size:18px; }
-    .report-export-head .brand-mark img { width:74px; height:46px; object-fit:contain; padding:4px 6px; background:white; border:1px solid var(--line); border-radius:6px; }
-    .exporting .report-export-head, .print-export .report-export-head { display:flex; }
-    .exporting .table-wrap, .print-export .table-wrap { max-height:none !important; overflow:visible !important; }
-    .exporting th, .print-export th { position:static !important; }
     .kpi-chart-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; color:#111827; font-size:11px; }
     .kpi-mini-tabs { display:grid; grid-template-columns:repeat(4, minmax(96px, 1fr)); gap:4px; flex:1; }
     .kpi-mini-tabs span, .kpi-mini-tabs button { border:1px solid #111; padding:7px 9px; background:white; color:#111; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
@@ -669,7 +1075,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .highlight { background:#fff9b1; }
     .subtle-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
     .subtle-title h3 { margin:0; color:var(--blue); }
-    .export-note { color:var(--muted); font-size:12px; font-weight:700; }
     .print-only { display:none; }
     @media print {
       header, .tabs, #stats, .dashboard-controls, .no-print { display:none !important; }
@@ -682,7 +1087,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       th { position:static; }
       .print-only { display:block; }
     }
-    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -692,7 +1097,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
       <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad e inventario de filtros</p></div>
     </div>
-    <div class="key-card" id="keyCard"><label>Clave almacen<input id="apiKey" type="password" placeholder="Clave de almacen"></label><small class="edit-status" id="editStatus">Solo consulta</small></div>
+    <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
   <main>
     <nav class="tabs">
@@ -700,6 +1105,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
+      <button data-tab="requisiciones">Requisiciones</button>
       <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
       <button data-tab="importar">Importar / exportar</button>
@@ -711,15 +1117,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Desde<input id="kpiStart" type="date"></label>
         <label>Hasta<input id="kpiEnd" type="date"></label>
         <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
-        <button class="btn secondary" id="printKpiBtn">Descargar PDF</button>
-        <button class="btn secondary" id="downloadKpiImageBtn">Descargar imagen</button>
+        <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
       </div>
       <div class="panel" id="kpiPrintArea">
-        <div class="report-export-head">
-          <div class="brand-mark"><img src="/static/mga-corner-logo.jfif" alt="MGA"><span>MGA</span></div>
-          <strong id="kpiExportTitle">Reporte KPI</strong>
-          <span class="export-note" id="kpiExportPeriod"></span>
-        </div>
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
         <div class="kpi-format-board">
           <div class="kpi-side" id="kpiCards"></div>
@@ -754,20 +1154,60 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="table-wrap"><table id="bitTable"></table></div>
     </section>
     <section id="disponibilidad" class="view">
-      <div class="panel toolbar disp-controls">
+      <div class="panel toolbar">
         <label>Categoria / equipo<input id="dispSearch" placeholder="Buscar"></label>
         <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
         <button class="btn" id="renderDispBtn">Actualizar</button>
-        <button class="btn secondary" id="downloadDispImageBtn">Descargar imagen</button>
       </div>
-      <div class="panel" id="dispPrintArea">
-        <div class="report-export-head">
-          <div class="brand-mark"><img src="/static/mga-corner-logo.jfif" alt="MGA"><span>MGA</span></div>
-          <strong>Disponibilidad de equipos</strong>
-          <span class="export-note" id="dispExportDate"></span>
+      <div class="table-wrap"><table id="dispTable"></table></div>
+    </section>
+    <section id="requisiciones" class="view">
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Generar requisicion</h3><span class="muted" id="reqStatus"></span></div>
+          <div class="req-header-grid">
+            <label>Folio<input id="reqFolio"></label>
+            <label>Fecha solicitada<input id="reqDate" type="date"></label>
+            <label>Fecha autorizacion<input id="reqAuthDate" type="date"></label>
+            <label>Equipo<input id="reqEquipment" value="PARA STOCK"></label>
+            <label>Centro costos<input id="reqCostCenter"></label>
+            <label>Area solicita<input id="reqArea" value="MTTO"></label>
+            <label>Ubicacion<input id="reqLocation" value="PROVIDENCIA"></label>
+            <label>Unidad solicita<input id="reqRequestingUnit" value="TALLER CENTRAL"></label>
+            <label>Unidad operativa<input id="reqOperatingUnit" value="PROVIDENCIA"></label>
+            <label>Prioridad<select id="reqPriority"><option>URGENTE</option><option>ORDINARIA</option></select></label>
+            <label>Recomendacion<select id="reqRecommendation"><option>ORIGINAL</option><option>FABRICACION LOCAL</option></select></label>
+            <label>Estatus<select id="reqReqStatus"><option>Abierta</option><option>Autorizada</option><option>Surtida</option><option>Cancelada</option></select></label>
+            <label class="wide">Notas<textarea id="reqNotes" rows="2"></textarea></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn secondary" id="reqNewBtn">Nueva</button>
+            <button class="btn" id="reqSaveBtn">Guardar requisicion</button>
+            <button class="btn secondary" id="reqPdfBtn">Descargar PDF</button>
+            <button class="btn secondary" id="reqPrintBtn">Imprimir</button>
+            <button class="btn danger" id="reqDeleteBtn">Eliminar</button>
+          </div>
+          <h3>Partida</h3>
+          <div class="req-item-grid">
+            <label>Cantidad<input id="reqItemQty" type="number" step="0.01" value="1"></label>
+            <label>Unidad<select id="reqItemUnit"></select></label>
+            <label>No. parte<input id="reqItemPart"></label>
+            <label>Descripcion<input id="reqItemDesc"></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn" id="reqAddItemBtn">Agregar / actualizar partida</button>
+            <button class="btn secondary" id="reqClearItemBtn">Nueva partida</button>
+            <button class="btn danger" id="reqDeleteItemBtn">Eliminar partida</button>
+          </div>
+          <div class="table-wrap" style="max-height:300px; margin-top:10px;"><table id="reqItemsTable"></table></div>
         </div>
-        <div class="subtle-title"><h3 id="dispTitle">Disponibilidad</h3><span class="muted" id="dispCount"></span></div>
-        <div class="table-wrap"><table id="dispTable"></table></div>
+        <div class="panel">
+          <h3>Consulta Clave / Producto</h3>
+          <label>Buscar por clave o producto<input id="reqProductSearch" placeholder="Ej. 384-8612, bomba, filtro"></label>
+          <div class="table-wrap" style="max-height:300px; margin-top:10px;"><table id="reqProductsTable"></table></div>
+          <h3>Requisiciones guardadas</h3>
+          <div class="table-wrap" style="max-height:360px;"><table id="reqListTable"></table></div>
+        </div>
       </div>
     </section>
     <section id="equipos" class="view">
@@ -803,7 +1243,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Referencia<input id="movRef"></label>
             <label>Usuario<input id="movUser"></label>
             <label class="wide">Notas<textarea id="movNotes" rows="3"></textarea></label>
-            <div id="movementMessage" class="form-message" role="status"></div>
             <button class="btn wide" id="movementBtn">Guardar movimiento</button>
           </div>
           <h3>Ultimos movimientos</h3>
@@ -823,60 +1262,35 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {} };
+    let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let products = [];
+    let requisitions = [];
+    let currentReqId = null;
+    let currentReqItemIndex = null;
+    let currentReqItems = [];
     let selectedKpiMetric = "availability";
     const AUTO_REFRESH_MS = 15000;
-    const EDIT_KEY_HELP = "Captura la clave de almacen asignada para registrar movimientos o importar inventario.";
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
-    localStorage.removeItem("mgaFilterApiKey");
-    apiKey.value = localStorage.getItem("mgaWarehouseKey") || "";
+    apiKey.value = localStorage.getItem("mgaFilterApiKey") || "";
     if(apiKey.value.trim() === "X-MGA-API-Key"){
       apiKey.value = "";
       localStorage.removeItem("mgaFilterApiKey");
-      localStorage.removeItem("mgaWarehouseKey");
     }
-    function setFormMessage(id, text, type="error"){
-      const el = $(id);
-      if(!el) return;
-      el.textContent = text || "";
-      el.className = `form-message ${text ? "show" : ""} ${type || ""}`.trim();
-    }
-    function setImportMessage(text){ $("importResult").textContent = text || ""; }
-    function editKeyReady(){
-      const value = apiKey.value.trim();
-      return Boolean(value && value !== "X-MGA-API-Key");
-    }
-    function updateEditState(){
-      const ready = editKeyReady();
-      $("keyCard").classList.toggle("missing", !ready);
-      $("editStatus").classList.toggle("active", ready);
-      $("editStatus").textContent = ready ? "Edicion de almacen activa" : "Solo consulta: captura clave de almacen";
-      return ready;
-    }
-    apiKey.addEventListener("input", () => {
-      localStorage.setItem("mgaWarehouseKey", apiKey.value.trim());
-      updateEditState();
-      if(editKeyReady()) setFormMessage("movementMessage", "", "");
-    });
+    apiKey.addEventListener("input", () => localStorage.setItem("mgaFilterApiKey", apiKey.value.trim()));
     apiKey.addEventListener("keydown", (ev) => { if(ev.key === "Enter") load(true).catch(showError); });
     function hasApiKey(show=true){
-      if(editKeyReady()){
-        updateEditState();
-        return true;
-      }
+      const value = apiKey.value.trim();
+      if(value && value !== "X-MGA-API-Key") return true;
       apiKey.value = "";
-      localStorage.removeItem("mgaWarehouseKey");
+      localStorage.removeItem("mgaFilterApiKey");
       if(show){
-        setFormMessage("movementMessage", EDIT_KEY_HELP, "error");
-        setImportMessage(EDIT_KEY_HELP);
+        alert("Para modificar inventario pega la clave real. Esta en MGA Mantenimiento > Red > API key cloud.");
         apiKey.focus();
-        apiKey.select();
       }
-      updateEditState();
       return false;
     }
-    function headers(json=false){ const h = {}; if(apiKey.value.trim()) h["X-MGA-Warehouse-Key"] = apiKey.value.trim(); if(json) h["Content-Type"]="application/json"; return h; }
+    function headers(json=false){ const h = {}; if(apiKey.value.trim()) h["X-MGA-API-Key"] = apiKey.value.trim(); if(json) h["Content-Type"]="application/json"; return h; }
     async function apiError(response){
       const text = await response.text();
       try {
@@ -887,7 +1301,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
     }
     function showError(error){ alert(error.message || String(error)); }
-    updateEditState();
     function esc(v){ return String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
     function num(v){ const n = Number(v || 0); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
     function one(v){ return `${Number(v || 0).toFixed(1)}`; }
@@ -902,500 +1315,23 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function metricCardHtml(label, value, note, width, bad=false){
       return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
     }
-    function fileStamp(){
-      const d = new Date();
-      return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}_${String(d.getHours()).padStart(2,"0")}${String(d.getMinutes()).padStart(2,"0")}`;
-    }
-    function cleanFileName(value){
-      return String(value || "MGA").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0,90) || "MGA";
-    }
-    function allPageStyles(extra=""){
-      return [...document.querySelectorAll("style")].map(style => style.textContent || "").join("\n") + "\n" + extra;
-    }
-    async function blobToDataUrl(blob){
-      return await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    }
-    async function inlineImages(root){
-      const images = [...root.querySelectorAll("img")];
-      await Promise.all(images.map(async img => {
-        try {
-          const response = await fetch(img.src);
-          if(!response.ok) return;
-          img.src = await blobToDataUrl(await response.blob());
-        } catch {}
-      }));
-    }
-    async function makeExportClone(elementId, minWidth=1120){
-      const source = $(elementId);
-      if(!source) throw new Error("No se encontro el bloque para exportar.");
-      const wrapper = document.createElement("div");
-      wrapper.className = "exporting";
-      wrapper.style.cssText = "position:fixed;left:-20000px;top:0;background:#fff;padding:0;z-index:-1;";
-      const clone = source.cloneNode(true);
-      clone.classList.add("exporting");
-      clone.style.width = `${Math.max(source.scrollWidth, minWidth)}px`;
-      clone.style.background = "#fff";
-      clone.querySelectorAll(".table-wrap,.chart,.chart-plot").forEach(el => {
-        el.style.maxHeight = "none";
-        el.style.overflow = "visible";
-      });
-      clone.querySelectorAll("th").forEach(el => el.style.position = "static");
-      wrapper.appendChild(clone);
-      document.body.appendChild(wrapper);
-      await inlineImages(clone);
-      return { wrapper, clone };
-    }
-    function triggerDownload(url, fileName){
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
-    async function runButtonTask(buttonId, busyText, task){
-      const button = $(buttonId);
-      const originalText = button.textContent;
-      button.disabled = true;
-      button.textContent = busyText;
-      try {
-        await task();
-      } finally {
-        button.textContent = originalText;
-        button.disabled = false;
-      }
-    }
-    function createHiResCanvas(width, height){
-      const scale = Math.min(window.devicePixelRatio || 2, 2);
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.ceil(width * scale);
-      canvas.height = Math.ceil(height * scale);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      const ctx = canvas.getContext("2d");
-      ctx.setTransform(scale, 0, 0, scale, 0, 0);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, width, height);
-      return {canvas, ctx};
-    }
-    function downloadCanvas(canvas, fileName){
-      triggerDownload(canvas.toDataURL("image/png"), fileName);
-    }
-    function textLines(ctx, text, maxWidth, maxLines=4){
-      const words = String(text || "").split(/\s+/).filter(Boolean);
-      const lines = [];
-      let line = "";
-      words.forEach(word => {
-        const test = line ? `${line} ${word}` : word;
-        if(ctx.measureText(test).width <= maxWidth || !line){
-          line = test;
-        } else {
-          lines.push(line);
-          line = word;
-        }
-      });
-      if(line) lines.push(line);
-      if(lines.length > maxLines){
-        const cut = lines.slice(0, maxLines);
-        cut[maxLines - 1] = `${cut[maxLines - 1].replace(/\.*$/, "")}...`;
-        return cut;
-      }
-      return lines.length ? lines : [""];
-    }
-    function drawWrapped(ctx, text, x, y, maxWidth, lineHeight, maxLines=4){
-      const lines = textLines(ctx, text, maxWidth, maxLines);
-      lines.forEach((line, idx) => ctx.fillText(line, x, y + idx * lineHeight));
-      return lines.length * lineHeight;
-    }
-    function drawBox(ctx, x, y, w, h, fill="#ffffff", stroke="#d8dee8"){
-      ctx.fillStyle = fill;
-      ctx.fillRect(x, y, w, h);
-      if(stroke){
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, w, h);
-      }
-    }
-    function drawReportHeader(ctx, title, subtitle, width){
-      drawBox(ctx, 0, 0, width, 86, "#071f49", null);
-      drawBox(ctx, 28, 18, 92, 50, "#ffffff", "#d8dee8");
-      ctx.fillStyle = "#0b2f6f";
-      ctx.font = "900 24px Segoe UI, Arial";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("MGA", 74, 43);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "800 27px Segoe UI, Arial";
-      ctx.fillText(title, width / 2, 34);
-      ctx.font = "600 13px Segoe UI, Arial";
-      ctx.fillStyle = "#dbeafe";
-      ctx.fillText(subtitle || "", width / 2, 61);
-      ctx.textAlign = "left";
-      ctx.textBaseline = "alphabetic";
-    }
-    function drawMetricCanvasCard(ctx, card, x, y, w, h){
-      drawBox(ctx, x, y, w, h, "#ffffff", "#d8dee8");
-      ctx.fillStyle = "#667085";
-      ctx.font = "800 13px Segoe UI, Arial";
-      ctx.textAlign = "center";
-      ctx.fillText(String(card.label || "").toUpperCase(), x + w / 2, y + 28);
-      ctx.fillStyle = "#5f6671";
-      ctx.font = "800 30px Segoe UI, Arial";
-      ctx.fillText(card.value || "", x + w / 2, y + 72);
-      ctx.fillStyle = "#667085";
-      ctx.font = "12px Segoe UI, Arial";
-      ctx.fillText(card.note || "", x + w / 2, y + 100);
-      const barX = x + 18;
-      const barY = y + h - 24;
-      const barW = w - 36;
-      drawBox(ctx, barX, barY, barW, 8, "#e5e7eb", null);
-      ctx.fillStyle = card.bad ? "#e11d48" : "#009c9a";
-      ctx.fillRect(barX, barY, Math.max(Math.min(Number(card.width || 0), 100), 0) / 100 * barW, 8);
-      ctx.textAlign = "left";
-    }
-    function metricCardsFrom(containerId){
-      return [...$(containerId).querySelectorAll(".metric-card")].map(card => {
-        const bar = card.querySelector(".bar-fill");
-        return {
-          label: card.querySelector("span")?.textContent?.trim() || "",
-          value: card.querySelector("strong")?.textContent?.trim() || "",
-          note: card.querySelector("small")?.textContent?.trim() || "",
-          width: parseFloat((bar && bar.style.width) || "0"),
-          bad: card.classList.contains("bad"),
-        };
-      });
-    }
-    function tableMatrix(tableId){
-      const table = $(tableId);
-      const headers = [...table.querySelectorAll("thead th")].map(cell => cell.textContent.trim());
-      const rows = [...table.querySelectorAll("tbody tr")].map(tr => [...tr.children].map(cell => cell.textContent.trim()));
-      return {headers, rows};
-    }
-    function drawTableCanvas(ctx, matrix, x, y, w, rowH=30, maxRows=null){
-      const headers = matrix.headers || [];
-      const rows = maxRows ? (matrix.rows || []).slice(0, maxRows) : (matrix.rows || []);
-      if(!headers.length) return y;
-      const colW = w / headers.length;
-      drawBox(ctx, x, y, w, rowH, "#0b2f6f", "#0b2f6f");
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "800 11px Segoe UI, Arial";
-      ctx.textAlign = "center";
-      headers.forEach((header, idx) => {
-        const cx = x + idx * colW;
-        ctx.strokeStyle = "#203b6f";
-        ctx.strokeRect(cx, y, colW, rowH);
-        drawWrapped(ctx, header, cx + 5, y + 19, colW - 10, 12, 2);
-      });
-      let cy = y + rowH;
-      ctx.textAlign = "center";
-      ctx.font = "12px Segoe UI, Arial";
-      rows.forEach((row, ridx) => {
-        const fill = ridx % 2 ? "#f8fafc" : "#ffffff";
-        drawBox(ctx, x, cy, w, rowH, fill, "#d8dee8");
-        row.forEach((value, idx) => {
-          const cx = x + idx * colW;
-          ctx.strokeStyle = "#d8dee8";
-          ctx.strokeRect(cx, cy, colW, rowH);
-          ctx.fillStyle = String(value).toUpperCase() === "FUERA" ? "#c81e1e" : "#1f2937";
-          drawWrapped(ctx, value, cx + 5, cy + 19, colW - 10, 12, 2);
-        });
-        cy += rowH;
-      });
-      ctx.textAlign = "left";
-      return cy;
-    }
-    function chartBarsFromDom(){
-      return [...$("kpiChart").querySelectorAll(".chart-bar")].map(bar => {
-        const stem = bar.querySelector("i");
-        const rawHeight = (stem && (stem.style.getPropertyValue("--h") || getComputedStyle(stem).height)) || "0";
-        return {
-          label: bar.querySelector("b")?.textContent?.trim() || "",
-          value: bar.querySelector("span")?.textContent?.trim() || "",
-          h: parseFloat(rawHeight) || 0,
-          out: bar.classList.contains("out"),
-        };
-      });
-    }
-    function drawChartCanvas(ctx, bars, x, y, w, h){
-      drawBox(ctx, x, y, w, h, "#ffffff", "#d8dee8");
-      ctx.fillStyle = "#111827";
-      ctx.font = "800 12px Segoe UI, Arial";
-      ctx.fillText("KPI", x + 16, y + 26);
-      const tabs = ["% Disponibilidad", "% Utilizacion", "TMEF", "TMPR"];
-      const tabW = Math.min(130, (w - 70) / 4);
-      tabs.forEach((tab, idx) => {
-        drawBox(ctx, x + 48 + idx * (tabW + 5), y + 10, tabW, 30, idx === 0 ? "#009c9a" : "#ffffff", "#111111");
-        ctx.fillStyle = "#111111";
-        ctx.font = "12px Segoe UI, Arial";
-        ctx.fillText(tab, x + 58 + idx * (tabW + 5), y + 30);
-      });
-      const plotX = x + 34;
-      const plotY = y + 64;
-      const plotW = w - 62;
-      const plotH = h - 104;
-      ctx.strokeStyle = "#d8dee8";
-      ctx.lineWidth = 1;
-      for(let i=0;i<=4;i++){
-        const gy = plotY + plotH - (plotH * i / 4);
-        ctx.beginPath();
-        ctx.moveTo(plotX, gy);
-        ctx.lineTo(plotX + plotW, gy);
-        ctx.stroke();
-      }
-      if(!bars.length){
-        ctx.fillStyle = "#667085";
-        ctx.font = "14px Segoe UI, Arial";
-        ctx.fillText("Sin datos KPI para el periodo.", plotX + 20, plotY + 60);
-        return;
-      }
-      const maxRaw = Math.max(...bars.map(b => b.h), 1);
-      const gap = Math.max(10, Math.min(28, plotW / Math.max(bars.length, 1) * 0.18));
-      const barW = Math.max(24, Math.min(64, (plotW - gap * (bars.length + 1)) / bars.length));
-      bars.forEach((bar, idx) => {
-        const bx = plotX + gap + idx * (barW + gap);
-        const bh = Math.max(4, (bar.h / maxRaw) * (plotH - 22));
-        const by = plotY + plotH - bh;
-        ctx.fillStyle = bar.out ? "#e11d48" : "#10a7a5";
-        ctx.fillRect(bx, by, barW, bh);
-        ctx.fillStyle = "#1f2937";
-        ctx.font = "11px Segoe UI, Arial";
-        ctx.textAlign = "center";
-        ctx.fillText(bar.value, bx + barW / 2, by - 6);
-        ctx.fillText(bar.label, bx + barW / 2, plotY + plotH + 18);
-      });
-      ctx.textAlign = "left";
-    }
-    function downloadKpiCanvasImage(fileName){
-      const special = $("kpiPrintArea").classList.contains("kpi-special-mode");
-      const table = tableMatrix("kpiTable");
-      const tableRows = table.rows || [];
-      const width = 1500;
-      const topH = special ? 520 : 390;
-      const height = 120 + topH + 40 + Math.max(tableRows.length + 1, 3) * 32 + 40;
-      const {canvas, ctx} = createHiResCanvas(width, height);
-      drawReportHeader(ctx, $("kpiTitle").textContent || "Reporte KPI", $("portalUpdated").textContent || "", width);
-      const margin = 30;
-      const y = 110;
-      const cards = metricCardsFrom("kpiCards");
-      const side = metricCardsFrom("kpiSideCards");
-      const bars = chartBarsFromDom();
-      if(special){
-        const cardW = (width - margin * 2 - 30) / 4;
-        cards.slice(0, 4).forEach((card, idx) => drawMetricCanvasCard(ctx, card, margin + idx * (cardW + 10), y, cardW, 112));
-        drawChartCanvas(ctx, bars, margin, y + 135, width - margin * 2, 330);
-      } else {
-        const cardW = 205;
-        const cardH = 150;
-        cards.slice(0, 4).forEach((card, idx) => drawMetricCanvasCard(ctx, card, margin + (idx % 2) * cardW, y + Math.floor(idx / 2) * cardH, cardW, cardH));
-        drawChartCanvas(ctx, bars, margin + cardW * 2 + 25, y, 690, 300);
-        side.slice(0, 4).forEach((card, idx) => drawMetricCanvasCard(ctx, card, width - margin - cardW * 2 + (idx % 2) * cardW, y + Math.floor(idx / 2) * cardH, cardW, cardH));
-      }
-      drawTableCanvas(ctx, table, margin, y + topH, width - margin * 2, 32);
-      downloadCanvas(canvas, fileName);
-    }
-    function availabilityRowsForCurrentFilters(){
-      const search = ($("dispSearch").value || "").toUpperCase();
-      const status = $("dispStatus").value;
-      return (portal.availability || []).filter(row => {
-        const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
-        return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
-      });
-    }
-    function conditionFill(condition){
-      const text = String(condition || "").toUpperCase();
-      if(text.includes("FUERA") || text.includes("NO DISP")) return "#ff1616";
-      if(text.includes("OPERATIVA") || text.includes("REPARACION") || text.includes("STAND")) return "#fff37a";
-      if(text.includes("DISPONIBLE")) return "#35f235";
-      return "#ffffff";
-    }
-    function downloadAvailabilityCanvasImage(fileName){
-      const rows = availabilityRowsForCurrentFilters();
-      const width = 1500;
-      const margin = 28;
-      const cols = [170, 230, 120, 190, width - margin * 2 - 170 - 230 - 120 - 190];
-      const measure = createHiResCanvas(10, 10).ctx;
-      measure.font = "13px Segoe UI, Arial";
-      const heights = rows.map(row => Math.max(34, textLines(measure, row.observations || "", cols[4] - 16, 5).length * 16 + 16));
-      const height = 150 + 36 + heights.reduce((a,b) => a + b, 0) + 35;
-      const {canvas, ctx} = createHiResCanvas(width, height);
-      drawReportHeader(ctx, "DISPONIBILIDAD DE EQUIPOS", $("dispExportDate").textContent || "", width);
-      ctx.fillStyle = "#071f49";
-      ctx.font = "800 20px Segoe UI, Arial";
-      ctx.fillText($("dispTitle").textContent || "Disponibilidad", margin, 118);
-      ctx.fillStyle = "#667085";
-      ctx.font = "13px Segoe UI, Arial";
-      ctx.fillText($("dispCount").textContent || "", width - margin - 180, 118);
-      let y = 142;
-      const headers = ["CATEGORIA", "EQUIPO", "NO ECO", "CONDICION", "OBSERVACIONES"];
-      let x = margin;
-      ctx.textAlign = "center";
-      headers.forEach((header, idx) => {
-        drawBox(ctx, x, y, cols[idx], 36, "#0b2f6f", "#111827");
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "800 13px Segoe UI, Arial";
-        ctx.fillText(header, x + cols[idx] / 2, y + 23);
-        x += cols[idx];
-      });
-      y += 36;
-      ctx.textAlign = "left";
-      rows.forEach((row, ridx) => {
-        const rowH = heights[ridx];
-        x = margin;
-        const values = [row.category, row.equipment, row.eco, row.condition, row.observations];
-        values.forEach((value, idx) => {
-          const fill = idx === 3 ? conditionFill(value) : (idx === 4 && Number(row.highlight_observation || 0) ? "#fff9b1" : (ridx % 2 ? "#f8fafc" : "#ffffff"));
-          drawBox(ctx, x, y, cols[idx], rowH, fill, "#d8dee8");
-          ctx.fillStyle = idx === 3 ? "#000000" : "#1f2937";
-          ctx.font = idx === 3 ? "800 13px Segoe UI, Arial" : "13px Segoe UI, Arial";
-          if(idx === 3 || idx === 2){
-            ctx.textAlign = "center";
-            drawWrapped(ctx, value, x + 6, y + 22, cols[idx] - 12, 15, 2);
-          } else {
-            ctx.textAlign = "left";
-            drawWrapped(ctx, value, x + 8, y + 22, cols[idx] - 16, 16, 5);
-          }
-          x += cols[idx];
-        });
-        y += rowH;
-      });
-      ctx.textAlign = "left";
-      downloadCanvas(canvas, fileName);
-    }
-    async function downloadElementImage(elementId, fileName, minWidth=1120){
-      if(elementId === "kpiPrintArea"){
-        downloadKpiCanvasImage(fileName);
-        return;
-      }
-      if(elementId === "dispPrintArea"){
-        downloadAvailabilityCanvasImage(fileName);
-        return;
-      }
-      const {wrapper, clone} = await makeExportClone(elementId, minWidth);
-      try {
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const rect = clone.getBoundingClientRect();
-        const width = Math.ceil(Math.max(clone.scrollWidth, rect.width, minWidth));
-        const height = Math.ceil(Math.max(clone.scrollHeight, rect.height, 320));
-        const styleText = allPageStyles(`
-          *{box-sizing:border-box}
-          body{margin:0;background:#fff;font-family:Segoe UI,Arial,sans-serif;color:#1f2937}
-          .panel{box-shadow:none !important}
-          .table-wrap{max-height:none !important;overflow:visible !important}
-          th{position:static !important}
-        `);
-        const serialized = new XMLSerializer().serializeToString(clone);
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${styleText.replace(/<\/style/gi, "<\\/style")}</style>${serialized}</div></foreignObject></svg>`;
-        const imageUrl = URL.createObjectURL(new Blob([svg], {type:"image/svg+xml;charset=utf-8"}));
-        const img = new Image();
-        img.decoding = "async";
-        const loaded = new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
-        img.src = imageUrl;
-        await loaded;
-        const scale = Math.min(window.devicePixelRatio || 2, 2);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.ceil(width * scale);
-        canvas.height = Math.ceil(height * scale);
-        const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.setTransform(scale, 0, 0, scale, 0, 0);
-        ctx.drawImage(img, 0, 0, width, height);
-        URL.revokeObjectURL(imageUrl);
-        const pngUrl = canvas.toDataURL("image/png");
-        triggerDownload(pngUrl, fileName);
-      } finally {
-        wrapper.remove();
-      }
-    }
-    async function printElementReport(elementId, title, minWidth=1120){
-      const {wrapper, clone} = await makeExportClone(elementId, minWidth);
-      try {
-        const popup = window.open("", "_blank", "width=1280,height=900");
-        if(!popup) {
-          window.print();
-          return;
-        }
-        const styles = allPageStyles(`
-          @page{size:landscape;margin:8mm}
-          body{margin:0;background:#fff;font-family:Segoe UI,Arial,sans-serif;color:#1f2937}
-          main{width:100%;padding:0}
-          .panel{box-shadow:none !important;border:0 !important;border-radius:0 !important;padding:0 !important}
-          .table-wrap{max-height:none !important;overflow:visible !important;border:1px solid #d8dee8}
-          th{position:static !important}
-          .kpi-format-board{display:grid !important;grid-template-columns:minmax(230px,.82fr) minmax(420px,1.36fr) minmax(230px,.82fr) !important;gap:10px}
-          .chart,.chart-plot{overflow:visible !important}
-        `);
-        popup.document.open();
-        popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${styles.replace(/<\/style/gi, "<\\/style")}</style></head><body><main class="print-export">${clone.outerHTML}</main><script>window.onload=()=>setTimeout(()=>window.print(),350);<\/script></body></html>`);
-        popup.document.close();
-      } finally {
-        wrapper.remove();
-      }
-    }
-    function setKpiExportMeta(){
-      $("kpiExportTitle").textContent = $("kpiTitle").textContent || "Reporte KPI";
-      $("kpiExportPeriod").textContent = $("portalUpdated").textContent || "";
-    }
-    function selectedKpiOfficialFormat(){
-      const group = $("kpiGroup").value || "";
-      const formats = {
-        "Equipos de Barrenacion": {
-          pdf: "/static/kpi_formats/kpi_barrenacion.pdf",
-          png: "/static/kpi_formats/kpi_barrenacion.png",
-          pdfName: "Formato_KPI_Equipos_de_Barrenacion_2026-05-20.pdf",
-          pngName: "Formato_KPI_Equipos_de_Barrenacion_2026-05-20.png",
-        },
-        "Equipos de Rezagado": {
-          pdf: "/static/kpi_formats/kpi_rezagado.pdf",
-          png: "/static/kpi_formats/kpi_rezagado.png",
-          pdfName: "Formato_KPI_Equipos_de_Rezagado_2026-05-20.pdf",
-          pngName: "Formato_KPI_Equipos_de_Rezagado_2026-05-20.png",
-        },
-        "KPI Aceites": {
-          pdf: "/static/kpi_formats/kpi_aceites.pdf",
-          png: "/static/kpi_formats/kpi_aceites.png",
-          pdfName: "Formato_KPI_KPI_Aceites_2026-05-20.pdf",
-          pngName: "Formato_KPI_KPI_Aceites_2026-05-20.png",
-        },
-        "KPI Llantas": {
-          pdf: "/static/kpi_formats/kpi_llantas.pdf",
-          png: "/static/kpi_formats/kpi_llantas.png",
-          pdfName: "Formato_KPI_KPI_Llantas_2026-05-20.pdf",
-          pngName: "Formato_KPI_KPI_Llantas_2026-05-20.png",
-        },
-      };
-      return formats[group] || null;
-    }
-    async function downloadKpiPdfForSelection(){
-      const official = selectedKpiOfficialFormat();
-      if(official){
-        triggerDownload(official.pdf, official.pdfName);
-        return;
-      }
-      await printElementReport("kpiPrintArea", $("kpiTitle").textContent || "Reporte KPI");
-    }
-    async function downloadKpiImageForSelection(){
-      const official = selectedKpiOfficialFormat();
-      if(official){
-        triggerDownload(official.png, official.pngName);
-        return;
-      }
-      await downloadElementImage("kpiPrintArea", `${cleanFileName($("kpiTitle").textContent)}_${fileStamp()}.png`, 1260);
-    }
     async function load(){
-      const [r, p] = await Promise.all([
+      const [r, p, prod, req] = await Promise.all([
         fetch("/api/filter-inventory", {headers: headers()}),
-        fetch("/api/portal", {headers: headers()})
+        fetch("/api/portal", {headers: headers()}),
+        fetch("/api/products?limit=25000", {headers: headers()}),
+        fetch("/api/requisitions", {headers: headers()})
       ]);
       if(!r.ok) throw new Error(await apiError(r));
       if(!p.ok) throw new Error(await apiError(p));
+      if(!prod.ok) throw new Error(await apiError(prod));
+      if(!req.ok) throw new Error(await apiError(req));
       data = await r.json();
       portal = await p.json();
+      products = (await prod.json()).products || [];
+      const reqPayload = await req.json();
+      requisitions = reqPayload.requisitions || [];
+      if(!currentReqId && !$("reqFolio").value) newRequisition(reqPayload.next_folio);
       renderAll();
     }
     function renderStats(){
@@ -1688,7 +1624,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const report = oilRowsForPeriod();
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
       $("kpiTitle").textContent = `KPI Aceites | ${report.start} a ${report.end}`;
-      setKpiExportMeta();
       const litersPerHour = report.totals.worked_hours ? report.totals.total_liters / report.totals.worked_hours : 0;
       const activeRows = report.rows.filter(row => row.worked_hours > 0 || row.total_liters > 0);
       $("kpiCards").innerHTML = [
@@ -1715,7 +1650,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const summary = tire.summary || {};
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
       $("kpiTitle").textContent = "KPI Llantas";
-      setKpiExportMeta();
       $("kpiCards").innerHTML = [
         ["Llantas", `${summary.total || rows.length || 0}`, "registradas", 100, false],
         ["Vida prom.", pct(summary.avg_life || 0), "igual a % piso", Number(summary.avg_life || 0), false],
@@ -1755,7 +1689,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const metaUtilization = Number(settings.meta_utilization || 75);
       const metaTmef = Number(settings.meta_tmef || 8);
       const metaTmpr = Number(settings.meta_tmpr || 4);
-      setKpiExportMeta();
       $("kpiCards").innerHTML = [
         metricCardHtml("% Disponibilidad", pct(report.totals.availability), `Meta ${pct(metaAvailability)}`, report.totals.availability, report.totals.availability < metaAvailability),
         metricCardHtml("Meta", pct(metaAvailability), `${one(report.totals.availability - metaAvailability)}%`, metaAvailability, false),
@@ -1830,15 +1763,157 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return "";
     }
     function renderDisponibilidad(){
+      const search = ($("dispSearch").value || "").toUpperCase();
       const status = $("dispStatus").value;
-      const rows = availabilityRowsForCurrentFilters();
-      const statusLabel = status || "Todas";
-      $("dispTitle").textContent = `Disponibilidad | ${statusLabel}`;
-      $("dispCount").textContent = `${rows.length} renglon(es)`;
-      $("dispExportDate").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "";
+      const rows = (portal.availability || []).filter(row => {
+        const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
+        return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
+      });
       $("dispTable").innerHTML = `<thead><tr><th>Categoria</th><th>Equipo</th><th>No ECO</th><th>Condicion</th><th>Observaciones</th></tr></thead><tbody>` +
         rows.map(row => `<tr><td>${esc(row.category)}</td><td>${esc(row.equipment)}</td><td>${esc(row.eco)}</td><td class="condition-cell ${conditionClass(row.condition)}">${esc(row.condition)}</td><td class="${Number(row.highlight_observation || 0) ? "highlight" : ""}">${esc(row.observations)}</td></tr>`).join("") +
         `</tbody>`;
+    }
+    function reqFormData(){
+      return {
+        id: currentReqId,
+        folio: $("reqFolio").value,
+        request_date: $("reqDate").value,
+        authorization_date: $("reqAuthDate").value,
+        equipment: $("reqEquipment").value,
+        cost_center: $("reqCostCenter").value,
+        request_area: $("reqArea").value,
+        location: $("reqLocation").value,
+        requesting_unit: $("reqRequestingUnit").value,
+        operating_unit: $("reqOperatingUnit").value,
+        priority: $("reqPriority").value,
+        recommendation: $("reqRecommendation").value,
+        status: $("reqReqStatus").value,
+        notes: $("reqNotes").value,
+        items: currentReqItems
+      };
+    }
+    function setReqForm(row){
+      currentReqId = row?.id || null;
+      currentReqItems = (row?.items || []).map(item => ({...item}));
+      currentReqItemIndex = null;
+      $("reqFolio").value = row?.folio || "";
+      $("reqDate").value = row?.request_date || toIsoDate(new Date());
+      $("reqAuthDate").value = row?.authorization_date || $("reqDate").value;
+      $("reqEquipment").value = row?.equipment || "PARA STOCK";
+      $("reqCostCenter").value = row?.cost_center || "";
+      $("reqArea").value = row?.request_area || "MTTO";
+      $("reqLocation").value = row?.location || "PROVIDENCIA";
+      $("reqRequestingUnit").value = row?.requesting_unit || "TALLER CENTRAL";
+      $("reqOperatingUnit").value = row?.operating_unit || "PROVIDENCIA";
+      $("reqPriority").value = row?.priority || "URGENTE";
+      $("reqRecommendation").value = row?.recommendation || "ORIGINAL";
+      $("reqReqStatus").value = row?.status || "Abierta";
+      $("reqNotes").value = row?.notes || "";
+      clearReqItem();
+      renderReqItems();
+      $("reqStatus").textContent = currentReqId ? `Editando ${$("reqFolio").value}` : "Nueva requisicion";
+    }
+    function newRequisition(nextFolio=""){
+      setReqForm({ folio: nextFolio || "", request_date: toIsoDate(new Date()), authorization_date: toIsoDate(new Date()), items: [] });
+    }
+    function clearReqItem(){
+      currentReqItemIndex = null;
+      $("reqItemQty").value = "1";
+      $("reqItemUnit").value = "PZA";
+      $("reqItemPart").value = "";
+      $("reqItemDesc").value = "";
+    }
+    function addReqItem(){
+      const item = { quantity:Number($("reqItemQty").value || 1), unit:$("reqItemUnit").value || "PZA", part_number:$("reqItemPart").value.trim(), description:$("reqItemDesc").value.trim() };
+      if(!item.part_number && !item.description) return alert("Captura No. parte o descripcion.");
+      if(currentReqItemIndex == null) currentReqItems.push(item); else currentReqItems[currentReqItemIndex] = item;
+      clearReqItem();
+      renderReqItems();
+    }
+    function editReqItem(index){
+      const item = currentReqItems[index];
+      if(!item) return;
+      currentReqItemIndex = index;
+      $("reqItemQty").value = item.quantity || 1;
+      $("reqItemUnit").value = item.unit || "PZA";
+      $("reqItemPart").value = item.part_number || "";
+      $("reqItemDesc").value = item.description || "";
+    }
+    function deleteReqItem(){
+      if(currentReqItemIndex == null) return alert("Selecciona una partida.");
+      currentReqItems.splice(currentReqItemIndex, 1);
+      clearReqItem();
+      renderReqItems();
+    }
+    function renderReqItems(){
+      $("reqItemsTable").innerHTML = `<thead><tr><th>Cant.</th><th>Unidad</th><th>No. parte</th><th>Descripcion</th></tr></thead><tbody>` +
+        currentReqItems.map((item, idx) => `<tr data-req-item="${idx}" style="cursor:pointer"><td>${num(item.quantity)}</td><td>${esc(item.unit)}</td><td>${esc(item.part_number)}</td><td>${esc(item.description)}</td></tr>`).join("") + `</tbody>`;
+      document.querySelectorAll("[data-req-item]").forEach(row => row.addEventListener("click", () => editReqItem(Number(row.dataset.reqItem))));
+    }
+    async function loadReq(rowId){
+      const r = await fetch(`/api/requisitions/${rowId}`, {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      const payload = await r.json();
+      setReqForm(payload.requisition);
+    }
+    async function saveReq(){
+      if(!hasApiKey(true)) return;
+      const r = await fetch("/api/requisitions", {method:"POST", headers:headers(true), body:JSON.stringify(reqFormData())});
+      if(!r.ok) return alert(await apiError(r));
+      const payload = await r.json();
+      setReqForm(payload.requisition);
+      await load();
+    }
+    async function deleteReq(){
+      if(!currentReqId) return alert("Selecciona una requisicion.");
+      if(!hasApiKey(true)) return;
+      if(!confirm(`Se eliminara la requisicion ${$("reqFolio").value}.`)) return;
+      const r = await fetch(`/api/requisitions/${currentReqId}`, {method:"DELETE", headers:headers()});
+      if(!r.ok) return alert(await apiError(r));
+      currentReqId = null;
+      await load();
+    }
+    async function ensureReqForOutput(){
+      if(currentReqId) return currentReqId;
+      await saveReq();
+      return currentReqId;
+    }
+    async function reqPdf(print=false){
+      const id = await ensureReqForOutput();
+      if(!id) return;
+      if(!currentReqItems.length) return alert("Agrega al menos una partida antes de generar PDF.");
+      const url = `/api/requisitions/${id}/pdf`;
+      if(print){
+        const win = window.open(url, "_blank");
+        if(!win) alert("No se pudo abrir la ventana de impresion.");
+        return;
+      }
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Requisicion_${$("reqFolio").value || id}.pdf`;
+      a.click();
+    }
+    function renderReqProducts(){
+      const q = ($("reqProductSearch").value || "").toUpperCase();
+      const rows = (products || []).filter(row => !q || [row.code,row.product].join(" ").toUpperCase().includes(q)).slice(0,120);
+      $("reqProductsTable").innerHTML = `<thead><tr><th>Clave</th><th>Producto</th></tr></thead><tbody>` +
+        rows.map(row => `<tr data-product-code="${esc(row.code)}" data-product-name="${esc(row.product)}" style="cursor:pointer"><td>${esc(row.code)}</td><td>${esc(row.product)}</td></tr>`).join("") + `</tbody>`;
+      document.querySelectorAll("[data-product-code]").forEach(row => row.addEventListener("click", () => {
+        $("reqItemPart").value = row.dataset.productCode || "";
+        $("reqItemDesc").value = row.dataset.productName || "";
+      }));
+    }
+    function renderReqList(){
+      $("reqItemUnit").innerHTML = ["PZA","JGO","KIT","SERV","LT","L","GAL","ML","TAMBO","TAMBOR","CUBETA","BOTE","LATA","CAJA","PAQUETE","BOLSA","MTS","M2","M3","KG","GR","TON","ROLLO"].map(unit => `<option>${esc(unit)}</option>`).join("");
+      const rows = requisitions || [];
+      $("reqListTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Estatus</th><th>Partidas</th></tr></thead><tbody>` +
+        rows.map(row => `<tr data-req-id="${row.id}" style="cursor:pointer"><td>${esc(row.folio)}</td><td>${esc(row.request_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.status)}</td><td>${num(row.items_count)}</td></tr>`).join("") + `</tbody>`;
+      document.querySelectorAll("[data-req-id]").forEach(row => row.addEventListener("click", () => loadReq(row.dataset.reqId).catch(showError)));
+    }
+    function renderRequisiciones(){
+      renderReqProducts();
+      renderReqList();
+      renderReqItems();
     }
     function renderAll(){
       renderStats();
@@ -1848,6 +1923,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderPreventives();
       renderBitacora();
       renderDisponibilidad();
+      renderRequisiciones();
       renderFilters();
       renderInventory();
       renderMovements();
@@ -1859,8 +1935,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     $("renderKpiBtn").addEventListener("click", renderDashboard);
-    $("printKpiBtn").addEventListener("click", () => runButtonTask("printKpiBtn", "Descargando PDF...", downloadKpiPdfForSelection).catch(showError));
-    $("downloadKpiImageBtn").addEventListener("click", () => runButtonTask("downloadKpiImageBtn", "Descargando imagen...", downloadKpiImageForSelection).catch(showError));
+    $("printKpiBtn").addEventListener("click", () => window.print());
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
@@ -1870,7 +1945,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dispSearch").addEventListener("input", renderDisponibilidad);
     $("dispStatus").addEventListener("change", renderDisponibilidad);
     $("renderDispBtn").addEventListener("click", renderDisponibilidad);
-    $("downloadDispImageBtn").addEventListener("click", () => runButtonTask("downloadDispImageBtn", "Generando imagen...", () => downloadElementImage("dispPrintArea", `Disponibilidad_MGA_${fileStamp()}.png`, 1180)).catch(showError));
+    $("reqProductSearch").addEventListener("input", renderReqProducts);
+    $("reqNewBtn").addEventListener("click", () => newRequisition());
+    $("reqSaveBtn").addEventListener("click", () => saveReq().catch(showError));
+    $("reqDeleteBtn").addEventListener("click", () => deleteReq().catch(showError));
+    $("reqAddItemBtn").addEventListener("click", addReqItem);
+    $("reqClearItemBtn").addEventListener("click", clearReqItem);
+    $("reqDeleteItemBtn").addEventListener("click", deleteReqItem);
+    $("reqPdfBtn").addEventListener("click", () => reqPdf(false).catch(showError));
+    $("reqPrintBtn").addEventListener("click", () => reqPdf(true).catch(showError));
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
@@ -1886,25 +1969,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("movementBtn").addEventListener("click", async () => {
       if(!hasApiKey(true)) return;
       const payload = { part_number:$("movPart").value, description:$("movDesc").value, movement_type:$("movType").value, quantity:$("movQty").value, unit:$("movUnit").value, equipment_code:$("movEquipment").value, service_interval:$("movService").value, reference:$("movRef").value, created_by:$("movUser").value, notes:$("movNotes").value };
-      setFormMessage("movementMessage", "Guardando movimiento...", "");
       const r = await fetch("/api/filter-inventory/movement", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
-      if(!r.ok) {
-        const message = await apiError(r);
-        setFormMessage("movementMessage", r.status === 401 ? `Clave de almacen incorrecta. ${EDIT_KEY_HELP}` : message, "error");
-        if(r.status === 401) apiKey.focus();
-        return;
-      }
+      if(!r.ok) return alert(await apiError(r));
       ["movPart","movDesc","movRef","movNotes"].forEach(id => $(id).value = "");
       await load();
-      setFormMessage("movementMessage", "Movimiento guardado y concentrado actualizado.", "ok");
     });
     $("importBtn").addEventListener("click", async () => {
-      const file = $("importFile").files[0]; if(!file) return setImportMessage("Selecciona un Excel.");
+      const file = $("importFile").files[0]; if(!file) return alert("Selecciona un Excel.");
       if(!hasApiKey(true)) return;
       const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
       const r = await fetch("/api/filter-inventory/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), replace:true})});
       const payload = await r.json().catch(() => ({}));
-      $("importResult").textContent = r.status === 401 ? `Clave de almacen incorrecta. ${EDIT_KEY_HELP}` : JSON.stringify(payload, null, 2);
+      $("importResult").textContent = JSON.stringify(payload, null, 2);
       if(r.ok) await load();
     });
     load().catch(showError);
@@ -1994,12 +2070,8 @@ async def replace_filter_inventory_snapshot(request: Request, _auth: str | None 
 
 
 @app.post("/api/filter-inventory/import")
-async def import_filter_inventory(
-    request: Request,
-    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
-    _warehouse_auth: str | None = Header(default=None, alias="X-MGA-Warehouse-Key"),
-) -> dict[str, Any]:
-    require_inventory_key(_auth, _warehouse_auth)
+async def import_filter_inventory(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Carga invalida.")
@@ -2091,12 +2163,8 @@ def export_filter_inventory(_auth: str | None = Header(default=None, alias="X-MG
 
 
 @app.post("/api/filter-inventory/movement")
-async def save_filter_inventory_movement(
-    request: Request,
-    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
-    _warehouse_auth: str | None = Header(default=None, alias="X-MGA-Warehouse-Key"),
-) -> dict[str, Any]:
-    require_inventory_key(_auth, _warehouse_auth)
+async def save_filter_inventory_movement(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Movimiento invalido.")
