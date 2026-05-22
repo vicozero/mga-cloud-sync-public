@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image as ExcelImage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas as pdf_canvas
@@ -239,6 +240,7 @@ if STATIC_DIR.exists():
 PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
 REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
 DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
+DIESEL_LOGO_PATH = STATIC_DIR / "mga-corner-logo.jfif"
 REQUISITION_UNITS = [
     "PZA", "JGO", "KIT", "SERV", "LT", "L", "GAL", "ML", "TAMBO", "TAMBOR",
     "CUBETA", "BOTE", "LATA", "CAJA", "PAQUETE", "BOLSA", "MTS", "M2", "M3",
@@ -969,6 +971,21 @@ def populate_diesel_workbook(wb, payload: dict[str, Any]) -> None:
         pass
 
 
+def add_diesel_logo_to_workbook(wb) -> None:
+    if not DIESEL_LOGO_PATH.exists():
+        return
+    for ws in wb.worksheets:
+        try:
+            if getattr(ws, "_images", []):
+                continue
+            logo = ExcelImage(str(DIESEL_LOGO_PATH))
+            logo.width = 118
+            logo.height = 54
+            ws.add_image(logo, "A1")
+        except Exception:
+            continue
+
+
 def diesel_workbook_bytes(payload: dict[str, Any]) -> bytes:
     if DIESEL_TEMPLATE_PATH.exists():
         wb = load_workbook(DIESEL_TEMPLATE_PATH, data_only=False)
@@ -981,6 +998,7 @@ def diesel_workbook_bytes(payload: dict[str, Any]) -> bytes:
         wb.create_sheet("RENDIMIENTO")
     try:
         populate_diesel_workbook(wb, payload)
+        add_diesel_logo_to_workbook(wb)
         out = BytesIO()
         wb.save(out)
         out.seek(0)
