@@ -4,6 +4,7 @@ import base64
 import json
 import math
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -237,6 +238,7 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
 REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
+DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
 REQUISITION_UNITS = [
     "PZA", "JGO", "KIT", "SERV", "LT", "L", "GAL", "ML", "TAMBO", "TAMBOR",
     "CUBETA", "BOTE", "LATA", "CAJA", "PAQUETE", "BOLSA", "MTS", "M2", "M3",
@@ -787,6 +789,204 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
         },
         "updated_at": portal.get("updated_at") or portal.get("generated_at") or utc_now().isoformat(timespec="seconds"),
     }
+
+
+def diesel_equipment_match_key(value: Any) -> str:
+    return "".join(ch for ch in normalize_text(value) if ch.isalnum())
+
+
+def diesel_template_equipment_keys(value: Any) -> list[str]:
+    text = normalize_text(value)
+    if not text or text.startswith("=") or text == "TOTALES":
+        return []
+    candidates = [text, re.sub(r"\([^)]*\)", "", text).strip()]
+    first_token = re.split(r"[\s(]+", text, 1)[0].strip()
+    if first_token:
+        candidates.append(first_token)
+    candidates.extend(re.findall(r"[A-Z]{1,4}[- ]?\d{2,4}", text))
+    keys: list[str] = []
+    for candidate in candidates:
+        key = diesel_equipment_match_key(candidate)
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def diesel_shift_key(value: Any) -> str:
+    text = normalize_text(value)
+    if "2" in text or "SEG" in text:
+        return "2"
+    return "1"
+
+
+def diesel_month_year_from_start(start: str) -> tuple[int, int]:
+    try:
+        parsed = datetime.strptime(start, "%Y-%m-%d").date()
+    except Exception:
+        parsed = utc_now().date()
+    return parsed.month, parsed.year
+
+
+def diesel_template_row_map(wb) -> dict[str, int]:
+    if "DIA 01" not in wb.sheetnames:
+        return {}
+    ws = wb["DIA 01"]
+    row_map: dict[str, int] = {}
+    for row_idx in range(7, min(ws.max_row, 35)):
+        for key in diesel_template_equipment_keys(ws.cell(row_idx, 1).value):
+            row_map.setdefault(key, row_idx)
+    return row_map
+
+
+def diesel_aggregate_records(records: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
+    buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for record in records:
+        work_date = diesel_iso_or_none(record.get("work_date")) or ""
+        key = diesel_equipment_match_key(record.get("equipment"))
+        if not work_date or not key:
+            continue
+        shift = diesel_shift_key(record.get("shift"))
+        bucket = buckets.setdefault(
+            (work_date, key, shift),
+            {
+                "horometer_initial": 0.0,
+                "horometer_final": 0.0,
+                "diesel_liters": 0.0,
+                "operator": "",
+                "dispatcher": "",
+                "supervisor": "",
+            },
+        )
+        hi = parse_float(record.get("horometer_initial"), 0)
+        hf = parse_float(record.get("horometer_final"), 0)
+        if hi > 0 and (not bucket["horometer_initial"] or hi < bucket["horometer_initial"]):
+            bucket["horometer_initial"] = hi
+        if hf > 0 and hf > bucket["horometer_final"]:
+            bucket["horometer_final"] = hf
+        bucket["diesel_liters"] += max(parse_float(record.get("diesel_liters"), 0), 0)
+        for field in ("operator", "dispatcher", "supervisor"):
+            value = normalize_text(record.get(field))
+            if value:
+                bucket[field] = value
+    return buckets
+
+
+def set_excel_value_or_blank(ws, row_idx: int, col_idx: int, value: Any) -> None:
+    number = parse_float(value, 0)
+    ws.cell(row_idx, col_idx).value = number if number else None
+
+
+def populate_diesel_workbook(wb, payload: dict[str, Any]) -> None:
+    month_names = [
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE",
+    ]
+    start = payload.get("start") or utc_now().date().isoformat()
+    month, year = diesel_month_year_from_start(start)
+    row_map = diesel_template_row_map(wb)
+    buckets = diesel_aggregate_records(payload.get("records") or [])
+    days_by_date = {row.get("work_date"): row for row in (payload.get("days") or []) if isinstance(row, dict)}
+    report_rows = {}
+    for row in payload.get("rows") or []:
+        if isinstance(row, dict):
+            key = diesel_equipment_match_key(row.get("equipment"))
+            if key:
+                report_rows[key] = row
+
+    for day in range(1, 32):
+        sheet_name = f"DIA {day:02d}"
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        try:
+            work_date = datetime(year, month, day).date().isoformat()
+        except ValueError:
+            continue
+        ws["B3"] = day
+        ws["C3"] = month_names[month - 1]
+        ws["D3"] = year
+        day_meta = days_by_date.get(work_date, {})
+        ws["O2"] = parse_float(day_meta.get("diesel_received"), 0)
+        ws["P2"] = parse_float(day_meta.get("initial_stock"), 0)
+        ws["Q2"] = "=P2-O35"
+        for row_idx in range(7, 35):
+            for col_idx in (2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14):
+                ws.cell(row_idx, col_idx).value = None
+            ws.cell(row_idx, 15).value = f"=C{row_idx}+J{row_idx}"
+            ws.cell(row_idx, 16).value = f"=G{row_idx}-B{row_idx}"
+            ws.cell(row_idx, 17).value = f"=N{row_idx}-I{row_idx}"
+        ws["C35"] = "=SUM(C7:C34)"
+        ws["J35"] = "=SUM(J7:J34)"
+        ws["O35"] = "=C35+J35"
+        for key, row_idx in row_map.items():
+            for shift, columns in (("1", (2, 3, 4, 5, 6, 7)), ("2", (9, 10, 11, 12, 13, 14))):
+                bucket = buckets.get((work_date, key, shift))
+                if not bucket:
+                    continue
+                hi_col, liters_col, operator_col, dispatcher_col, supervisor_col, hf_col = columns
+                set_excel_value_or_blank(ws, row_idx, hi_col, bucket["horometer_initial"])
+                set_excel_value_or_blank(ws, row_idx, liters_col, bucket["diesel_liters"])
+                ws.cell(row_idx, operator_col).value = bucket["operator"] or None
+                ws.cell(row_idx, dispatcher_col).value = bucket["dispatcher"] or None
+                ws.cell(row_idx, supervisor_col).value = bucket["supervisor"] or None
+                set_excel_value_or_blank(ws, row_idx, hf_col, bucket["horometer_final"])
+
+    if "CONSUMO DIARIO" in wb.sheetnames:
+        ws = wb["CONSUMO DIARIO"]
+        for day in range(1, 32):
+            row_idx = day + 3
+            ws.cell(row_idx, 1).value = day
+            ws.cell(row_idx, 2).value = f"='DIA {day:02d}'!$O$35"
+            ws.cell(row_idx, 3).value = f"='DIA {day:02d}'!$O$2"
+            ws.cell(row_idx, 4).value = f"='DIA {day:02d}'!$Q$2"
+            try:
+                work_date = datetime(year, month, day).date().isoformat()
+            except ValueError:
+                continue
+            ws.cell(row_idx, 6).value = (days_by_date.get(work_date, {}).get("supplier") or None)
+
+    if "RENDIMIENTO" in wb.sheetnames:
+        ws = wb["RENDIMIENTO"]
+        dia = wb["DIA 01"] if "DIA 01" in wb.sheetnames else None
+        for report_row_idx, day_row_idx in zip(range(6, 34), range(7, 35)):
+            keys = diesel_template_equipment_keys(dia.cell(day_row_idx, 1).value) if dia else []
+            row = next((report_rows[key] for key in keys if key in report_rows), None)
+            ws.cell(report_row_idx, 2).value = f"='DIA 01'!A{day_row_idx}"
+            ws.cell(report_row_idx, 3).value = (row or {}).get("condition") or "DISPONIBLE"
+            hi = parse_float((row or {}).get("horometer_initial"), 0)
+            hf = parse_float((row or {}).get("horometer_final"), 0)
+            ws.cell(report_row_idx, 4).value = hi if hi else None
+            ws.cell(report_row_idx, 5).value = hf if hf else None
+            ws.cell(report_row_idx, 6).value = f"=E{report_row_idx}-D{report_row_idx}"
+            ws.cell(report_row_idx, 7).value = "=" + "+".join([f"'DIA {day:02d}'!O{day_row_idx}" for day in range(1, 32)])
+            ws.cell(report_row_idx, 8).value = f"=G{report_row_idx}/F{report_row_idx}"
+
+    try:
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
+    except Exception:
+        pass
+
+
+def diesel_workbook_bytes(payload: dict[str, Any]) -> bytes:
+    if DIESEL_TEMPLATE_PATH.exists():
+        wb = load_workbook(DIESEL_TEMPLATE_PATH, data_only=False)
+    else:
+        wb = Workbook()
+        wb.active.title = "DIA 01"
+        for day in range(2, 32):
+            wb.create_sheet(f"DIA {day:02d}")
+        wb.create_sheet("CONSUMO DIARIO")
+        wb.create_sheet("RENDIMIENTO")
+    try:
+        populate_diesel_workbook(wb, payload)
+        out = BytesIO()
+        wb.save(out)
+        out.seek(0)
+        return out.getvalue()
+    finally:
+        wb.close()
 
 
 def filter_match_keys(item: dict[str, Any]) -> list[str]:
@@ -1485,6 +1685,23 @@ def get_diesel(
         return diesel_payload(session, start, end, meta_lh or None)
 
 
+@app.get("/api/diesel/export")
+def get_diesel_export(
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    meta_lh: float = Query(default=0),
+) -> StreamingResponse:
+    with SessionLocal() as session:
+        payload = diesel_payload(session, start, end, meta_lh or None)
+    data = diesel_workbook_bytes(payload)
+    filename = f"Control_Diesel_{payload.get('start','')}_{payload.get('end','')}.xlsx".replace(" ", "_")
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/api/diesel/records")
 async def save_diesel_record_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
@@ -1816,7 +2033,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <button class="btn secondary" id="dieselApplyPeriodBtn">Aplicar periodo</button>
         <button class="btn" id="dieselRefreshBtn">Actualizar diesel</button>
         <button class="btn secondary" id="dieselPrintBtn">Imprimir reporte</button>
-        <button class="btn secondary" id="dieselCsvBtn">Descargar CSV</button>
+        <button class="btn secondary" id="dieselExcelBtn">Descargar Excel</button>
       </div>
       <div class="stats" id="dieselStats"></div>
       <div class="grid2">
@@ -2155,7 +2372,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("dieselDayDate").value) $("dieselDayDate").value = today;
       $("dieselMeta").value = diesel.meta_lh || (portal.settings || {}).meta_diesel_lh || $("dieselMeta").value || 25;
       const rawGroups = portal.kpi_groups && portal.kpi_groups.length ? [...portal.kpi_groups] : ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"];
-      ["KPI Aceites", "KPI Llantas"].forEach(group => { if(!rawGroups.includes(group)) rawGroups.push(group); });
+      ["KPI Aceites", "KPI Llantas", "KPI Diesel"].forEach(group => { if(!rawGroups.includes(group)) rawGroups.push(group); });
       const groups = rawGroups.map(g => ({value:g, label:g}));
       const previousGroup = $("kpiGroup").value;
       $("kpiGroup").innerHTML = groups.map(g => `<option value="${esc(g.value)}">${esc(g.label)}</option>`).join("");
@@ -2365,6 +2582,76 @@ WAREHOUSE_HTML = r"""<!doctype html>
           return `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.tire_code)}</td><td>${esc(row.position)}</td><td>${esc(row.brand)}</td><td>${one(row.hours_used)}</td><td>${one(row.life_remaining_hours)}</td><td>${pct(value)}</td><td>${pct(value)}</td><td><span class="pill ${cls}">${esc(status || "S/D")}</span></td><td>${esc(row.recommendation || "")}</td></tr>`;
         }).join("") + `</tbody>`;
     }
+    function dieselKpiRowsForPeriod(){
+      const start = $("kpiStart").value;
+      const end = $("kpiEnd").value;
+      const meta = Number($("dieselMeta").value || diesel.meta_lh || (portal.settings || {}).meta_diesel_lh || 25);
+      const grouped = {};
+      (diesel.records || []).filter(row => inRange(row.work_date, start, end)).forEach(record => {
+        const equipment = String(record.equipment || "").trim().toUpperCase();
+        if(!equipment) return;
+        if(!grouped[equipment]){
+          grouped[equipment] = {equipment, condition:record.condition || "DISPONIBLE", hi:[], hf:[], worked_hours:0, diesel_liters:0};
+        }
+        const row = grouped[equipment];
+        row.condition = record.condition || row.condition;
+        const hi = Number(record.horometer_initial || 0);
+        const hf = Number(record.horometer_final || 0);
+        if(hi > 0) row.hi.push(hi);
+        if(hf > 0) row.hf.push(hf);
+        row.worked_hours += Number(record.worked_hours || 0);
+        row.diesel_liters += Number(record.diesel_liters || 0);
+      });
+      const rows = Object.values(grouped).map(row => {
+        const rendimiento = row.worked_hours > 0 ? row.diesel_liters / row.worked_hours : null;
+        let status = "OK";
+        if(row.diesel_liters <= 0) status = "SIN CONSUMO";
+        else if(row.worked_hours <= 0) status = "SIN HORAS";
+        else if(rendimiento !== null && rendimiento > meta) status = "ALTO";
+        return {
+          ...row,
+          horometer_initial: row.hi.length ? Math.min(...row.hi) : 0,
+          horometer_final: row.hf.length ? Math.max(...row.hf) : 0,
+          rendimiento_lh: rendimiento,
+          status,
+        };
+      }).sort((a,b) => b.diesel_liters - a.diesel_liters || a.equipment.localeCompare(b.equipment));
+      const totals = rows.reduce((acc, row) => {
+        acc.diesel_liters += Number(row.diesel_liters || 0);
+        acc.worked_hours += Number(row.worked_hours || 0);
+        if(["ALTO","SIN HORAS"].includes(row.status)) acc.critical += 1;
+        return acc;
+      }, {diesel_liters:0, worked_hours:0, critical:0});
+      totals.rendimiento_lh = totals.worked_hours > 0 ? totals.diesel_liters / totals.worked_hours : null;
+      return {start, end, meta, rows, totals};
+    }
+    function renderDieselDashboard(){
+      setDashboardMode("special");
+      const report = dieselKpiRowsForPeriod();
+      $("portalUpdated").textContent = diesel.updated_at ? `Actualizado ${diesel.updated_at}` : (portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar");
+      $("kpiTitle").textContent = `KPI Diesel | ${report.start} a ${report.end}`;
+      const avg = report.totals.rendimiento_lh;
+      $("kpiCards").innerHTML = [
+        ["Equipos", `${report.rows.length}`, "con captura diesel", 100, false],
+        ["Consumo total", `${one(report.totals.diesel_liters)} L`, "litros capturados", Math.min(report.totals.diesel_liters / 500, 100), false],
+        ["Horas trabajadas", `${one(report.totals.worked_hours)} h`, "horas diesel", Math.min(report.totals.worked_hours / 10, 100), false],
+        ["Rendimiento", avg == null ? "S/H" : `${one(avg)} L/H`, `Meta ${one(report.meta)} L/H`, avg != null ? Math.min((avg / Math.max(report.meta, 1)) * 100, 100) : 0, avg != null && avg > report.meta],
+      ].map(([label, value, note, width, bad]) => metricCardHtml(label, value, note, width, bad)).join("");
+      const chartRows = report.rows.filter(row => row.diesel_liters > 0 || row.worked_hours > 0).slice(0,18);
+      const maxLiters = Math.max(...chartRows.map(row => Number(row.diesel_liters || 0)), 1);
+      $("kpiChart").innerHTML = chartRows.map(row => {
+        const h = Math.max((Number(row.diesel_liters || 0) / maxLiters) * 210, 4);
+        const bad = ["ALTO","SIN HORAS"].includes(String(row.status || ""));
+        const rend = row.rendimiento_lh == null ? "S/H" : `${one(row.rendimiento_lh)} L/H`;
+        return `<div class="chart-bar ${bad ? "out" : ""}" title="${esc(row.equipment)} ${one(row.diesel_liters)} L | ${esc(rend)}"><span>${one(row.diesel_liters)} L</span><i style="--h:${h}px"></i><b>${esc(row.equipment)}</b></div>`;
+      }).join("") || `<p class="muted">Sin capturas diesel en el periodo.</p>`;
+      $("kpiTable").innerHTML = `<thead><tr><th>Equipo</th><th>Condicion</th><th>HI</th><th>HF</th><th>Hrs Trab</th><th>Diesel L</th><th>Rend. L/H</th><th>Meta</th><th>KPI</th></tr></thead><tbody>` +
+        report.rows.map(row => {
+          const cls = row.status === "OK" ? "ok" : (row.status === "SIN CONSUMO" ? "warn" : "bad");
+          return `<tr><td>${esc(row.equipment)}</td><td>${esc(row.condition)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${row.rendimiento_lh == null ? "S/H" : one(row.rendimiento_lh)}</td><td>${one(report.meta)}</td><td><span class="pill ${cls}">${esc(row.status)}</span></td></tr>`;
+        }).join("") +
+        `<tr><td><b>Total</b></td><td></td><td></td><td></td><td><b>${one(report.totals.worked_hours)}</b></td><td><b>${one(report.totals.diesel_liters)}</b></td><td><b>${report.totals.rendimiento_lh == null ? "S/H" : one(report.totals.rendimiento_lh)}</b></td><td><b>${one(report.meta)}</b></td><td><b>${report.totals.critical} revision</b></td></tr></tbody>`;
+    }
     function renderDashboard(){
       const selectedGroup = $("kpiGroup").value || "";
       if(selectedGroup === "KPI Aceites") {
@@ -2373,6 +2660,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
       if(selectedGroup === "KPI Llantas") {
         renderTireDashboard();
+        return;
+      }
+      if(selectedGroup === "KPI Diesel") {
+        renderDieselDashboard();
         return;
       }
       setDashboardMode("format");
@@ -2769,16 +3060,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!r.ok) return alert(await apiError(r));
       await refreshDiesel();
     }
-    function downloadDieselCsv(){
-      const rows = filteredDieselRows();
-      const csvRows = [["Equipo","Condicion","Horometro inicial","Horometro final","Horas trabajadas","Consumo diesel","Rendimiento L/H","KPI"]];
-      rows.forEach(row => csvRows.push([row.equipment,row.condition,row.horometer_initial,row.horometer_final,row.worked_hours,row.diesel_liters,row.rendimiento_lh ?? "",row.status]));
-      const csv = csvRows.map(row => row.map(value => `"${String(value ?? "").replace(/"/g,'""')}"`).join(",")).join("\n");
-      const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+    async function downloadDieselExcel(){
+      const params = new URLSearchParams({start:$("dieselStart").value, end:$("dieselEnd").value, meta_lh:$("dieselMeta").value || "25"});
+      const r = await fetch(`/api/diesel/export?${params}`, {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `Reporte_Diesel_${$("dieselStart").value}_${$("dieselEnd").value}.csv`;
+      a.download = `Control_Diesel_${$("dieselStart").value}_${$("dieselEnd").value}.xlsx`;
       a.click();
+      URL.revokeObjectURL(a.href);
     }
     function renderAll(){
       renderStats();
@@ -2828,7 +3119,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dieselDeleteBtn").addEventListener("click", () => deleteDieselRecord().catch(showError));
     $("dieselDaySaveBtn").addEventListener("click", () => saveDieselDay().catch(showError));
     $("dieselPrintBtn").addEventListener("click", () => window.print());
-    $("dieselCsvBtn").addEventListener("click", downloadDieselCsv);
+    $("dieselExcelBtn").addEventListener("click", () => downloadDieselExcel().catch(showError));
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
