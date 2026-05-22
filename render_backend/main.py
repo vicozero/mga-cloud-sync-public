@@ -3452,6 +3452,37 @@ WAREHOUSE_HTML = r"""<!doctype html>
         prosermin_liters: split.prosermin_liters,
       };
     }
+    function dieselDayConsumption(date){
+      const day = (diesel.days || []).find(row => row.work_date === date);
+      if(day) return Number(day.diesel_liters || 0);
+      return (diesel.records || [])
+        .filter(row => row.work_date === date)
+        .reduce((sum, row) => sum + Number(row.diesel_liters || 0), 0);
+    }
+    function hasDieselTankEntry(row){
+      return Number(row?.diesel_received || 0) > 0 ||
+        Number(row?.initial_stock || 0) > 0 ||
+        Number(row?.final_stock || 0) > 0 ||
+        Boolean(String(row?.supplier || row?.notes || "").trim());
+    }
+    function dieselPreviousFinalStock(date, fallbackInitial=Number($("dieselInitial").value || 0)){
+      const previous = (diesel.days || [])
+        .filter(row => row.work_date && row.work_date < date && hasDieselTankEntry(row))
+        .sort((a,b) => String(b.work_date).localeCompare(String(a.work_date)))[0];
+      return previous ? Number(previous.final_stock || 0) : fallbackInitial;
+    }
+    function setDieselNumberInput(id, value){
+      $(id).value = Number.isFinite(value) ? one(Math.max(value, 0)) : "0.0";
+    }
+    function updateDieselTankCalc(usePreviousInitial=true, fallbackInitial=Number($("dieselInitial").value || 0)){
+      const date = $("dieselDayDate").value;
+      if(!date) return;
+      if(usePreviousInitial) setDieselNumberInput("dieselInitial", dieselPreviousFinalStock(date, fallbackInitial));
+      const initial = Number($("dieselInitial").value || 0);
+      const received = Number($("dieselReceived").value || 0);
+      const consumed = dieselDayConsumption(date);
+      setDieselNumberInput("dieselFinal", initial + received - consumed);
+    }
     function renderDiesel(){
       renderDieselSelectors();
       const rows = filteredDieselRows();
@@ -3556,6 +3587,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     async function saveDieselDay(){
       if(!hasApiKey(true)) return;
+      updateDieselTankCalc(true);
       const payload = {
         work_date:$("dieselDayDate").value,
         diesel_received:$("dieselReceived").value,
@@ -3627,6 +3659,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dieselSaveBtn").addEventListener("click", () => saveDieselRecord().catch(showError));
     $("dieselDeleteBtn").addEventListener("click", () => deleteDieselRecord().catch(showError));
     $("dieselDaySaveBtn").addEventListener("click", () => saveDieselDay().catch(showError));
+    $("dieselDayDate").addEventListener("change", () => updateDieselTankCalc(true, 0));
+    $("dieselReceived").addEventListener("input", () => updateDieselTankCalc(true));
+    $("dieselInitial").addEventListener("input", () => updateDieselTankCalc(false));
     $("dieselPrintBtn").addEventListener("click", () => window.print());
     $("dieselExcelBtn").addEventListener("click", () => downloadDieselExcel().catch(showError));
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
