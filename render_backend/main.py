@@ -4,7 +4,7 @@ import base64
 import json
 import math
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -182,6 +182,42 @@ class CloudRequisitionItem(Base):
     active: Mapped[int] = mapped_column(Integer, default=1)
 
     requisition: Mapped[CloudRequisition] = relationship(back_populates="items")
+
+
+class DieselRecord(Base):
+    __tablename__ = "mga_diesel_record"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    equipment: Mapped[str] = mapped_column(String(120), default="", index=True)
+    condition: Mapped[str] = mapped_column(String(80), default="DISPONIBLE")
+    shift: Mapped[str] = mapped_column(String(40), default="1")
+    horometer_initial: Mapped[float] = mapped_column(Float, default=0)
+    horometer_final: Mapped[float] = mapped_column(Float, default=0)
+    worked_hours: Mapped[float] = mapped_column(Float, default=0)
+    diesel_liters: Mapped[float] = mapped_column(Float, default=0)
+    operator: Mapped[str] = mapped_column(String(180), default="")
+    dispatcher: Mapped[str] = mapped_column(String(180), default="")
+    supervisor: Mapped[str] = mapped_column(String(180), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(80), default="web")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DieselDay(Base):
+    __tablename__ = "mga_diesel_day"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_date: Mapped[str] = mapped_column(String(20), default="", unique=True, index=True)
+    diesel_received: Mapped[float] = mapped_column(Float, default=0)
+    initial_stock: Mapped[float] = mapped_column(Float, default=0)
+    final_stock: Mapped[float] = mapped_column(Float, default=0)
+    supplier: Mapped[str] = mapped_column(String(180), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(80), default="web")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 engine = create_engine(database_url(), pool_pre_ping=True)
@@ -461,6 +497,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
             "meta_utilization": 75,
             "meta_tmef": 8,
             "meta_tmpr": 4,
+            "meta_diesel_lh": 25,
         },
         "equipment": equipment,
         "preventives": [],
@@ -470,6 +507,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         "kpi_reports": {},
         "oil_kpi": {"rows": [], "totals": {}, "columns": []},
         "tire_kpi": {"rows": [], "summary": {}},
+        "diesel": {"records": [], "days": [], "rows": [], "totals": {}},
     }
 
 
@@ -484,6 +522,271 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("source", "cloud-portal")
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
     return payload
+
+
+def diesel_iso_or_none(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    text = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return text[:10] if len(text) >= 10 else None
+
+
+def diesel_period_bounds(session: Session, start: str = "", end: str = "") -> tuple[str, str]:
+    start_iso = diesel_iso_or_none(start)
+    end_iso = diesel_iso_or_none(end)
+    if not start_iso or not end_iso:
+        portal = latest_portal_payload(session)
+        diesel = portal.get("diesel") if isinstance(portal, dict) else {}
+        if isinstance(diesel, dict):
+            start_iso = start_iso or diesel_iso_or_none(diesel.get("start"))
+            end_iso = end_iso or diesel_iso_or_none(diesel.get("end"))
+        period = portal.get("period") if isinstance(portal, dict) else {}
+        if isinstance(period, dict):
+            start_iso = start_iso or diesel_iso_or_none(period.get("start"))
+            end_iso = end_iso or diesel_iso_or_none(period.get("end"))
+    today = utc_now().date()
+    month_start = today.replace(day=1)
+    if today.month == 12:
+        month_end = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        month_end = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
+    start_iso = start_iso or month_start.isoformat()
+    end_iso = end_iso or month_end.isoformat()
+    if end_iso < start_iso:
+        start_iso, end_iso = end_iso, start_iso
+    return start_iso, end_iso
+
+
+def diesel_record_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("work_date") or ""),
+        normalize_text(row.get("equipment")),
+        normalize_text(row.get("shift") or "1"),
+    )
+
+
+def diesel_record_payload(row: DieselRecord) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "source": row.source or "web",
+        "work_date": row.work_date,
+        "equipment": row.equipment,
+        "condition": row.condition,
+        "shift": row.shift,
+        "horometer_initial": row.horometer_initial,
+        "horometer_final": row.horometer_final,
+        "worked_hours": row.worked_hours,
+        "diesel_liters": row.diesel_liters,
+        "operator": row.operator,
+        "dispatcher": row.dispatcher,
+        "supervisor": row.supervisor,
+        "notes": row.notes,
+        "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
+    }
+
+
+def diesel_day_payload(row: DieselDay) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "source": row.source or "web",
+        "work_date": row.work_date,
+        "diesel_received": row.diesel_received,
+        "initial_stock": row.initial_stock,
+        "final_stock": row.final_stock,
+        "supplier": row.supplier,
+        "notes": row.notes,
+        "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
+    }
+
+
+def clean_diesel_record_dict(row: dict[str, Any], source: str = "desktop") -> dict[str, Any]:
+    hi = parse_float(row.get("horometer_initial"), 0)
+    hf = parse_float(row.get("horometer_final"), 0)
+    worked = parse_float(row.get("worked_hours"), -1)
+    if worked < 0:
+        worked = max(hf - hi, 0) if hi and hf and hf >= hi else 0
+    return {
+        "id": row.get("id") or "",
+        "source": row.get("source") or source,
+        "work_date": diesel_iso_or_none(row.get("work_date")) or "",
+        "equipment": normalize_text(row.get("equipment")),
+        "condition": normalize_text(row.get("condition") or "DISPONIBLE"),
+        "shift": normalize_text(row.get("shift") or "1"),
+        "horometer_initial": hi,
+        "horometer_final": hf,
+        "worked_hours": max(worked, 0),
+        "diesel_liters": max(parse_float(row.get("diesel_liters"), 0), 0),
+        "operator": normalize_text(row.get("operator")),
+        "dispatcher": normalize_text(row.get("dispatcher")),
+        "supervisor": normalize_text(row.get("supervisor")),
+        "notes": str(row.get("notes") or "").strip(),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def clean_diesel_day_dict(row: dict[str, Any], source: str = "desktop") -> dict[str, Any]:
+    return {
+        "id": row.get("id") or "",
+        "source": row.get("source") or source,
+        "work_date": diesel_iso_or_none(row.get("work_date")) or "",
+        "diesel_received": max(parse_float(row.get("diesel_received"), 0), 0),
+        "initial_stock": max(parse_float(row.get("initial_stock"), 0), 0),
+        "final_stock": max(parse_float(row.get("final_stock"), 0), 0),
+        "supplier": normalize_text(row.get("supplier")),
+        "notes": str(row.get("notes") or "").strip(),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: float | None = None) -> dict[str, Any]:
+    start_iso, end_iso = diesel_period_bounds(session, start, end)
+    portal = latest_portal_payload(session)
+    settings = portal.get("settings") if isinstance(portal, dict) else {}
+    diesel_portal = portal.get("diesel") if isinstance(portal, dict) else {}
+    meta = parse_float(meta_lh, 0) or parse_float((settings or {}).get("meta_diesel_lh"), 25) or 25
+    records_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    if isinstance(diesel_portal, dict):
+        for raw in diesel_portal.get("records") or []:
+            if not isinstance(raw, dict):
+                continue
+            record = clean_diesel_record_dict(raw, "desktop")
+            if record["work_date"] and start_iso <= record["work_date"] <= end_iso:
+                records_by_key[diesel_record_key(record)] = record
+    db_records = session.scalars(
+        select(DieselRecord)
+        .where(DieselRecord.work_date >= start_iso, DieselRecord.work_date <= end_iso)
+        .order_by(DieselRecord.work_date.desc(), DieselRecord.equipment.asc(), DieselRecord.shift.asc())
+    ).all()
+    for row in db_records:
+        record = diesel_record_payload(row)
+        records_by_key[diesel_record_key(record)] = record
+    records = sorted(records_by_key.values(), key=lambda row: (row["work_date"], row["equipment"], row["shift"]), reverse=True)
+
+    days_by_date: dict[str, dict[str, Any]] = {}
+    if isinstance(diesel_portal, dict):
+        for raw in diesel_portal.get("days") or []:
+            if not isinstance(raw, dict):
+                continue
+            day = clean_diesel_day_dict(raw, "desktop")
+            if day["work_date"] and start_iso <= day["work_date"] <= end_iso:
+                days_by_date[day["work_date"]] = day
+    db_days = session.scalars(
+        select(DieselDay).where(DieselDay.work_date >= start_iso, DieselDay.work_date <= end_iso)
+    ).all()
+    for row in db_days:
+        day = diesel_day_payload(row)
+        days_by_date[day["work_date"]] = day
+
+    buckets: dict[str, dict[str, Any]] = {}
+    consumption_by_date: dict[str, float] = {}
+    for record in records:
+        equipment = normalize_text(record.get("equipment"))
+        if not equipment:
+            continue
+        bucket = buckets.setdefault(
+            equipment,
+            {
+                "equipment": equipment,
+                "condition": record.get("condition") or "DISPONIBLE",
+                "hi_values": [],
+                "hf_values": [],
+                "worked_hours": 0.0,
+                "diesel_liters": 0.0,
+            },
+        )
+        bucket["condition"] = record.get("condition") or bucket["condition"]
+        hi = parse_float(record.get("horometer_initial"), 0)
+        hf = parse_float(record.get("horometer_final"), 0)
+        if hi > 0:
+            bucket["hi_values"].append(hi)
+        if hf > 0:
+            bucket["hf_values"].append(hf)
+        bucket["worked_hours"] += parse_float(record.get("worked_hours"), 0)
+        bucket["diesel_liters"] += parse_float(record.get("diesel_liters"), 0)
+        work_date = record.get("work_date") or ""
+        consumption_by_date[work_date] = consumption_by_date.get(work_date, 0) + parse_float(record.get("diesel_liters"), 0)
+
+    rows = []
+    for bucket in buckets.values():
+        worked = bucket["worked_hours"]
+        liters = bucket["diesel_liters"]
+        rendimiento = liters / worked if worked > 0 else None
+        if liters <= 0:
+            status = "SIN CONSUMO"
+        elif worked <= 0:
+            status = "SIN HORAS"
+        elif rendimiento is not None and rendimiento > meta:
+            status = "ALTO"
+        else:
+            status = "OK"
+        rows.append(
+            {
+                "equipment": bucket["equipment"],
+                "condition": bucket["condition"],
+                "horometer_initial": min(bucket["hi_values"]) if bucket["hi_values"] else 0,
+                "horometer_final": max(bucket["hf_values"]) if bucket["hf_values"] else 0,
+                "worked_hours": worked,
+                "diesel_liters": liters,
+                "rendimiento_lh": rendimiento,
+                "status": status,
+            }
+        )
+    rows.sort(key=lambda item: (-item["diesel_liters"], item["equipment"]))
+
+    daily_rows = []
+    cursor = datetime.strptime(start_iso, "%Y-%m-%d").date()
+    finish = datetime.strptime(end_iso, "%Y-%m-%d").date()
+    while cursor <= finish:
+        key = cursor.isoformat()
+        day = days_by_date.get(key, {})
+        daily_rows.append(
+            {
+                "work_date": key,
+                "diesel_liters": consumption_by_date.get(key, 0),
+                "diesel_received": parse_float(day.get("diesel_received"), 0),
+                "initial_stock": parse_float(day.get("initial_stock"), 0),
+                "final_stock": parse_float(day.get("final_stock"), 0),
+                "supplier": day.get("supplier") or "",
+                "notes": day.get("notes") or "",
+            }
+        )
+        cursor += timedelta(days=1)
+
+    total_liters = sum(parse_float(row["diesel_liters"], 0) for row in rows)
+    total_hours = sum(parse_float(row["worked_hours"], 0) for row in rows)
+    equipment_codes = sorted(
+        {
+            normalize_text(item.get("code") or item.get("equipment_code") or "")
+            for item in (portal.get("equipment") if isinstance(portal, dict) else []) or []
+            if normalize_text(item.get("code") or item.get("equipment_code") or "")
+        }
+        | {row["equipment"] for row in rows}
+    )
+    return {
+        "ok": True,
+        "start": start_iso,
+        "end": end_iso,
+        "meta_lh": meta,
+        "equipment": equipment_codes,
+        "records": records,
+        "days": daily_rows,
+        "rows": rows,
+        "totals": {
+            "diesel_liters": total_liters,
+            "worked_hours": total_hours,
+            "rendimiento_lh": total_liters / total_hours if total_hours > 0 else None,
+            "received": sum(parse_float(row.get("diesel_received"), 0) for row in daily_rows),
+            "critical": sum(1 for row in rows if row["status"] in {"ALTO", "SIN HORAS"}),
+        },
+        "updated_at": portal.get("updated_at") or portal.get("generated_at") or utc_now().isoformat(timespec="seconds"),
+    }
 
 
 def filter_match_keys(item: dict[str, Any]) -> list[str]:
@@ -1172,6 +1475,102 @@ def get_requisition_pdf(requisition_id: int) -> StreamingResponse:
         )
 
 
+@app.get("/api/diesel")
+def get_diesel(
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    meta_lh: float = Query(default=0),
+) -> dict[str, Any]:
+    with SessionLocal() as session:
+        return diesel_payload(session, start, end, meta_lh or None)
+
+
+@app.post("/api/diesel/records")
+async def save_diesel_record_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Captura diesel invalida.")
+    work_date = iso_date(payload.get("work_date"))
+    equipment = normalize_text(payload.get("equipment"))
+    if not equipment:
+        raise HTTPException(status_code=400, detail="Equipo requerido.")
+    shift = normalize_text(payload.get("shift") or "1")
+    hi = parse_float(payload.get("horometer_initial"), 0)
+    hf = parse_float(payload.get("horometer_final"), 0)
+    worked = parse_float(payload.get("worked_hours"), -1)
+    if worked < 0:
+        worked = max(hf - hi, 0) if hi and hf and hf >= hi else 0
+    with SessionLocal() as session:
+        record_id = int(parse_float(payload.get("id"), 0) or 0)
+        row = session.get(DieselRecord, record_id) if record_id else None
+        if row is None:
+            row = session.scalar(
+                select(DieselRecord).where(
+                    DieselRecord.work_date == work_date,
+                    DieselRecord.equipment == equipment,
+                    DieselRecord.shift == shift,
+                )
+            )
+        if row is None:
+            row = DieselRecord(work_date=work_date, equipment=equipment, shift=shift, created_at=utc_now())
+            session.add(row)
+        row.work_date = work_date
+        row.equipment = equipment
+        row.condition = normalize_text(payload.get("condition") or "DISPONIBLE")
+        row.shift = shift
+        row.horometer_initial = hi
+        row.horometer_final = hf
+        row.worked_hours = max(worked, 0)
+        row.diesel_liters = max(parse_float(payload.get("diesel_liters"), 0), 0)
+        row.operator = normalize_text(payload.get("operator"))
+        row.dispatcher = normalize_text(payload.get("dispatcher"))
+        row.supervisor = normalize_text(payload.get("supervisor"))
+        row.notes = str(payload.get("notes") or "").strip()
+        row.source = "web"
+        row.updated_at = utc_now()
+        session.commit()
+        session.refresh(row)
+        return {"ok": True, "record": diesel_record_payload(row), "diesel": diesel_payload(session, work_date, work_date)}
+
+
+@app.delete("/api/diesel/records/{record_id}")
+def delete_diesel_record_cloud(record_id: int, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    with SessionLocal() as session:
+        row = session.get(DieselRecord, record_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Captura diesel no encontrada.")
+        session.delete(row)
+        session.commit()
+        return {"ok": True}
+
+
+@app.post("/api/diesel/days")
+async def save_diesel_day_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Control diario invalido.")
+    work_date = iso_date(payload.get("work_date"))
+    with SessionLocal() as session:
+        row = session.scalar(select(DieselDay).where(DieselDay.work_date == work_date))
+        if row is None:
+            row = DieselDay(work_date=work_date, created_at=utc_now())
+            session.add(row)
+        row.work_date = work_date
+        row.diesel_received = max(parse_float(payload.get("diesel_received"), 0), 0)
+        row.initial_stock = max(parse_float(payload.get("initial_stock"), 0), 0)
+        row.final_stock = max(parse_float(payload.get("final_stock"), 0), 0)
+        row.supplier = normalize_text(payload.get("supplier"))
+        row.notes = str(payload.get("notes") or "").strip()
+        row.source = "web"
+        row.updated_at = utc_now()
+        session.commit()
+        session.refresh(row)
+        return {"ok": True, "day": diesel_day_payload(row), "diesel": diesel_payload(session, work_date, work_date)}
+
+
 WAREHOUSE_HTML = r"""<!doctype html>
 <html lang="es">
 <head>
@@ -1276,7 +1675,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       main { width:100%; padding:0; }
       body { background:white; }
       .view { display:none !important; }
-      #dashboard { display:block !important; }
+      .view.active { display:block !important; }
       .panel { box-shadow:none; border:0; padding:0; }
       .table-wrap { max-height:none; overflow:visible; border:0; }
       th { position:static; }
@@ -1301,6 +1700,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
       <button data-tab="requisiciones">Requisiciones</button>
+      <button data-tab="diesel">Diesel</button>
       <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
       <button data-tab="importar">Importar / exportar</button>
@@ -1405,6 +1805,71 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
       </div>
     </section>
+    <section id="diesel" class="view">
+      <div class="panel toolbar">
+        <label>Periodo<select id="dieselPeriod"><option>Mes</option><option>Semana</option><option>Rango</option></select></label>
+        <label>Fecha base<input id="dieselBase" type="date"></label>
+        <label>Desde<input id="dieselStart" type="date"></label>
+        <label>Hasta<input id="dieselEnd" type="date"></label>
+        <label>Equipo<select id="dieselFilterEquipment"></select></label>
+        <label>Meta L/H<input id="dieselMeta" type="number" step="0.1" value="25"></label>
+        <button class="btn secondary" id="dieselApplyPeriodBtn">Aplicar periodo</button>
+        <button class="btn" id="dieselRefreshBtn">Actualizar diesel</button>
+        <button class="btn secondary" id="dieselPrintBtn">Imprimir reporte</button>
+        <button class="btn secondary" id="dieselCsvBtn">Descargar CSV</button>
+      </div>
+      <div class="stats" id="dieselStats"></div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Captura diesel por equipo / turno</h3><span class="muted" id="dieselEditStatus"></span></div>
+          <div class="movement-grid">
+            <label>Fecha<input id="dieselDate" type="date"></label>
+            <label>Equipo<select id="dieselEquipment"></select></label>
+            <label>Condicion<select id="dieselCondition"><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
+            <label>Turno<select id="dieselShift"><option>1</option><option>2</option><option>GENERAL</option></select></label>
+            <label>Horometro inicial<input id="dieselHi" type="number" step="0.1" value="0"></label>
+            <label>Horometro final<input id="dieselHf" type="number" step="0.1" value="0"></label>
+            <label>Horas trabajadas<input id="dieselHours" type="number" step="0.1" value="0"></label>
+            <label>Consumo diesel L<input id="dieselLiters" type="number" step="0.1" value="0"></label>
+            <label>Operador<input id="dieselOperator"></label>
+            <label>Despachador<input id="dieselDispatcher"></label>
+            <label>Supervisor<input id="dieselSupervisor"></label>
+            <label class="wide">Notas<textarea id="dieselNotes" rows="2"></textarea></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn secondary" id="dieselNewBtn">Nueva captura</button>
+            <button class="btn" id="dieselSaveBtn">Guardar captura</button>
+            <button class="btn danger" id="dieselDeleteBtn">Eliminar captura web</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Control diario de tanque</h3><span class="muted">Llegada y existencias por dia</span></div>
+          <div class="movement-grid">
+            <label>Fecha<input id="dieselDayDate" type="date"></label>
+            <label>Llegada diesel L<input id="dieselReceived" type="number" step="0.1" value="0"></label>
+            <label>Existencia inicial L<input id="dieselInitial" type="number" step="0.1" value="0"></label>
+            <label>Existencia final L<input id="dieselFinal" type="number" step="0.1" value="0"></label>
+            <label class="wide">Proveedor / zona<input id="dieselSupplier"></label>
+            <label class="wide">Notas<textarea id="dieselDayNotes" rows="2"></textarea></label>
+            <button class="btn wide" id="dieselDaySaveBtn">Guardar dia</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3 id="dieselTitle">Rendimiento diesel</h3><span class="muted" id="dieselUpdated"></span></div>
+        <div class="table-wrap"><table id="dieselReportTable"></table></div>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3>Consumo diario</h3>
+          <div class="table-wrap" style="max-height:360px;"><table id="dieselDailyTable"></table></div>
+        </div>
+        <div class="panel">
+          <h3>Capturas diesel</h3>
+          <div class="table-wrap" style="max-height:360px;"><table id="dieselRecordsTable"></table></div>
+        </div>
+      </div>
+    </section>
     <section id="equipos" class="view">
       <div class="panel toolbar">
         <label>Equipo<select id="equipmentSelect"></select></label>
@@ -1460,9 +1925,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
+    let diesel = { equipment: [], records: [], days: [], rows: [], totals: {}, start: "", end: "", meta_lh: 25 };
     let currentReqId = null;
     let currentReqItemIndex = null;
     let currentReqItems = [];
+    let currentDieselId = null;
     let selectedKpiMetric = "availability";
     const AUTO_REFRESH_MS = 15000;
     const $ = (id) => document.getElementById(id);
@@ -1511,20 +1978,23 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
     }
     async function load(){
-      const [r, p, prod, req] = await Promise.all([
+      const [r, p, prod, req, dieselPayload] = await Promise.all([
         fetch("/api/filter-inventory", {headers: headers()}),
         fetch("/api/portal", {headers: headers()}),
         fetch("/api/products?limit=25000", {headers: headers()}),
-        fetch("/api/requisitions", {headers: headers()})
+        fetch("/api/requisitions", {headers: headers()}),
+        fetch("/api/diesel", {headers: headers()})
       ]);
       if(!r.ok) throw new Error(await apiError(r));
       if(!p.ok) throw new Error(await apiError(p));
       if(!prod.ok) throw new Error(await apiError(prod));
       if(!req.ok) throw new Error(await apiError(req));
+      if(!dieselPayload.ok) throw new Error(await apiError(dieselPayload));
       data = await r.json();
       portal = await p.json();
       products = (await prod.json()).products || [];
       const reqPayload = await req.json();
+      diesel = await dieselPayload.json();
       requisitions = reqPayload.requisitions || [];
       if(!currentReqId && !$("reqFolio").value) newRequisition(reqPayload.next_folio);
       renderAll();
@@ -1678,6 +2148,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("prBase").value) $("prBase").value = period.start || today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
       if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
+      if(!$("dieselStart").value) $("dieselStart").value = diesel.start || period.start || today;
+      if(!$("dieselEnd").value) $("dieselEnd").value = diesel.end || period.end || today;
+      if(!$("dieselBase").value) $("dieselBase").value = diesel.start || period.start || today;
+      if(!$("dieselDate").value) $("dieselDate").value = today;
+      if(!$("dieselDayDate").value) $("dieselDayDate").value = today;
+      $("dieselMeta").value = diesel.meta_lh || (portal.settings || {}).meta_diesel_lh || $("dieselMeta").value || 25;
       const rawGroups = portal.kpi_groups && portal.kpi_groups.length ? [...portal.kpi_groups] : ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"];
       ["KPI Aceites", "KPI Llantas"].forEach(group => { if(!rawGroups.includes(group)) rawGroups.push(group); });
       const groups = rawGroups.map(g => ({value:g, label:g}));
@@ -1687,6 +2163,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
+      renderDieselSelectors();
       renderReqEquipmentOptions();
     }
     function calculateKpiRows(){
@@ -2133,6 +2610,176 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderReqList();
       renderReqItems();
     }
+    function dieselEquipmentOptions(){
+      const set = new Set();
+      (diesel.equipment || []).forEach(code => { if(String(code || "").trim()) set.add(String(code).trim().toUpperCase()); });
+      portalEquipment().forEach(eq => {
+        const code = eq.code || eq.equipment_code || "";
+        if(code) set.add(String(code).trim().toUpperCase());
+      });
+      (diesel.records || []).forEach(row => { if(row.equipment) set.add(String(row.equipment).trim().toUpperCase()); });
+      return [...set].sort();
+    }
+    function renderDieselSelectors(){
+      const codes = dieselEquipmentOptions();
+      const currentFilter = $("dieselFilterEquipment").value || "Todos";
+      $("dieselFilterEquipment").innerHTML = `<option>Todos</option>` + codes.map(code => `<option>${esc(code)}</option>`).join("");
+      $("dieselFilterEquipment").value = codes.includes(currentFilter) || currentFilter === "Todos" ? currentFilter : "Todos";
+      const currentEquipment = $("dieselEquipment").value;
+      $("dieselEquipment").innerHTML = `<option value=""></option>` + codes.map(code => `<option>${esc(code)}</option>`).join("");
+      if(codes.includes(currentEquipment)) $("dieselEquipment").value = currentEquipment;
+    }
+    function dieselRendText(value){ return value == null || value === "" ? "S/H" : one(value); }
+    function dieselStatusClass(status){
+      const text = String(status || "").toUpperCase();
+      if(text.includes("ALTO") || text.includes("SIN HORAS")) return "bad";
+      if(text.includes("SIN CONSUMO")) return "warn";
+      return "ok";
+    }
+    function filteredDieselRows(){
+      const selected = $("dieselFilterEquipment").value || "Todos";
+      const rows = diesel.rows || [];
+      return selected === "Todos" ? rows : rows.filter(row => String(row.equipment || "").toUpperCase() === selected.toUpperCase());
+    }
+    function filteredDieselRecords(){
+      const selected = $("dieselFilterEquipment").value || "Todos";
+      const rows = diesel.records || [];
+      return selected === "Todos" ? rows : rows.filter(row => String(row.equipment || "").toUpperCase() === selected.toUpperCase());
+    }
+    function dieselTotalsForRows(rows){
+      const liters = rows.reduce((sum,row) => sum + Number(row.diesel_liters || 0), 0);
+      const hours = rows.reduce((sum,row) => sum + Number(row.worked_hours || 0), 0);
+      return {
+        diesel_liters: liters,
+        worked_hours: hours,
+        rendimiento_lh: hours > 0 ? liters / hours : null,
+        critical: rows.filter(row => ["ALTO","SIN HORAS"].includes(String(row.status || "").toUpperCase())).length,
+      };
+    }
+    function renderDiesel(){
+      renderDieselSelectors();
+      const rows = filteredDieselRows();
+      const records = filteredDieselRecords();
+      const totals = dieselTotalsForRows(rows);
+      $("dieselTitle").textContent = `Rendimiento diesel | ${diesel.start || $("dieselStart").value} a ${diesel.end || $("dieselEnd").value}`;
+      $("dieselUpdated").textContent = diesel.updated_at ? `Actualizado ${diesel.updated_at}` : "";
+      $("dieselStats").innerHTML = [
+        ["Consumo diesel", `${one(totals.diesel_liters)} L`],
+        ["Horas trabajadas", `${one(totals.worked_hours)} h`],
+        ["Rendimiento prom.", dieselRendText(totals.rendimiento_lh) + (totals.rendimiento_lh == null ? "" : " L/H")],
+        ["Equipos revision", totals.critical],
+        ["Llegada diesel", `${one((diesel.totals || {}).received || 0)} L`],
+      ].map(([k,v]) => `<div class="stat"><strong>${esc(v)}</strong>${esc(k)}</div>`).join("");
+      $("dieselReportTable").innerHTML = `<thead><tr><th>Equipo</th><th>Condicion actual</th><th>Horometro inicial</th><th>Horometro final</th><th>Horas trabajadas</th><th>Consumo diesel</th><th>Rendimiento L/H</th><th>KPI</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td>${esc(row.equipment)}</td><td>${esc(row.condition)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${dieselRendText(row.rendimiento_lh)}</td><td><span class="pill ${dieselStatusClass(row.status)}">${esc(row.status)}</span></td></tr>`).join("") +
+        `</tbody>`;
+      $("dieselDailyTable").innerHTML = `<thead><tr><th>Fecha</th><th>Consumo L</th><th>Llegada L</th><th>Inicial L</th><th>Final L</th><th>Proveedor</th></tr></thead><tbody>` +
+        (diesel.days || []).map(row => `<tr><td>${esc(row.work_date)}</td><td>${one(row.diesel_liters)}</td><td>${one(row.diesel_received)}</td><td>${one(row.initial_stock)}</td><td>${one(row.final_stock)}</td><td>${esc(row.supplier)}</td></tr>`).join("") +
+        `</tbody>`;
+      $("dieselRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Turno</th><th>HI</th><th>HF</th><th>Hrs</th><th>Diesel L</th><th>Origen</th></tr></thead><tbody>` +
+        records.map((row, idx) => `<tr data-diesel-index="${idx}" style="cursor:pointer"><td>${esc(row.work_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.shift)}</td><td>${one(row.horometer_initial)}</td><td>${one(row.horometer_final)}</td><td>${one(row.worked_hours)}</td><td>${one(row.diesel_liters)}</td><td>${esc(row.source || "desktop")}</td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("[data-diesel-index]").forEach(tr => tr.addEventListener("click", () => editDieselRecord(Number(tr.dataset.dieselIndex))));
+    }
+    function clearDieselRecord(){
+      currentDieselId = null;
+      $("dieselEditStatus").textContent = "Nueva captura";
+      $("dieselDate").value = toIsoDate(new Date());
+      $("dieselEquipment").value = "";
+      $("dieselCondition").value = "DISPONIBLE";
+      $("dieselShift").value = "1";
+      ["dieselHi","dieselHf","dieselHours","dieselLiters"].forEach(id => $(id).value = "0");
+      ["dieselOperator","dieselDispatcher","dieselSupervisor","dieselNotes"].forEach(id => $(id).value = "");
+    }
+    function editDieselRecord(index){
+      const row = filteredDieselRecords()[index];
+      if(!row) return;
+      currentDieselId = row.source === "web" ? Number(row.id || 0) || null : null;
+      $("dieselEditStatus").textContent = currentDieselId ? `Editando captura web #${currentDieselId}` : "Editando copia sincronizada; al guardar se crea/actualiza captura web";
+      $("dieselDate").value = row.work_date || "";
+      $("dieselEquipment").value = row.equipment || "";
+      $("dieselCondition").value = row.condition || "DISPONIBLE";
+      $("dieselShift").value = row.shift || "1";
+      $("dieselHi").value = row.horometer_initial || 0;
+      $("dieselHf").value = row.horometer_final || 0;
+      $("dieselHours").value = row.worked_hours || 0;
+      $("dieselLiters").value = row.diesel_liters || 0;
+      $("dieselOperator").value = row.operator || "";
+      $("dieselDispatcher").value = row.dispatcher || "";
+      $("dieselSupervisor").value = row.supervisor || "";
+      $("dieselNotes").value = row.notes || "";
+    }
+    function dieselRecordPayload(){
+      return {
+        id: currentDieselId,
+        work_date: $("dieselDate").value,
+        equipment: $("dieselEquipment").value,
+        condition: $("dieselCondition").value,
+        shift: $("dieselShift").value,
+        horometer_initial: $("dieselHi").value,
+        horometer_final: $("dieselHf").value,
+        worked_hours: $("dieselHours").value,
+        diesel_liters: $("dieselLiters").value,
+        operator: $("dieselOperator").value,
+        dispatcher: $("dieselDispatcher").value,
+        supervisor: $("dieselSupervisor").value,
+        notes: $("dieselNotes").value,
+      };
+    }
+    async function refreshDiesel(){
+      const params = new URLSearchParams({start:$("dieselStart").value, end:$("dieselEnd").value, meta_lh:$("dieselMeta").value || "25"});
+      const r = await fetch(`/api/diesel?${params}`, {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      diesel = await r.json();
+      renderDiesel();
+    }
+    function applyDieselPeriod(){
+      const [start, end] = periodRange($("dieselPeriod").value, $("dieselBase").value || $("dieselStart").value);
+      $("dieselStart").value = start;
+      $("dieselEnd").value = end;
+      refreshDiesel().catch(showError);
+    }
+    async function saveDieselRecord(){
+      if(!hasApiKey(true)) return;
+      const r = await fetch("/api/diesel/records", {method:"POST", headers:headers(true), body:JSON.stringify(dieselRecordPayload())});
+      if(!r.ok) return alert(await apiError(r));
+      clearDieselRecord();
+      await refreshDiesel();
+    }
+    async function deleteDieselRecord(){
+      if(!currentDieselId) return alert("Selecciona una captura creada en la web para eliminar.");
+      if(!hasApiKey(true)) return;
+      if(!confirm("Se eliminara la captura diesel web seleccionada.")) return;
+      const r = await fetch(`/api/diesel/records/${currentDieselId}`, {method:"DELETE", headers:headers()});
+      if(!r.ok) return alert(await apiError(r));
+      clearDieselRecord();
+      await refreshDiesel();
+    }
+    async function saveDieselDay(){
+      if(!hasApiKey(true)) return;
+      const payload = {
+        work_date:$("dieselDayDate").value,
+        diesel_received:$("dieselReceived").value,
+        initial_stock:$("dieselInitial").value,
+        final_stock:$("dieselFinal").value,
+        supplier:$("dieselSupplier").value,
+        notes:$("dieselDayNotes").value,
+      };
+      const r = await fetch("/api/diesel/days", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!r.ok) return alert(await apiError(r));
+      await refreshDiesel();
+    }
+    function downloadDieselCsv(){
+      const rows = filteredDieselRows();
+      const csvRows = [["Equipo","Condicion","Horometro inicial","Horometro final","Horas trabajadas","Consumo diesel","Rendimiento L/H","KPI"]];
+      rows.forEach(row => csvRows.push([row.equipment,row.condition,row.horometer_initial,row.horometer_final,row.worked_hours,row.diesel_liters,row.rendimiento_lh ?? "",row.status]));
+      const csv = csvRows.map(row => row.map(value => `"${String(value ?? "").replace(/"/g,'""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Reporte_Diesel_${$("dieselStart").value}_${$("dieselEnd").value}.csv`;
+      a.click();
+    }
     function renderAll(){
       renderStats();
       renderSelectors();
@@ -2142,6 +2789,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderBitacora();
       renderDisponibilidad();
       renderRequisiciones();
+      renderDiesel();
       renderFilters();
       renderInventory();
       renderMovements();
@@ -2172,6 +2820,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("reqDeleteItemBtn").addEventListener("click", deleteReqItem);
     $("reqPdfBtn").addEventListener("click", () => reqPdf(false).catch(showError));
     $("reqPrintBtn").addEventListener("click", () => reqPdf(true).catch(showError));
+    $("dieselApplyPeriodBtn").addEventListener("click", applyDieselPeriod);
+    $("dieselRefreshBtn").addEventListener("click", () => refreshDiesel().catch(showError));
+    $("dieselFilterEquipment").addEventListener("change", renderDiesel);
+    $("dieselNewBtn").addEventListener("click", clearDieselRecord);
+    $("dieselSaveBtn").addEventListener("click", () => saveDieselRecord().catch(showError));
+    $("dieselDeleteBtn").addEventListener("click", () => deleteDieselRecord().catch(showError));
+    $("dieselDaySaveBtn").addEventListener("click", () => saveDieselDay().catch(showError));
+    $("dieselPrintBtn").addEventListener("click", () => window.print());
+    $("dieselCsvBtn").addEventListener("click", downloadDieselCsv);
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
