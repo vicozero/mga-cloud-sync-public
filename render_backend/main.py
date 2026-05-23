@@ -2889,7 +2889,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .oil-order-table th { position:static; background:#e2e8f0; color:#0f172a; text-transform:none; }
     .oil-order-table td:first-child { text-align:left; font-weight:700; color:#334155; }
     .oil-order-table .oil-order-hot { color:#d6335c; font-weight:800; }
-    .kpi-report-table { margin-top:14px; max-height:420px; }
+    .kpi-report-table { margin-top:14px; max-height:none; overflow:visible; }
     .chart { display:flex; align-items:end; gap:12px; min-height:270px; padding:20px 16px 28px; border:1px solid var(--line); border-radius:8px; background:linear-gradient(180deg,#fff,#f8fbff); overflow:auto; }
     .kpi-format-mode .chart { display:block; min-height:330px; padding:12px 14px 18px; }
     .kpi-chart-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; color:#111827; font-size:11px; }
@@ -3344,11 +3344,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(group.includes("REZAGADO")) return "machine";
       return "machine";
     }
+    function kpiBaseHeight(kind){
+      return kind === "tire" ? 1295 : 927;
+    }
     function kpiExactCss(kind="machine", forPrint=false){
       const page = kind === "tire" ? "letter portrait" : "letter landscape";
       return `
         ${forPrint ? `@page { size:${page}; margin:0; } html,body{margin:0;background:white;}` : ""}
-        .kpi-sheet{width:1200px;min-height:${kind === "tire" ? 1295 : 927}px;background:#eeeeee;color:#041b40;font-family:Segoe UI,Arial,sans-serif;box-sizing:border-box;padding:0;overflow:hidden;}
+        .kpi-sheet{width:1200px;min-height:${kpiBaseHeight(kind)}px;background:#eeeeee;color:#041b40;font-family:Segoe UI,Arial,sans-serif;box-sizing:border-box;padding:0;overflow:visible;}
         .kpi-sheet *{box-sizing:border-box;letter-spacing:0;}
         .kpi-head{height:64px;background:#123d82;color:white;display:flex;align-items:center;justify-content:center;position:relative;border-bottom:4px solid #0aa6a6;}
         .kpi-head h1{margin:0;font-size:30px;line-height:1;font-weight:800;text-transform:uppercase;}
@@ -3526,7 +3529,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .tire-table th{background:#e8eef7;border:1px solid #cdd5df;padding:9px;color:#516173;text-align:center;}
         .tire-table td{border:1px solid #d8dee8;padding:8px;text-align:center;}
         .life-cell{display:flex;align-items:center;gap:8px;justify-content:flex-end}.life-bar{width:78px;height:18px;background:#e5e7eb}.life-bar i{display:block;height:100%;background:#0aa6a6;width:var(--w);}
-        ${forPrint ? `.kpi-sheet{transform-origin:top left;} body{display:flex;justify-content:center;} .print-note{display:none;}` : ""}
+        ${forPrint ? `.kpi-sheet{width:100%;min-height:0;overflow:visible;transform-origin:top left;} body{display:block;} .kpi-board{grid-template-columns:28% 45% 25%;gap:8px;padding:0 14px 10px;} .kpi-table-wrap{padding:0 30px 18px;} .kpi-card{height:116px;padding:12px 8px;} .kpi-card strong{font-size:25px;} .kpi-chart-panel{min-height:330px;padding:12px 14px 8px;} .kpi-bars{height:230px;gap:10px;} .kpi-bar{width:46px;} .kpi-bar i{width:38px;} .oil-export .kpi-format-board{grid-template-columns:25% 47% 25%;gap:12px;} .oil-report-table th,.oil-report-table td{font-size:8.5px;padding:3px 4px;} .oil-order-table th,.oil-order-table td{font-size:9px;padding:5px 4px;} .tire-table{font-size:11px;} .tire-table th,.tire-table td{padding:5px;} .print-note{display:none;}` : ""}
       `;
     }
     function metricProgress(value, target, inverse=false){
@@ -3600,7 +3603,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const tire = portal.tire_kpi || {};
       const rows = Array.isArray(tire.rows) ? tire.rows : [];
       const summary = tire.summary || {};
-      const tableRows = rows.slice(0, 28).map(row => {
+      const tableRows = rows.map(row => {
         const value = Math.max(Math.min(Number(row.life_percent || row.tread_remaining_percent || 0), 100), 0);
         const status = String(row.control_status || "");
         const color = status === "OK" ? "#0aa6a6" : (status === "PROXIMA" || status === "REVISION" ? "#b45309" : "#e11d48");
@@ -3643,22 +3646,40 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const win = window.open("", "_blank");
       if(!win) return alert("Permite ventanas emergentes para imprimir el KPI.");
       win.document.open();
-      win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Formato KPI</title><style>${kpiExactCss(doc.kind, true)}</style></head><body>${doc.html}<scr` + `ipt>window.onload=function(){setTimeout(function(){window.print();},300);};</scr` + `ipt></body></html>`);
+      win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Formato KPI</title><style>${kpiExactCss(doc.kind, true)}</style></head><body>${doc.html}<scr` + `ipt>window.onload=function(){setTimeout(function(){window.focus();window.print();},500);};</scr` + `ipt></body></html>`);
       win.document.close();
+    }
+    function measureExactKpiHeight(doc, css){
+      const host = document.createElement("div");
+      host.style.position = "absolute";
+      host.style.left = "-20000px";
+      host.style.top = "0";
+      host.style.width = `${doc.width}px`;
+      host.style.background = "#fff";
+      host.style.pointerEvents = "none";
+      host.style.zIndex = "-1";
+      host.innerHTML = `<style>${css}</style>${doc.html}`;
+      document.body.appendChild(host);
+      const sheet = host.querySelector(".kpi-sheet");
+      const rect = sheet ? sheet.getBoundingClientRect() : {height: doc.height};
+      const height = Math.ceil(Math.max(doc.height, sheet ? sheet.scrollHeight : 0, sheet ? sheet.offsetHeight : 0, rect.height || 0)) + 4;
+      document.body.removeChild(host);
+      return height;
     }
     async function downloadKpiImage(){
       const doc = buildExactKpiHtml();
       const css = kpiExactCss(doc.kind, false);
+      const height = measureExactKpiHeight(doc, css);
       const safeHtml = doc.html.replaceAll("<br>", "<br/>");
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.width}" height="${doc.height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${css}</style>${safeHtml}</div></foreignObject></svg>`;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.width}" height="${height}" viewBox="0 0 ${doc.width} ${height}"><foreignObject width="${doc.width}" height="${height}"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${doc.width}px;min-height:${height}px"><style>${css}</style>${safeHtml}</div></foreignObject></svg>`;
       const image = new Image();
       image.onload = () => {
         const canvas = document.createElement("canvas");
         canvas.width = doc.width;
-        canvas.height = doc.height;
+        canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, doc.width, doc.height);
+        ctx.fillRect(0, 0, doc.width, height);
         ctx.drawImage(image, 0, 0);
         const a = document.createElement("a");
         a.href = canvas.toDataURL("image/png");
