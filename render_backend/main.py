@@ -2371,20 +2371,23 @@ def get_catalog(_auth: str | None = Header(default=None, alias="X-MGA-API-Key"))
 
 
 @app.get("/api/portal")
-def get_portal() -> dict[str, Any]:
+def get_portal(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     with SessionLocal() as session:
         return latest_portal_payload(session)
 
 
 @app.get("/api/products")
-def get_products(q: str = Query(default=""), limit: int = Query(default=120, ge=1, le=25000)) -> dict[str, Any]:
+def get_products(response: Response, q: str = Query(default=""), limit: int = Query(default=120, ge=1, le=25000)) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     with SessionLocal() as session:
         rows = product_rows(session, q, limit)
         return {"ok": True, "products": rows, "count": len(rows)}
 
 
 @app.get("/api/requisitions")
-def get_requisitions() -> dict[str, Any]:
+def get_requisitions(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     with SessionLocal() as session:
         rows = session.scalars(select(CloudRequisition).order_by(CloudRequisition.request_date.desc(), CloudRequisition.id.desc()).limit(300)).all()
         return {
@@ -2514,10 +2517,12 @@ def get_kpi_format_image(group: str = Query(default="")) -> StreamingResponse:
 
 @app.get("/api/diesel")
 def get_diesel(
+    response: Response,
     start: str = Query(default=""),
     end: str = Query(default=""),
     meta_lh: float = Query(default=0),
 ) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     with SessionLocal() as session:
         return diesel_payload(session, start, end, meta_lh or None)
 
@@ -3665,12 +3670,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     async function load(){
       const [r, p, prod, req, dieselPayload, eppPayload] = await Promise.all([
-        fetch("/api/filter-inventory", {headers: headers()}),
-        fetch("/api/portal", {headers: headers()}),
-        fetch("/api/products?limit=25000", {headers: headers()}),
-        fetch("/api/requisitions", {headers: headers()}),
-        fetch("/api/diesel", {headers: headers()}),
-        fetch("/api/epp", {headers: headers()})
+        fetch("/api/filter-inventory", {headers: headers(), cache:"no-store"}),
+        fetch("/api/portal", {headers: headers(), cache:"no-store"}),
+        fetch("/api/products?limit=25000", {headers: headers(), cache:"no-store"}),
+        fetch("/api/requisitions", {headers: headers(), cache:"no-store"}),
+        fetch("/api/diesel", {headers: headers(), cache:"no-store"}),
+        fetch("/api/epp", {headers: headers(), cache:"no-store"})
       ]);
       if(!r.ok) throw new Error(await apiError(r));
       if(!p.ok) throw new Error(await apiError(p));
@@ -3972,7 +3977,49 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function unavailable(status){
       const text = String(status || "").toUpperCase();
-      return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP");
+      return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP") || text.includes("REPARACION") || text.includes("REPARACIÓN") || text.includes("MANTENIMIENTO");
+    }
+    function normalizedText(value){
+      return String(value || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    }
+    function equipmentKeys(value){
+      const text = normalizedText(value);
+      if(!text) return [];
+      const candidates = new Set([text, text.split(/\s+-\s+|\s+\(|\s+/)[0]]);
+      const keys = new Set();
+      candidates.forEach(candidate => {
+        const raw = normalizedText(candidate).replace(/[^A-Z0-9]/g, "");
+        if(!raw) return;
+        keys.add(raw);
+        keys.add(raw.replace(/([A-Z]+)0+(\d)/g, "$1$2"));
+      });
+      return [...keys].filter(Boolean);
+    }
+    function kpiStatusFromCondition(value){
+      const text = normalizedText(value);
+      if(!text) return "";
+      if(text.includes("STAND")) return "Stand By";
+      if(unavailable(text)) return "No Disponible";
+      if(text.includes("DISPONIBLE")) return "Disponible";
+      if(text.includes("OPERATIVA")) return "Operativa";
+      return "No Disponible";
+    }
+    function availabilityStatusMap(){
+      const map = new Map();
+      (portal.availability || []).forEach(row => {
+        const status = kpiStatusFromCondition(row.condition);
+        if(!status) return;
+        [...equipmentKeys(row.eco), ...equipmentKeys(row.equipment)].forEach(key => {
+          if(key && !map.has(key)) map.set(key, status);
+        });
+      });
+      return map;
+    }
+    function availabilityStatusForEquipment(eq, map){
+      for(const key of [...equipmentKeys(eq.code || eq.equipment_code), ...equipmentKeys(eq.description)]){
+        if(map.has(key)) return map.get(key);
+      }
+      return "";
     }
     function groupMatches(eq, group){
       const key = String(group || "Todos").toUpperCase();
@@ -4064,9 +4111,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const days = Math.max(Math.round((parseIsoDate(end) - parseIsoDate(start)) / 86400000) + 1, 1);
       const captures = (portal.captures || []).filter(c => inRange(c.work_date, start, end));
       const grouped = {};
+      const availabilityStatuses = availabilityStatusMap();
       portalEquipment().filter(eq => groupMatches(eq, group)).forEach(eq => {
         const code = eq.code || eq.equipment_code || "";
-        grouped[code] = {code, description:eq.description || "", family:eq.family || "", status:eq.status || "Disponible", period:days * dailyHours, worked:0, mp:0, mc:0, stops:0, unavailableCount:0};
+        const availabilityStatus = availabilityStatusForEquipment(eq, availabilityStatuses);
+        grouped[code] = {code, description:eq.description || "", family:eq.family || "", status:availabilityStatus || eq.status || "Disponible", availabilityStatus, captureStatus:"", captureStatusOrder:"", period:days * dailyHours, worked:0, mp:0, mc:0, stops:0, unavailableCount:0};
       });
       captures.forEach(c => {
         const code = c.equipment_code || c.code || "";
@@ -4074,11 +4123,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const row = grouped[code];
         const mp = Number(c.mp_hours || 0);
         let mc = Number(c.mc_hours || 0);
+        const captureStatus = String(c.status || "").trim();
+        if(captureStatus){
+          const captureOrder = `${c.work_date || ""}-${String(c.id || "").padStart(10, "0")}`;
+          if(!row.captureStatusOrder || captureOrder >= row.captureStatusOrder){
+            row.captureStatus = captureStatus;
+            row.captureStatusOrder = captureOrder;
+            if(!row.availabilityStatus) row.status = captureStatus;
+          }
+        }
         if(unavailable(c.status)){
           const base = String(c.shift || "").toUpperCase() === "GENERAL" ? dailyHours : shiftHours;
           mc += Math.max(base - mp - mc, 0);
           row.unavailableCount += 1;
-          row.status = c.status || "FUERA";
+          if(!row.availabilityStatus) row.status = c.status || "FUERA";
         }
         row.worked += Number(c.worked_hours || 0);
         row.mp += mp;
@@ -4086,6 +4144,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
         row.stops += Number(c.stops || 0);
       });
       const rows = Object.values(grouped).sort((a,b) => a.code.localeCompare(b.code)).map(row => {
+        if(row.availabilityStatus) row.status = row.availabilityStatus;
+        else if(row.captureStatus) row.status = row.captureStatus;
         const out = row.worked <= 0 && (row.unavailableCount > 0 || unavailable(row.status));
         const m = out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops);
         return {...row, ...m, out, availabilityText: out ? "FUERA" : pct(m.availability), utilizationText: out ? "FUERA" : pct(m.utilization)};
@@ -5327,7 +5387,8 @@ def filter_warehouse_page() -> str:
 
 
 @app.get("/api/epp")
-def get_epp(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+def get_epp(response: Response, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     with SessionLocal() as session:
         return epp_payload(session)
 
@@ -5822,7 +5883,8 @@ def export_epp(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) 
 
 
 @app.get("/api/filter-inventory")
-def get_filter_inventory(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+def get_filter_inventory(response: Response, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     with SessionLocal() as session:
         payload = catalog_with_inventory(session)
         movements = session.scalars(
