@@ -144,6 +144,79 @@ class FilterInventoryMovement(Base):
     item: Mapped[FilterInventoryItem] = relationship(back_populates="movements")
 
 
+class EppItem(Base):
+    __tablename__ = "mga_epp_item"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code_key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(180), default="", index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(160), default="")
+    size: Mapped[str] = mapped_column(String(80), default="")
+    unit: Mapped[str] = mapped_column(String(40), default="PZA")
+    quantity: Mapped[float] = mapped_column(Float, default=0)
+    min_stock: Mapped[float] = mapped_column(Float, default=0)
+    useful_life_days: Mapped[int] = mapped_column(Integer, default=0)
+    risk_area: Mapped[str] = mapped_column(String(180), default="")
+    location: Mapped[str] = mapped_column(String(180), default="")
+    training_required: Mapped[int] = mapped_column(Integer, default=0)
+    maintenance_notes: Mapped[str] = mapped_column(Text, default="")
+    source_file: Mapped[str] = mapped_column(String(260), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    movements: Mapped[list["EppMovement"]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    deliveries: Mapped[list["EppDelivery"]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class EppMovement(Base):
+    __tablename__ = "mga_epp_movement"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("mga_epp_item.id", ondelete="CASCADE"), index=True)
+    movement_date: Mapped[str] = mapped_column(String(20), default="")
+    movement_type: Mapped[str] = mapped_column(String(20), default="ENTRADA")
+    quantity: Mapped[float] = mapped_column(Float, default=0)
+    balance_after: Mapped[float] = mapped_column(Float, default=0)
+    worker_name: Mapped[str] = mapped_column(String(180), default="")
+    employee_id: Mapped[str] = mapped_column(String(80), default="")
+    area: Mapped[str] = mapped_column(String(180), default="")
+    reference: Mapped[str] = mapped_column(String(180), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    item: Mapped[EppItem] = relationship(back_populates="movements")
+
+
+class EppDelivery(Base):
+    __tablename__ = "mga_epp_delivery"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("mga_epp_item.id", ondelete="CASCADE"), index=True)
+    delivery_date: Mapped[str] = mapped_column(String(20), default="")
+    worker_name: Mapped[str] = mapped_column(String(180), default="")
+    employee_id: Mapped[str] = mapped_column(String(80), default="")
+    area: Mapped[str] = mapped_column(String(180), default="")
+    quantity: Mapped[float] = mapped_column(Float, default=0)
+    useful_life_days: Mapped[int] = mapped_column(Integer, default=0)
+    due_date: Mapped[str] = mapped_column(String(20), default="")
+    received_by: Mapped[str] = mapped_column(String(180), default="")
+    signature: Mapped[str] = mapped_column(String(180), default="")
+    training_done: Mapped[int] = mapped_column(Integer, default=0)
+    condition_status: Mapped[str] = mapped_column(String(80), default="ENTREGADO")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    item: Mapped[EppItem] = relationship(back_populates="deliveries")
+
+
 class CloudRequisition(Base):
     __tablename__ = "mga_requisition"
 
@@ -433,6 +506,56 @@ def inventory_field_for(header: Any) -> str | None:
     return mapping.get(text)
 
 
+def epp_field_for(header: Any) -> str | None:
+    text = normalize_part_key(header)
+    mapping = {
+        "CODIGO": "code",
+        "CLAVE": "code",
+        "SKU": "code",
+        "NOPARTE": "code",
+        "NUMEROPARTE": "code",
+        "PARTE": "code",
+        "PRODUCTO": "code",
+        "EPP": "code",
+        "DESCRIPCION": "description",
+        "DESCRIPCIONPRODUCTO": "description",
+        "ARTICULO": "description",
+        "ITEM": "description",
+        "MATERIAL": "description",
+        "CANTIDAD": "quantity",
+        "EXISTENCIA": "quantity",
+        "EXISTENCIAS": "quantity",
+        "STOCK": "quantity",
+        "SALDO": "quantity",
+        "UNIDAD": "unit",
+        "UM": "unit",
+        "UDM": "unit",
+        "MINIMO": "min_stock",
+        "MINSTOCK": "min_stock",
+        "STOCKMINIMO": "min_stock",
+        "UBICACION": "location",
+        "LOCALIZACION": "location",
+        "RACK": "location",
+        "CATEGORIA": "category",
+        "TIPO": "category",
+        "FAMILIA": "category",
+        "TALLA": "size",
+        "TAMANO": "size",
+        "SIZE": "size",
+        "VIDAUTIL": "useful_life_days",
+        "VIDAUTILDIAS": "useful_life_days",
+        "REPOSICIONDIAS": "useful_life_days",
+        "AREA": "risk_area",
+        "RIESGO": "risk_area",
+        "AREARIESGO": "risk_area",
+        "PUESTO": "risk_area",
+        "NOTAS": "maintenance_notes",
+        "OBSERVACIONES": "maintenance_notes",
+        "MANTENIMIENTO": "maintenance_notes",
+    }
+    return mapping.get(text)
+
+
 def add_unique(values: list[str], value: Any) -> None:
     text = str(value or "").strip()
     if text and text not in values:
@@ -495,6 +618,142 @@ def upsert_inventory_item(
     item.source_file = source_file
     item.updated_at = utc_now()
     return item
+
+
+def epp_status(item: EppItem) -> str:
+    quantity = parse_float(item.quantity, 0)
+    minimum = parse_float(item.min_stock, 0)
+    if quantity <= 0:
+        return "SIN STOCK"
+    if minimum > 0 and quantity <= minimum:
+        return "BAJO MINIMO"
+    return "OK"
+
+
+def epp_item_payload(item: EppItem) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "code_key": item.code_key,
+        "code": item.code,
+        "description": item.description,
+        "category": item.category,
+        "size": item.size,
+        "unit": item.unit,
+        "quantity": item.quantity,
+        "min_stock": item.min_stock,
+        "useful_life_days": item.useful_life_days,
+        "risk_area": item.risk_area,
+        "location": item.location,
+        "training_required": int(item.training_required or 0),
+        "maintenance_notes": item.maintenance_notes,
+        "source_file": item.source_file,
+        "updated_at": item.updated_at.isoformat(timespec="seconds") if item.updated_at else "",
+        "status": epp_status(item),
+    }
+
+
+def upsert_epp_item(
+    session: Session,
+    *,
+    code: str,
+    description: str = "",
+    category: str = "",
+    size: str = "",
+    unit: str = "PZA",
+    quantity: float = 0,
+    min_stock: float = 0,
+    useful_life_days: int = 0,
+    risk_area: str = "",
+    location: str = "",
+    training_required: int = 0,
+    maintenance_notes: str = "",
+    source_file: str = "",
+) -> EppItem:
+    code = normalize_text(code)
+    code_key = normalize_part_key(code)
+    if not code_key:
+        raise HTTPException(status_code=400, detail="Codigo EPP requerido.")
+    item = session.scalar(select(EppItem).where(EppItem.code_key == code_key))
+    if item is None:
+        item = EppItem(code_key=code_key, code=code)
+        session.add(item)
+    item.code = code
+    item.description = normalize_text(description) if description else item.description
+    item.category = normalize_text(category)
+    item.size = normalize_text(size)
+    item.unit = normalize_text(unit) or "PZA"
+    item.quantity = max(parse_float(quantity, 0), 0)
+    item.min_stock = max(parse_float(min_stock, 0), 0)
+    item.useful_life_days = max(int(parse_float(useful_life_days, 0)), 0)
+    item.risk_area = normalize_text(risk_area)
+    item.location = normalize_text(location)
+    item.training_required = 1 if training_required else 0
+    item.maintenance_notes = normalize_text(maintenance_notes)
+    item.source_file = source_file
+    item.updated_at = utc_now()
+    return item
+
+
+def epp_payload(session: Session) -> dict[str, Any]:
+    portal = latest_portal_payload(session)
+    portal_epp = portal.get("epp") if isinstance(portal, dict) else {}
+    db_items = session.scalars(select(EppItem).order_by(EppItem.category.asc(), EppItem.description.asc(), EppItem.code.asc())).all()
+    if db_items:
+        items = [epp_item_payload(item) for item in db_items]
+        item_by_id = {item.id: item for item in db_items}
+        movements = session.scalars(select(EppMovement).order_by(EppMovement.id.desc()).limit(300)).all()
+        deliveries = session.scalars(select(EppDelivery).order_by(EppDelivery.id.desc()).limit(300)).all()
+        movement_rows = [
+            {
+                "id": row.id,
+                "item_code": item_by_id.get(row.item_id).code if item_by_id.get(row.item_id) else "",
+                "movement_date": row.movement_date,
+                "movement_type": row.movement_type,
+                "quantity": row.quantity,
+                "balance_after": row.balance_after,
+                "worker_name": row.worker_name,
+                "employee_id": row.employee_id,
+                "area": row.area,
+                "reference": row.reference,
+                "notes": row.notes,
+                "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else "",
+            }
+            for row in movements
+        ]
+        delivery_rows = [
+            {
+                "id": row.id,
+                "item_code": item_by_id.get(row.item_id).code if item_by_id.get(row.item_id) else "",
+                "delivery_date": row.delivery_date,
+                "worker_name": row.worker_name,
+                "employee_id": row.employee_id,
+                "area": row.area,
+                "quantity": row.quantity,
+                "useful_life_days": row.useful_life_days,
+                "due_date": row.due_date,
+                "received_by": row.received_by,
+                "signature": row.signature,
+                "training_done": int(row.training_done or 0),
+                "condition_status": row.condition_status,
+                "notes": row.notes,
+                "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else "",
+            }
+            for row in deliveries
+        ]
+    elif isinstance(portal_epp, dict):
+        items = portal_epp.get("items") if isinstance(portal_epp.get("items"), list) else []
+        movement_rows = portal_epp.get("movements") if isinstance(portal_epp.get("movements"), list) else []
+        delivery_rows = portal_epp.get("deliveries") if isinstance(portal_epp.get("deliveries"), list) else []
+    else:
+        items, movement_rows, delivery_rows = [], [], []
+    summary = {
+        "items": len(items),
+        "total_quantity": sum(parse_float(row.get("quantity"), 0) for row in items if isinstance(row, dict)),
+        "low_stock": sum(1 for row in items if isinstance(row, dict) and row.get("status") == "BAJO MINIMO"),
+        "out_stock": sum(1 for row in items if isinstance(row, dict) and row.get("status") == "SIN STOCK"),
+        "deliveries": len(delivery_rows),
+    }
+    return {"ok": True, "items": items, "movements": movement_rows, "deliveries": delivery_rows, "summary": summary}
 
 
 def latest_catalog_payload(session: Session) -> dict[str, Any]:
@@ -2410,7 +2669,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
-      <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad e inventario de filtros</p></div>
+      <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad, diesel, filtros y EPP</p></div>
     </div>
     <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
@@ -2422,6 +2681,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="disponibilidad">Disponibilidad</button>
       <button data-tab="requisiciones">Requisiciones</button>
       <button data-tab="diesel">Diesel</button>
+      <button data-tab="epp">EPP almacen</button>
       <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
       <button data-tab="importar">Importar / exportar</button>
@@ -2633,6 +2893,86 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
       </div>
     </section>
+    <section id="epp" class="view">
+      <div class="stats" id="eppStats"></div>
+      <div class="panel toolbar">
+        <label>Buscar<input id="eppSearch" placeholder="Codigo, descripcion, trabajador"></label>
+        <label>Estado<select id="eppStatus"><option value="">Todos</option><option>OK</option><option>BAJO MINIMO</option><option>SIN STOCK</option></select></label>
+        <button class="btn" id="eppRefreshBtn">Actualizar EPP</button>
+        <button class="btn secondary" id="eppExportBtn">Exportar Excel</button>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3>Inventario EPP</h3>
+          <div class="movement-grid">
+            <label>Codigo<input id="eppCode"></label>
+            <label>Categoria<input id="eppCategory" placeholder="CABEZA, MANOS, RESPIRATORIO"></label>
+            <label>Talla<input id="eppSize"></label>
+            <label>Unidad<input id="eppUnit" value="PZA"></label>
+            <label class="wide">Descripcion<input id="eppDesc"></label>
+            <label>Existencia<input id="eppQty" type="number" step="0.01" value="0"></label>
+            <label>Minimo<input id="eppMin" type="number" step="0.01" value="0"></label>
+            <label>Vida util dias<input id="eppLife" type="number" step="1" value="0"></label>
+            <label>Area / riesgo<input id="eppRisk"></label>
+            <label>Ubicacion<input id="eppLocation"></label>
+            <label class="wide">Notas mantenimiento<input id="eppNotes"></label>
+            <label><span>Capacitacion</span><select id="eppTraining"><option value="0">No requerida</option><option value="1">Requerida</option></select></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn secondary" id="eppNewBtn">Nuevo</button>
+            <button class="btn" id="eppSaveBtn">Guardar / modificar</button>
+            <button class="btn danger" id="eppDeleteBtn">Eliminar</button>
+            <button class="btn danger" id="eppDeleteAllBtn">Eliminar todo EPP</button>
+          </div>
+          <div class="table-wrap" style="max-height:360px; margin-top:10px;"><table id="eppTable"></table></div>
+        </div>
+        <div class="panel">
+          <h3>Entrada / salida / ajuste</h3>
+          <div class="movement-grid">
+            <label>Fecha<input id="eppMovDate" type="date"></label>
+            <label>Tipo<select id="eppMovType"><option>ENTRADA</option><option>SALIDA</option><option>AJUSTE</option></select></label>
+            <label>Cantidad<input id="eppMovQty" type="number" step="0.01" value="1"></label>
+            <label>Referencia<input id="eppMovRef"></label>
+            <label>Trabajador<input id="eppMovWorker"></label>
+            <label>No. empleado<input id="eppMovEmployee"></label>
+            <label>Area<input id="eppMovArea"></label>
+            <label class="wide">Notas<textarea id="eppMovNotes" rows="2"></textarea></label>
+            <button class="btn wide" id="eppMovBtn">Guardar movimiento</button>
+          </div>
+          <h3>Entrega a trabajador</h3>
+          <div class="movement-grid">
+            <label>Fecha<input id="eppDelDate" type="date"></label>
+            <label>Trabajador<input id="eppDelWorker"></label>
+            <label>No. empleado<input id="eppDelEmployee"></label>
+            <label>Cantidad<input id="eppDelQty" type="number" step="0.01" value="1"></label>
+            <label>Area / puesto<input id="eppDelArea"></label>
+            <label>Recibio<input id="eppDelReceived"></label>
+            <label>Firma texto<input id="eppDelSignature"></label>
+            <label>Capacitado<select id="eppDelTraining"><option value="1">Si</option><option value="0">No</option></select></label>
+            <label>Estado<select id="eppDelCondition"><option>ENTREGADO</option><option>REPOSICION</option><option>DAÑADO</option><option>BAJA</option></select></label>
+            <label class="wide">Notas<textarea id="eppDelNotes" rows="2"></textarea></label>
+            <button class="btn wide" id="eppDelBtn">Registrar entrega</button>
+          </div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3>Entregas registradas</h3>
+          <div class="table-wrap" style="max-height:340px;"><table id="eppDeliveriesTable"></table></div>
+        </div>
+        <div class="panel">
+          <h3>Movimientos EPP</h3>
+          <div class="table-wrap" style="max-height:340px;"><table id="eppMovementsTable"></table></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Importar inventario EPP desde Excel</h3>
+        <p class="muted">Columnas aceptadas: codigo/clave, descripcion, cantidad, unidad, minimo, ubicacion, categoria, talla, vida util dias, area/riesgo.</p>
+        <input id="eppImportFile" type="file" accept=".xlsx,.xls">
+        <button class="btn danger" id="eppImportBtn">Importar y reemplazar EPP</button>
+        <pre id="eppImportResult"></pre>
+      </div>
+    </section>
     <section id="importar" class="view">
       <div class="panel">
         <h3>Importar inventario desde Excel</h3>
@@ -2649,6 +2989,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let products = [];
     let requisitions = [];
     let diesel = { equipment: [], records: [], days: [], rows: [], totals: {}, start: "", end: "", meta_lh: 25 };
+    let epp = { items: [], movements: [], deliveries: [], summary: {} };
     let currentReqId = null;
     let currentReqItemIndex = null;
     let currentReqItems = [];
@@ -3044,23 +3385,26 @@ WAREHOUSE_HTML = r"""<!doctype html>
       image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     }
     async function load(){
-      const [r, p, prod, req, dieselPayload] = await Promise.all([
+      const [r, p, prod, req, dieselPayload, eppPayload] = await Promise.all([
         fetch("/api/filter-inventory", {headers: headers()}),
         fetch("/api/portal", {headers: headers()}),
         fetch("/api/products?limit=25000", {headers: headers()}),
         fetch("/api/requisitions", {headers: headers()}),
-        fetch("/api/diesel", {headers: headers()})
+        fetch("/api/diesel", {headers: headers()}),
+        fetch("/api/epp", {headers: headers()})
       ]);
       if(!r.ok) throw new Error(await apiError(r));
       if(!p.ok) throw new Error(await apiError(p));
       if(!prod.ok) throw new Error(await apiError(prod));
       if(!req.ok) throw new Error(await apiError(req));
       if(!dieselPayload.ok) throw new Error(await apiError(dieselPayload));
+      if(!eppPayload.ok) throw new Error(await apiError(eppPayload));
       data = await r.json();
       portal = await p.json();
       products = (await prod.json()).products || [];
       const reqPayload = await req.json();
       diesel = await dieselPayload.json();
+      epp = await eppPayload.json();
       requisitions = reqPayload.requisitions || [];
       if(!currentReqId && !$("reqFolio").value) newRequisition(reqPayload.next_folio);
       renderAll();
@@ -3113,6 +3457,126 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("movementTable").innerHTML = `<thead><tr><th>Fecha</th><th>Parte</th><th>Tipo</th><th>Cant.</th><th>Saldo</th><th>Ref.</th></tr></thead><tbody>` +
         rows.map(m => `<tr><td>${esc(m.movement_date)}</td><td>${esc(m.part_number)}</td><td>${esc(m.movement_type)}</td><td>${num(m.quantity)}</td><td>${num(m.balance_after)}</td><td>${esc(m.reference)}</td></tr>`).join("") +
         `</tbody>`;
+    }
+    function eppSelectedCode(){ return ($("eppCode").value || "").trim().toUpperCase(); }
+    function clearEppForm(){
+      ["eppCode","eppCategory","eppSize","eppRisk","eppLocation","eppNotes","eppDesc"].forEach(id => $(id).value = "");
+      $("eppUnit").value = "PZA"; $("eppQty").value = "0"; $("eppMin").value = "0"; $("eppLife").value = "0"; $("eppTraining").value = "0";
+      $("eppMovDate").value = toIsoDate(new Date()); $("eppDelDate").value = toIsoDate(new Date());
+      $("eppMovQty").value = "1"; $("eppDelQty").value = "1";
+    }
+    function fillEppForm(row){
+      $("eppCode").value = row.code || "";
+      $("eppDesc").value = row.description || "";
+      $("eppCategory").value = row.category || "";
+      $("eppSize").value = row.size || "";
+      $("eppUnit").value = row.unit || "PZA";
+      $("eppQty").value = row.quantity || 0;
+      $("eppMin").value = row.min_stock || 0;
+      $("eppLife").value = row.useful_life_days || 0;
+      $("eppRisk").value = row.risk_area || "";
+      $("eppLocation").value = row.location || "";
+      $("eppNotes").value = row.maintenance_notes || "";
+      $("eppTraining").value = row.training_required ? "1" : "0";
+    }
+    function renderEpp(){
+      const s = epp.summary || {};
+      $("eppStats").innerHTML = [
+        ["Articulos", s.items || 0],
+        ["Existencia total", num(s.total_quantity || 0)],
+        ["Bajo minimo", s.low_stock || 0],
+        ["Sin stock", s.out_stock || 0],
+        ["Entregas", s.deliveries || 0],
+      ].map(([k,v]) => `<div class="stat"><strong>${v}</strong>${k}</div>`).join("");
+      const search = ($("eppSearch").value || "").toUpperCase();
+      const status = $("eppStatus").value;
+      const rows = (epp.items || []).filter(row => (!status || row.status === status) && (!search || [row.code,row.description,row.category,row.size,row.risk_area,row.location].join(" ").toUpperCase().includes(search)));
+      $("eppTable").innerHTML = `<thead><tr><th>Estado</th><th>Codigo</th><th>Descripcion</th><th>Categoria</th><th>Talla</th><th>Exist.</th><th>Unidad</th><th>Min.</th><th>Vida dias</th><th>Area/riesgo</th><th>Ubicacion</th></tr></thead><tbody>` +
+        rows.map(row => {
+          const cls = row.status === "OK" ? "ok" : (row.status === "SIN STOCK" ? "bad" : "warn");
+          return `<tr data-epp-code="${esc(row.code)}"><td><span class="pill ${cls}">${esc(row.status)}</span></td><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${esc(row.category)}</td><td>${esc(row.size)}</td><td>${num(row.quantity)}</td><td>${esc(row.unit || "PZA")}</td><td>${num(row.min_stock)}</td><td>${num(row.useful_life_days)}</td><td>${esc(row.risk_area)}</td><td>${esc(row.location)}</td></tr>`;
+        }).join("") + `</tbody>`;
+      document.querySelectorAll("[data-epp-code]").forEach(tr => tr.addEventListener("click", () => {
+        const row = (epp.items || []).find(item => item.code === tr.dataset.eppCode);
+        if(row) fillEppForm(row);
+        renderEppHistory();
+      }));
+      renderEppHistory();
+    }
+    function renderEppHistory(){
+      const code = eppSelectedCode();
+      const match = row => !code || String(row.item_code || row.code || "").toUpperCase() === code;
+      const deliveries = (epp.deliveries || []).filter(match).slice(0, 120);
+      $("eppDeliveriesTable").innerHTML = `<thead><tr><th>Fecha</th><th>Codigo</th><th>Trabajador</th><th>No.</th><th>Area</th><th>Cant.</th><th>Vence</th><th>Firma</th><th>Estado</th></tr></thead><tbody>` +
+        deliveries.map(row => `<tr><td>${esc(row.delivery_date)}</td><td>${esc(row.item_code)}</td><td>${esc(row.worker_name)}</td><td>${esc(row.employee_id)}</td><td>${esc(row.area)}</td><td>${num(row.quantity)}</td><td>${esc(row.due_date)}</td><td>${esc(row.signature)}</td><td>${esc(row.condition_status)}</td></tr>`).join("") + `</tbody>`;
+      const movements = (epp.movements || []).filter(match).slice(0, 120);
+      $("eppMovementsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Tipo</th><th>Codigo</th><th>Cant.</th><th>Saldo</th><th>Trabajador</th><th>Area</th><th>Ref.</th></tr></thead><tbody>` +
+        movements.map(row => `<tr><td>${esc(row.movement_date)}</td><td>${esc(row.movement_type)}</td><td>${esc(row.item_code)}</td><td>${num(row.quantity)}</td><td>${num(row.balance_after)}</td><td>${esc(row.worker_name)}</td><td>${esc(row.area)}</td><td>${esc(row.reference)}</td></tr>`).join("") + `</tbody>`;
+    }
+    function eppItemPayload(){
+      return {
+        code:$("eppCode").value, description:$("eppDesc").value, category:$("eppCategory").value, size:$("eppSize").value,
+        unit:$("eppUnit").value, quantity:$("eppQty").value, min_stock:$("eppMin").value, useful_life_days:$("eppLife").value,
+        risk_area:$("eppRisk").value, location:$("eppLocation").value, training_required:$("eppTraining").value === "1",
+        maintenance_notes:$("eppNotes").value,
+      };
+    }
+    async function saveEppItem(){
+      if(!hasApiKey(true)) return;
+      const r = await fetch("/api/epp/items", {method:"POST", headers:headers(true), body:JSON.stringify(eppItemPayload())});
+      if(!r.ok) return alert(await apiError(r));
+      await refreshEpp();
+    }
+    async function deleteEppItem(){
+      if(!hasApiKey(true)) return;
+      const code = eppSelectedCode();
+      if(!code) return alert("Selecciona o captura un codigo EPP.");
+      if(!confirm(`Eliminar EPP ${code}?`)) return;
+      const r = await fetch("/api/epp/items/delete", {method:"POST", headers:headers(true), body:JSON.stringify({code})});
+      if(!r.ok) return alert(await apiError(r));
+      clearEppForm(); await refreshEpp();
+    }
+    async function deleteAllEpp(){
+      if(!hasApiKey(true)) return;
+      if(prompt("Escribe ELIMINAR para borrar todo el EPP:") !== "ELIMINAR") return;
+      const r = await fetch("/api/epp/delete-all", {method:"POST", headers:headers(true), body:JSON.stringify({confirm:"ELIMINAR"})});
+      if(!r.ok) return alert(await apiError(r));
+      clearEppForm(); await refreshEpp();
+    }
+    async function saveEppMovement(){
+      if(!hasApiKey(true)) return;
+      const payload = { code:eppSelectedCode(), movement_date:$("eppMovDate").value, movement_type:$("eppMovType").value, quantity:$("eppMovQty").value, worker_name:$("eppMovWorker").value, employee_id:$("eppMovEmployee").value, area:$("eppMovArea").value, reference:$("eppMovRef").value, notes:$("eppMovNotes").value };
+      const r = await fetch("/api/epp/movements", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!r.ok) return alert(await apiError(r));
+      $("eppMovQty").value = "1"; $("eppMovRef").value = ""; $("eppMovNotes").value = ""; await refreshEpp();
+    }
+    async function saveEppDelivery(){
+      if(!hasApiKey(true)) return;
+      const payload = { code:eppSelectedCode(), delivery_date:$("eppDelDate").value, worker_name:$("eppDelWorker").value, employee_id:$("eppDelEmployee").value, area:$("eppDelArea").value, quantity:$("eppDelQty").value, received_by:$("eppDelReceived").value, signature:$("eppDelSignature").value, training_done:$("eppDelTraining").value === "1", condition_status:$("eppDelCondition").value, notes:$("eppDelNotes").value };
+      const r = await fetch("/api/epp/deliveries", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!r.ok) return alert(await apiError(r));
+      $("eppDelQty").value = "1"; $("eppDelNotes").value = ""; await refreshEpp();
+    }
+    async function refreshEpp(){
+      const r = await fetch("/api/epp", {headers: headers()});
+      if(!r.ok) throw new Error(await apiError(r));
+      epp = await r.json();
+      renderEpp();
+    }
+    async function exportEpp(){
+      const r = await fetch("/api/epp/export", {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob(); const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = "Inventario_EPP_MGA.xlsx"; a.click();
+    }
+    async function importEpp(){
+      const file = $("eppImportFile").files[0]; if(!file) return alert("Selecciona un Excel.");
+      if(!hasApiKey(true)) return;
+      const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
+      const r = await fetch("/api/epp/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), replace:true})});
+      const payload = await r.json().catch(() => ({}));
+      $("eppImportResult").textContent = JSON.stringify(payload, null, 2);
+      if(r.ok) await refreshEpp();
     }
     function parseIsoDate(value){
       const parts = String(value || "").split("-").map(Number);
@@ -4397,6 +4861,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderDisponibilidad();
       renderRequisiciones();
       renderDiesel();
+      renderEpp();
       renderFilters();
       renderInventory();
       renderMovements();
@@ -4440,6 +4905,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dieselInitial").addEventListener("input", () => updateDieselTankCalc(false));
     $("dieselPrintBtn").addEventListener("click", () => window.print());
     $("dieselExcelBtn").addEventListener("click", () => downloadDieselExcel().catch(showError));
+    $("eppSearch").addEventListener("input", renderEpp);
+    $("eppStatus").addEventListener("change", renderEpp);
+    $("eppRefreshBtn").addEventListener("click", () => refreshEpp().catch(showError));
+    $("eppNewBtn").addEventListener("click", clearEppForm);
+    $("eppSaveBtn").addEventListener("click", () => saveEppItem().catch(showError));
+    $("eppDeleteBtn").addEventListener("click", () => deleteEppItem().catch(showError));
+    $("eppDeleteAllBtn").addEventListener("click", () => deleteAllEpp().catch(showError));
+    $("eppMovBtn").addEventListener("click", () => saveEppMovement().catch(showError));
+    $("eppDelBtn").addEventListener("click", () => saveEppDelivery().catch(showError));
+    $("eppExportBtn").addEventListener("click", () => exportEpp().catch(showError));
+    $("eppImportBtn").addEventListener("click", () => importEpp().catch(showError));
+    $("eppCode").addEventListener("input", renderEppHistory);
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
@@ -4482,6 +4959,400 @@ WAREHOUSE_HTML = r"""<!doctype html>
 @app.get("/almacen-filtros", response_class=HTMLResponse)
 def filter_warehouse_page() -> str:
     return WAREHOUSE_HTML
+
+
+@app.get("/api/epp")
+def get_epp(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    with SessionLocal() as session:
+        return epp_payload(session)
+
+
+@app.get("/api/epp/snapshot")
+def get_epp_snapshot(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    with SessionLocal() as session:
+        return epp_payload(session)
+
+
+@app.post("/api/epp/snapshot")
+async def replace_epp_snapshot(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    rows = payload.get("items") if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        raise HTTPException(status_code=400, detail="Inventario EPP invalido.")
+    movements = payload.get("movements") if isinstance(payload, dict) and isinstance(payload.get("movements"), list) else []
+    deliveries = payload.get("deliveries") if isinstance(payload, dict) and isinstance(payload.get("deliveries"), list) else []
+    with SessionLocal() as session:
+        session.query(EppMovement).delete()
+        session.query(EppDelivery).delete()
+        session.query(EppItem).delete()
+        imported = 0
+        for row in rows:
+            if not isinstance(row, dict) or not normalize_part_key(row.get("code")):
+                continue
+            upsert_epp_item(
+                session,
+                code=str(row.get("code") or ""),
+                description=str(row.get("description") or ""),
+                category=str(row.get("category") or ""),
+                size=str(row.get("size") or ""),
+                unit=str(row.get("unit") or "PZA"),
+                quantity=parse_float(row.get("quantity"), 0),
+                min_stock=parse_float(row.get("min_stock"), 0),
+                useful_life_days=int(parse_float(row.get("useful_life_days"), 0)),
+                risk_area=str(row.get("risk_area") or ""),
+                location=str(row.get("location") or ""),
+                training_required=int(parse_float(row.get("training_required"), 0)),
+                maintenance_notes=str(row.get("maintenance_notes") or ""),
+                source_file=str(row.get("source_file") or "desktop-sync"),
+            )
+            imported += 1
+        session.flush()
+        item_by_code = {item.code_key: item for item in session.scalars(select(EppItem)).all()}
+        for row in movements:
+            if not isinstance(row, dict):
+                continue
+            key = normalize_part_key(row.get("item_code") or row.get("code"))
+            item = item_by_code.get(key)
+            if item is None:
+                continue
+            session.add(
+                EppMovement(
+                    item_id=item.id,
+                    movement_date=str(row.get("movement_date") or utc_now().date().isoformat()),
+                    movement_type=normalize_text(row.get("movement_type") or "ENTRADA")[:20],
+                    quantity=parse_float(row.get("quantity"), 0),
+                    balance_after=parse_float(row.get("balance_after"), 0),
+                    worker_name=normalize_text(row.get("worker_name"))[:180],
+                    employee_id=normalize_text(row.get("employee_id"))[:80],
+                    area=normalize_text(row.get("area"))[:180],
+                    reference=str(row.get("reference") or "")[:180].upper(),
+                    notes=str(row.get("notes") or "").upper(),
+                    created_at=utc_now(),
+                )
+            )
+        for row in deliveries:
+            if not isinstance(row, dict):
+                continue
+            key = normalize_part_key(row.get("item_code") or row.get("code"))
+            item = item_by_code.get(key)
+            if item is None:
+                continue
+            session.add(
+                EppDelivery(
+                    item_id=item.id,
+                    delivery_date=str(row.get("delivery_date") or utc_now().date().isoformat()),
+                    worker_name=normalize_text(row.get("worker_name"))[:180],
+                    employee_id=normalize_text(row.get("employee_id"))[:80],
+                    area=normalize_text(row.get("area"))[:180],
+                    quantity=parse_float(row.get("quantity"), 0),
+                    useful_life_days=max(int(parse_float(row.get("useful_life_days"), 0)), 0),
+                    due_date=str(row.get("due_date") or "")[:20],
+                    received_by=normalize_text(row.get("received_by"))[:180],
+                    signature=normalize_text(row.get("signature"))[:180],
+                    training_done=1 if row.get("training_done") else 0,
+                    condition_status=normalize_text(row.get("condition_status") or "ENTREGADO")[:80],
+                    notes=str(row.get("notes") or "").upper(),
+                    created_at=utc_now(),
+                )
+            )
+        session.commit()
+        return {"ok": True, "imported": imported}
+
+
+@app.post("/api/epp/items")
+async def save_epp_item(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="EPP invalido.")
+    with SessionLocal() as session:
+        item = upsert_epp_item(
+            session,
+            code=str(payload.get("code") or ""),
+            description=str(payload.get("description") or ""),
+            category=str(payload.get("category") or ""),
+            size=str(payload.get("size") or ""),
+            unit=str(payload.get("unit") or "PZA"),
+            quantity=parse_float(payload.get("quantity"), 0),
+            min_stock=parse_float(payload.get("min_stock"), 0),
+            useful_life_days=int(parse_float(payload.get("useful_life_days"), 0)),
+            risk_area=str(payload.get("risk_area") or ""),
+            location=str(payload.get("location") or ""),
+            training_required=1 if payload.get("training_required") else 0,
+            maintenance_notes=str(payload.get("maintenance_notes") or ""),
+            source_file="web",
+        )
+        session.commit()
+        session.refresh(item)
+        return {"ok": True, "item": epp_item_payload(item)}
+
+
+@app.post("/api/epp/items/delete")
+async def delete_epp_item(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    code = str(payload.get("code") if isinstance(payload, dict) else "").strip()
+    key = normalize_part_key(code)
+    if not key:
+        raise HTTPException(status_code=400, detail="Codigo EPP requerido.")
+    with SessionLocal() as session:
+        item = session.scalar(select(EppItem).where(EppItem.code_key == key))
+        if item is None:
+            raise HTTPException(status_code=404, detail="EPP no encontrado.")
+        session.delete(item)
+        session.commit()
+        return {"ok": True, "deleted": code}
+
+
+@app.post("/api/epp/delete-all")
+async def delete_all_epp(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict) or payload.get("confirm") != "ELIMINAR":
+        raise HTTPException(status_code=400, detail="Confirmacion requerida.")
+    with SessionLocal() as session:
+        count = session.query(EppItem).count()
+        session.query(EppMovement).delete()
+        session.query(EppDelivery).delete()
+        session.query(EppItem).delete()
+        session.commit()
+        return {"ok": True, "deleted": count}
+
+
+@app.post("/api/epp/movements")
+async def save_epp_movement(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Movimiento EPP invalido.")
+    code = normalize_text(payload.get("code"))
+    key = normalize_part_key(code)
+    if not key:
+        raise HTTPException(status_code=400, detail="Codigo EPP requerido.")
+    movement_type = normalize_text(payload.get("movement_type") or "ENTRADA")
+    if movement_type not in {"ENTRADA", "SALIDA", "AJUSTE"}:
+        raise HTTPException(status_code=400, detail="Tipo de movimiento invalido.")
+    qty = parse_float(payload.get("quantity"), 0)
+    if qty < 0:
+        raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa.")
+    with SessionLocal() as session:
+        item = session.scalar(select(EppItem).where(EppItem.code_key == key))
+        if item is None:
+            if movement_type != "ENTRADA":
+                raise HTTPException(status_code=400, detail="Primero registra ese EPP en inventario.")
+            item = EppItem(code_key=key, code=code, description=normalize_text(payload.get("description")), quantity=0, unit="PZA", updated_at=utc_now())
+            session.add(item)
+            session.flush()
+        if movement_type == "ENTRADA":
+            item.quantity = max(item.quantity + qty, 0)
+        elif movement_type == "SALIDA":
+            item.quantity = max(item.quantity - qty, 0)
+        else:
+            item.quantity = max(qty, 0)
+        item.updated_at = utc_now()
+        movement = EppMovement(
+            item_id=item.id,
+            movement_date=str(payload.get("movement_date") or utc_now().date().isoformat()),
+            movement_type=movement_type,
+            quantity=qty,
+            balance_after=item.quantity,
+            worker_name=normalize_text(payload.get("worker_name"))[:180],
+            employee_id=normalize_text(payload.get("employee_id"))[:80],
+            area=normalize_text(payload.get("area"))[:180],
+            reference=str(payload.get("reference") or "")[:180].upper(),
+            notes=str(payload.get("notes") or "").upper(),
+            created_at=utc_now(),
+        )
+        session.add(movement)
+        session.commit()
+        return {"ok": True, "item": epp_item_payload(item), "movement_id": movement.id}
+
+
+@app.post("/api/epp/deliveries")
+async def save_epp_delivery(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Entrega EPP invalida.")
+    code = normalize_text(payload.get("code"))
+    key = normalize_part_key(code)
+    if not key:
+        raise HTTPException(status_code=400, detail="Codigo EPP requerido.")
+    qty = parse_float(payload.get("quantity"), 0)
+    if qty <= 0:
+        raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a 0.")
+    delivery_date = str(payload.get("delivery_date") or utc_now().date().isoformat())
+    with SessionLocal() as session:
+        item = session.scalar(select(EppItem).where(EppItem.code_key == key))
+        if item is None:
+            raise HTTPException(status_code=404, detail="EPP no encontrado.")
+        life_days = max(int(parse_float(item.useful_life_days, 0)), 0)
+        due_date = ""
+        if life_days > 0:
+            try:
+                due_date = (datetime.fromisoformat(delivery_date).date() + timedelta(days=life_days)).isoformat()
+            except Exception:
+                due_date = ""
+        item.quantity = max(item.quantity - qty, 0)
+        item.updated_at = utc_now()
+        delivery = EppDelivery(
+            item_id=item.id,
+            delivery_date=delivery_date,
+            worker_name=normalize_text(payload.get("worker_name"))[:180],
+            employee_id=normalize_text(payload.get("employee_id"))[:80],
+            area=normalize_text(payload.get("area"))[:180],
+            quantity=qty,
+            useful_life_days=life_days,
+            due_date=due_date,
+            received_by=normalize_text(payload.get("received_by"))[:180],
+            signature=normalize_text(payload.get("signature"))[:180],
+            training_done=1 if payload.get("training_done") else 0,
+            condition_status=normalize_text(payload.get("condition_status") or "ENTREGADO")[:80],
+            notes=str(payload.get("notes") or "").upper(),
+            created_at=utc_now(),
+        )
+        movement = EppMovement(
+            item_id=item.id,
+            movement_date=delivery_date,
+            movement_type="SALIDA",
+            quantity=qty,
+            balance_after=item.quantity,
+            worker_name=delivery.worker_name,
+            employee_id=delivery.employee_id,
+            area=delivery.area,
+            reference="ENTREGA EPP",
+            notes=delivery.notes,
+            created_at=utc_now(),
+        )
+        session.add(delivery)
+        session.add(movement)
+        session.commit()
+        return {"ok": True, "item": epp_item_payload(item), "delivery_id": delivery.id, "due_date": due_date}
+
+
+@app.post("/api/epp/import")
+async def import_epp(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Carga invalida.")
+    data = str(payload.get("data") or "")
+    if "," in data and data.startswith("data:"):
+        data = data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo leer el archivo: {exc}")
+    file_name = str(payload.get("file_name") or "epp.xlsx")
+    try:
+        wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Excel invalido: {exc}")
+    ws = wb[wb.sheetnames[0]]
+    header_row = None
+    fields: dict[int, str] = {}
+    for idx, values in enumerate(ws.iter_rows(min_row=1, max_row=min(ws.max_row, 25), values_only=True), 1):
+        mapped = {col_idx: epp_field_for(value) for col_idx, value in enumerate(values)}
+        mapped = {col_idx: field for col_idx, field in mapped.items() if field}
+        if "code" in mapped.values() and "quantity" in mapped.values():
+            header_row = idx
+            fields = mapped
+            break
+    if header_row is None:
+        raise HTTPException(status_code=400, detail="No encontre encabezados de Codigo y Cantidad.")
+    rows: list[dict[str, Any]] = []
+    skipped = 0
+    for values in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        item: dict[str, Any] = {}
+        for col_idx, field in fields.items():
+            item[field] = values[col_idx] if col_idx < len(values) else None
+        if not normalize_part_key(item.get("code")):
+            skipped += 1
+            continue
+        rows.append(item)
+    with SessionLocal() as session:
+        if bool(payload.get("replace", True)):
+            session.query(EppMovement).delete()
+            session.query(EppDelivery).delete()
+            session.query(EppItem).delete()
+        imported = 0
+        for row in rows:
+            upsert_epp_item(
+                session,
+                code=str(row.get("code") or ""),
+                description=str(row.get("description") or ""),
+                category=str(row.get("category") or ""),
+                size=str(row.get("size") or ""),
+                unit=str(row.get("unit") or "PZA"),
+                quantity=parse_float(row.get("quantity"), 0),
+                min_stock=parse_float(row.get("min_stock"), 0),
+                useful_life_days=int(parse_float(row.get("useful_life_days"), 0)),
+                risk_area=str(row.get("risk_area") or ""),
+                location=str(row.get("location") or ""),
+                maintenance_notes=str(row.get("maintenance_notes") or ""),
+                source_file=file_name,
+            )
+            imported += 1
+        session.commit()
+        return {"ok": True, "imported": imported, "skipped": skipped, "summary": epp_payload(session)["summary"]}
+
+
+@app.get("/api/epp/export")
+def export_epp(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> StreamingResponse:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Inventario EPP"
+    ws.append(["Codigo", "Descripcion", "Categoria", "Talla", "Cantidad", "Unidad", "Minimo", "Vida util dias", "Area riesgo", "Ubicacion", "Capacitacion", "Notas", "Estado", "Actualizado"])
+    with SessionLocal() as session:
+        payload = epp_payload(session)
+        for row in payload.get("items") or []:
+            ws.append([
+                row.get("code") or "",
+                row.get("description") or "",
+                row.get("category") or "",
+                row.get("size") or "",
+                row.get("quantity") or 0,
+                row.get("unit") or "PZA",
+                row.get("min_stock") or 0,
+                row.get("useful_life_days") or 0,
+                row.get("risk_area") or "",
+                row.get("location") or "",
+                "SI" if row.get("training_required") else "NO",
+                row.get("maintenance_notes") or "",
+                row.get("status") or "",
+                row.get("updated_at") or "",
+            ])
+        ws2 = wb.create_sheet("Entregas")
+        ws2.append(["Fecha", "Codigo", "Trabajador", "No empleado", "Area", "Cantidad", "Vida util dias", "Fecha reposicion", "Recibio", "Firma", "Capacitado", "Estado", "Notas"])
+        for row in payload.get("deliveries") or []:
+            ws2.append([
+                row.get("delivery_date") or "", row.get("item_code") or "", row.get("worker_name") or "", row.get("employee_id") or "",
+                row.get("area") or "", row.get("quantity") or 0, row.get("useful_life_days") or 0, row.get("due_date") or "",
+                row.get("received_by") or "", row.get("signature") or "", "SI" if row.get("training_done") else "NO",
+                row.get("condition_status") or "", row.get("notes") or "",
+            ])
+        ws3 = wb.create_sheet("Movimientos")
+        ws3.append(["Fecha", "Tipo", "Codigo", "Cantidad", "Saldo", "Trabajador", "No empleado", "Area", "Referencia", "Notas"])
+        for row in payload.get("movements") or []:
+            ws3.append([
+                row.get("movement_date") or "", row.get("movement_type") or "", row.get("item_code") or "",
+                row.get("quantity") or 0, row.get("balance_after") or 0, row.get("worker_name") or "",
+                row.get("employee_id") or "", row.get("area") or "", row.get("reference") or "", row.get("notes") or "",
+            ])
+    for sheet in wb.worksheets:
+        for column_cells in sheet.columns:
+            max_len = max(len(str(cell.value or "")) for cell in column_cells)
+            sheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_len + 2, 11), 44)
+    stream = BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Inventario_EPP_MGA.xlsx"'},
+    )
 
 
 @app.get("/api/filter-inventory")
@@ -4749,6 +5620,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             previous_settings = previous_payload.get("settings") if isinstance(previous_payload.get("settings"), dict) else {}
             if isinstance(settings, dict) and "meta_diesel_lh" not in settings and isinstance(previous_settings, dict):
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
+        if "epp" not in payload and isinstance(previous_payload.get("epp"), dict):
+            payload["epp"] = previous_payload["epp"]
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
