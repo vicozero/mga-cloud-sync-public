@@ -5403,7 +5403,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
 
 
 @app.get("/almacen-filtros", response_class=HTMLResponse)
-def filter_warehouse_page() -> str:
+def filter_warehouse_page(response: Response) -> str:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     return WAREHOUSE_HTML
 
 
