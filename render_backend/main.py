@@ -3383,9 +3383,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .kpi-days{display:flex;gap:70px;justify-content:center;align-items:center;margin-bottom:8px;font-size:13px;color:#777;font-weight:700;}
         .kpi-days b{display:inline-block;background:white;color:#000;min-width:80px;padding:6px 20px;margin-left:10px;}
         .kpi-table-wrap{padding:0 90px 22px;}
-        .kpi-exact-table{width:100%;border-collapse:collapse;background:white;font-size:11px;color:#334155;}
-        .kpi-exact-table th{background:white;color:#555;border:1px solid #111;font-weight:800;text-align:center;padding:7px 5px;}
-        .kpi-exact-table td{border:1px solid #111;text-align:center;padding:6px 5px;background:white;}
+        .kpi-exact-table{width:100%;border-collapse:collapse;background:white;font-size:10px;color:#334155;}
+        .kpi-exact-table th{background:white;color:#555;border:1px solid #111;font-weight:800;text-align:center;padding:6px 4px;}
+        .kpi-exact-table td{border:1px solid #111;text-align:center;padding:5px 4px;background:white;}
         .kpi-exact-table .badtext{color:#e11d48}.kpi-exact-table .oktext{color:#0aa6a6}
         .diesel-export{background:#f4f7fb;padding:18px;color:#172033;}
         .diesel-export-head{height:82px;display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:12px;padding:16px 18px;border-radius:8px;background:#071f49;color:white;}
@@ -3555,7 +3555,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const height = Math.max(Math.min(value / Math.max(axisMax, 1), 1) * 210, 4);
         return `<div class="kpi-bar ${row.out ? "out" : ""}"><em>${esc(kpiMetricText(row, metric))}</em><i style="--h:${height}px"></i><b>${esc(row.code || "-")}</b></div>`;
       }).join("") || `<p>Sin datos KPI.</p>`;
-      const tableRows = report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td class="${row.availability < targets.availability ? "badtext" : "oktext"}">${esc(row.availabilityText)}</td><td class="${row.utilization < targets.utilization ? "badtext" : "oktext"}">${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td></tr>`).join("");
+      const tableRows = report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td class="${row.availability < targets.availability ? "badtext" : "oktext"}">${esc(row.availabilityText)}</td><td class="${row.utilization < targets.utilization ? "badtext" : "oktext"}">${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("");
       return `<section class="kpi-sheet">
         <div class="kpi-title-row"><div class="kpi-logo">MGA</div>${esc(report.group)}</div>
         <div class="kpi-board">
@@ -3575,7 +3575,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
         <div class="kpi-report-name">REPORTE SEMANAL DE INDICADORES</div>
         <div class="kpi-days"><span>Dia Inicial:<b>${Number(String(report.start).slice(-2))}</b></span><span>Dia Final:<b>${Number(String(report.end).slice(-2))}</b></span></div>
-        <div class="kpi-table-wrap"><table class="kpi-exact-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs Periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs Trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th></tr></thead><tbody>${tableRows}<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td></tr></tbody></table></div>
+        <div class="kpi-table-wrap"><table class="kpi-exact-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs Periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs Trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>${tableRows}<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody></table></div>
       </section>`;
     }
     function exactOilHtml(){
