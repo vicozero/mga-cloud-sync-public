@@ -16,6 +16,9 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
+from reportlab.graphics import renderPDF
+from reportlab.graphics.barcode import code128, qr
+from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas as pdf_canvas
@@ -30,6 +33,7 @@ except Exception:
 
 
 SERVICE_NAME = "mga-cloud-sync"
+EPP_REPLACEMENT_SOON_DAYS = 30
 
 
 def utc_now() -> datetime:
@@ -215,6 +219,19 @@ class EppDelivery(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     item: Mapped[EppItem] = relationship(back_populates="deliveries")
+
+
+class EppWorker(Base):
+    __tablename__ = "mga_epp_worker"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[str] = mapped_column(String(80), default="", index=True)
+    worker_name: Mapped[str] = mapped_column(String(180), default="", index=True)
+    area: Mapped[str] = mapped_column(String(180), default="")
+    position: Mapped[str] = mapped_column(String(180), default="")
+    active: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class CloudRequisition(Base):
@@ -620,9 +637,102 @@ def upsert_inventory_item(
     return item
 
 
-def epp_status(item: EppItem) -> str:
+def epp_worker_payload(row: EppWorker) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "employee_id": row.employee_id,
+        "worker_name": row.worker_name,
+        "area": row.area,
+        "position": row.position,
+        "active": int(row.active or 0),
+        "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else "",
+        "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
+    }
+
+
+def upsert_epp_worker(
+    session: Session,
+    *,
+    worker_name: str,
+    employee_id: str = "",
+    area: str = "",
+    position: str = "",
+    active: int = 1,
+) -> EppWorker:
+    normalized_name = normalize_text(worker_name or employee_id)
+    normalized_employee = normalize_text(employee_id)[:80]
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Trabajador requerido.")
+    if normalized_employee:
+        row = session.scalar(select(EppWorker).where(EppWorker.employee_id == normalized_employee))
+    else:
+        row = session.scalar(select(EppWorker).where(EppWorker.employee_id == "", EppWorker.worker_name == normalized_name))
+    if row is None:
+        row = EppWorker(employee_id=normalized_employee, worker_name=normalized_name, created_at=utc_now())
+        session.add(row)
+    row.employee_id = normalized_employee
+    row.worker_name = normalized_name[:180]
+    row.area = normalize_text(area)[:180]
+    row.position = normalize_text(position)[:180]
+    row.active = 1 if active else 0
+    row.updated_at = utc_now()
+    return row
+
+
+def ensure_epp_worker_from_values(session: Session, worker_name: str = "", employee_id: str = "", area: str = "") -> None:
+    if not str(worker_name or "").strip() and not str(employee_id or "").strip():
+        return
+    try:
+        upsert_epp_worker(session, worker_name=str(worker_name or employee_id), employee_id=str(employee_id or ""), area=str(area or ""))
+    except Exception:
+        pass
+
+
+def epp_delivery_alerts_by_code(deliveries: list[EppDelivery], item_by_id: dict[int, EppItem]) -> dict[str, dict[str, Any]]:
+    today = utc_now().date()
+    soon_limit = today + timedelta(days=EPP_REPLACEMENT_SOON_DAYS)
+    alerts: dict[str, dict[str, Any]] = {}
+    for row in deliveries:
+        if not row.due_date or row.condition_status in {"BAJA", "DEVUELTO"}:
+            continue
+        item = item_by_id.get(row.item_id)
+        if item is None:
+            continue
+        try:
+            due = datetime.fromisoformat(str(row.due_date)).date()
+        except Exception:
+            continue
+        bucket = alerts.setdefault(
+            item.code_key,
+            {
+                "overdue": 0,
+                "due_soon": 0,
+                "next_due_date": "",
+                "next_worker": "",
+                "next_employee_id": "",
+                "next_area": "",
+            },
+        )
+        if due < today:
+            bucket["overdue"] += 1
+        elif today <= due <= soon_limit:
+            bucket["due_soon"] += 1
+        if not bucket["next_due_date"] or due.isoformat() < bucket["next_due_date"]:
+            bucket["next_due_date"] = due.isoformat()
+            bucket["next_worker"] = row.worker_name
+            bucket["next_employee_id"] = row.employee_id
+            bucket["next_area"] = row.area
+    return alerts
+
+
+def epp_status(item: EppItem, alerts: dict[str, Any] | None = None) -> str:
     quantity = parse_float(item.quantity, 0)
     minimum = parse_float(item.min_stock, 0)
+    alerts = alerts or {}
+    if int(alerts.get("overdue", 0) or 0) > 0:
+        return "VENCIDO POR VIDA UTIL"
+    if int(alerts.get("due_soon", 0) or 0) > 0:
+        return "PROXIMO A REPOSICION"
     if quantity <= 0:
         return "SIN STOCK"
     if minimum > 0 and quantity <= minimum:
@@ -630,7 +740,8 @@ def epp_status(item: EppItem) -> str:
     return "OK"
 
 
-def epp_item_payload(item: EppItem) -> dict[str, Any]:
+def epp_item_payload(item: EppItem, alerts: dict[str, Any] | None = None) -> dict[str, Any]:
+    alerts = alerts or {}
     return {
         "id": item.id,
         "code_key": item.code_key,
@@ -648,7 +759,12 @@ def epp_item_payload(item: EppItem) -> dict[str, Any]:
         "maintenance_notes": item.maintenance_notes,
         "source_file": item.source_file,
         "updated_at": item.updated_at.isoformat(timespec="seconds") if item.updated_at else "",
-        "status": epp_status(item),
+        "status": epp_status(item, alerts),
+        "next_due_date": alerts.get("next_due_date", ""),
+        "next_worker": alerts.get("next_worker", ""),
+        "overdue_deliveries": int(alerts.get("overdue", 0) or 0),
+        "due_soon_deliveries": int(alerts.get("due_soon", 0) or 0),
+        "qr_payload": f"EPP|{item.code}|{item.description}",
     }
 
 
@@ -698,11 +814,14 @@ def epp_payload(session: Session) -> dict[str, Any]:
     portal = latest_portal_payload(session)
     portal_epp = portal.get("epp") if isinstance(portal, dict) else {}
     db_items = session.scalars(select(EppItem).order_by(EppItem.category.asc(), EppItem.description.asc(), EppItem.code.asc())).all()
-    if db_items:
-        items = [epp_item_payload(item) for item in db_items]
+    db_workers = session.scalars(select(EppWorker).order_by(EppWorker.worker_name.asc(), EppWorker.employee_id.asc())).all()
+    if db_items or db_workers:
         item_by_id = {item.id: item for item in db_items}
+        all_deliveries = session.scalars(select(EppDelivery).order_by(EppDelivery.id.desc())).all()
+        alerts_by_code = epp_delivery_alerts_by_code(all_deliveries, item_by_id)
+        items = [epp_item_payload(item, alerts_by_code.get(item.code_key, {})) for item in db_items]
         movements = session.scalars(select(EppMovement).order_by(EppMovement.id.desc()).limit(300)).all()
-        deliveries = session.scalars(select(EppDelivery).order_by(EppDelivery.id.desc()).limit(300)).all()
+        deliveries = all_deliveries[:300]
         movement_rows = [
             {
                 "id": row.id,
@@ -740,20 +859,161 @@ def epp_payload(session: Session) -> dict[str, Any]:
             }
             for row in deliveries
         ]
+        workers = [epp_worker_payload(row) for row in db_workers]
     elif isinstance(portal_epp, dict):
         items = portal_epp.get("items") if isinstance(portal_epp.get("items"), list) else []
         movement_rows = portal_epp.get("movements") if isinstance(portal_epp.get("movements"), list) else []
         delivery_rows = portal_epp.get("deliveries") if isinstance(portal_epp.get("deliveries"), list) else []
+        workers = portal_epp.get("workers") if isinstance(portal_epp.get("workers"), list) else []
     else:
-        items, movement_rows, delivery_rows = [], [], []
+        items, movement_rows, delivery_rows, workers = [], [], [], []
     summary = {
         "items": len(items),
         "total_quantity": sum(parse_float(row.get("quantity"), 0) for row in items if isinstance(row, dict)),
         "low_stock": sum(1 for row in items if isinstance(row, dict) and row.get("status") == "BAJO MINIMO"),
         "out_stock": sum(1 for row in items if isinstance(row, dict) and row.get("status") == "SIN STOCK"),
+        "due_soon": sum(1 for row in items if isinstance(row, dict) and row.get("status") == "PROXIMO A REPOSICION"),
+        "overdue": sum(1 for row in items if isinstance(row, dict) and row.get("status") == "VENCIDO POR VIDA UTIL"),
+        "workers": len(workers),
         "deliveries": len(delivery_rows),
     }
-    return {"ok": True, "items": items, "movements": movement_rows, "deliveries": delivery_rows, "summary": summary}
+    return {"ok": True, "items": items, "movements": movement_rows, "deliveries": delivery_rows, "workers": workers, "summary": summary}
+
+
+def pdf_wrap_lines(c: pdf_canvas.Canvas, text: str, max_width: float, font_name: str = "Helvetica", font_size: float = 9) -> list[str]:
+    words = str(text or "").replace("\n", " ").split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if c.stringWidth(candidate, font_name, font_size) <= max_width or not current:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def draw_pdf_qr(c: pdf_canvas.Canvas, payload: str, x: float, y: float, size: float) -> None:
+    widget = qr.QrCodeWidget(payload or "EPP")
+    bounds = widget.getBounds()
+    width = bounds[2] - bounds[0]
+    height = bounds[3] - bounds[1]
+    drawing = Drawing(size, size, transform=[size / width, 0, 0, size / height, 0, 0])
+    drawing.add(widget)
+    renderPDF.draw(drawing, c, x, y)
+
+
+def draw_pdf_code128(c: pdf_canvas.Canvas, payload: str, x: float, y: float, bar_width: float = 0.8, bar_height: float = 28) -> None:
+    code = code128.Code128(payload or "EPP", barWidth=bar_width, barHeight=bar_height, humanReadable=True)
+    code.drawOn(c, x, y)
+
+
+def epp_qr_pdf_bytes(item: EppItem) -> bytes:
+    stream = BytesIO()
+    c = pdf_canvas.Canvas(stream, pagesize=letter)
+    width, height = letter
+    c.setFillColor(colors.HexColor("#071f49"))
+    c.rect(0, height - 78, width, 78, fill=1, stroke=0)
+    if DIESEL_LOGO_PATH.exists():
+        c.drawImage(str(DIESEL_LOGO_PATH), 42, height - 58, width=92, height=36, preserveAspectRatio=True, mask="auto")
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(150, height - 45, "ETIQUETA EPP")
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 22)
+    c.drawString(60, height - 130, item.code)
+    c.setFont("Helvetica", 12)
+    c.drawString(60, height - 152, item.description[:80])
+    c.drawString(60, height - 172, f"Categoria: {item.category or 'S/D'}")
+    payload = f"EPP|{item.code}|{item.description}"
+    draw_pdf_qr(c, payload, 390, height - 250, 140)
+    draw_pdf_code128(c, item.code, 60, height - 240, bar_width=0.9, bar_height=42)
+    c.setFont("Helvetica", 8)
+    c.setFillColor(colors.HexColor("#64748b"))
+    c.drawString(60, 60, f"Generado: {utc_now().isoformat(timespec='seconds')}")
+    c.showPage()
+    c.save()
+    return stream.getvalue()
+
+
+def epp_delivery_pdf_bytes(delivery: EppDelivery, item: EppItem) -> bytes:
+    stream = BytesIO()
+    c = pdf_canvas.Canvas(stream, pagesize=letter)
+    width, height = letter
+    margin = 42
+    c.setFillColor(colors.HexColor("#071f49"))
+    c.rect(0, height - 82, width, 82, fill=1, stroke=0)
+    if DIESEL_LOGO_PATH.exists():
+        c.drawImage(str(DIESEL_LOGO_PATH), margin, height - 61, width=95, height=38, preserveAspectRatio=True, mask="auto")
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(width / 2, height - 34, "CONSTANCIA DE ENTREGA DE EPP")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(width - margin, height - 58, f"Folio EPP-{delivery.id}")
+
+    def field(label: str, value: str, x: float, y: float, w: float, h: float = 30) -> None:
+        c.setFillColor(colors.HexColor("#f8fafc"))
+        c.rect(x, y - h, w, h, fill=1, stroke=1)
+        c.setFillColor(colors.HexColor("#64748b"))
+        c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(x + 6, y - 11, label)
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica", 10)
+        c.drawString(x + 6, y - 24, str(value or "")[:58])
+
+    top = height - 105
+    field("Fecha de entrega", delivery.delivery_date, margin, top, 130)
+    field("Fecha de reposicion", delivery.due_date or "S/D", margin + 140, top, 145)
+    field("Trabajador", delivery.worker_name, margin, top - 40, 275)
+    field("No. empleado", delivery.employee_id, margin + 285, top - 40, 120)
+    field("Area / puesto", delivery.area, margin + 415, top - 40, 135)
+    field("Codigo EPP", item.code, margin, top - 80, 130)
+    field("Descripcion", item.description, margin + 140, top - 80, 285)
+    field("Cantidad", f"{delivery.quantity:g} {item.unit or 'PZA'}", margin + 435, top - 80, 115)
+    field("Categoria", item.category, margin, top - 120, 130)
+    field("Talla", item.size, margin + 140, top - 120, 100)
+    field("Vida util dias", str(delivery.useful_life_days or 0), margin + 250, top - 120, 100)
+    field("Capacitacion", "SI" if delivery.training_done else "NO", margin + 360, top - 120, 90)
+    field("Estado", delivery.condition_status, margin + 460, top - 120, 90)
+
+    notes_top = top - 175
+    c.setFillColor(colors.HexColor("#f8fafc"))
+    c.rect(margin, notes_top - 72, width - (margin * 2), 72, fill=1, stroke=1)
+    c.setFillColor(colors.HexColor("#64748b"))
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(margin + 6, notes_top - 13, "Notas y mantenimiento")
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica", 9)
+    notes = delivery.notes or item.maintenance_notes or ""
+    for idx, line in enumerate(pdf_wrap_lines(c, notes, width - (margin * 2) - 16, "Helvetica", 9)[:4]):
+        c.drawString(margin + 6, notes_top - 30 - (idx * 12), line)
+
+    qr_y = notes_top - 190
+    payload = f"EPP-ENTREGA|{delivery.id}|{item.code}|{delivery.employee_id}|{delivery.delivery_date}"
+    draw_pdf_qr(c, payload, width - margin - 112, qr_y, 104)
+    draw_pdf_code128(c, f"EPP-{delivery.id}", margin, qr_y + 18, bar_width=0.8, bar_height=34)
+    c.setFont("Helvetica", 9)
+    legal = "Recibi el equipo de proteccion personal descrito y me comprometo a usarlo, conservarlo y reportar cualquier dano, perdida o desgaste."
+    for idx, line in enumerate(pdf_wrap_lines(c, legal, width - (margin * 2) - 135, "Helvetica", 9)[:3]):
+        c.drawString(margin, qr_y - 20 - (idx * 12), line)
+
+    sig_y = 145
+    c.line(margin, sig_y, margin + 210, sig_y)
+    c.line(width - margin - 210, sig_y, width - margin, sig_y)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawCentredString(margin + 105, sig_y - 14, "Firma trabajador")
+    c.drawCentredString(width - margin - 105, sig_y - 14, "Entrega / Almacen")
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(margin + 105, sig_y - 28, delivery.signature or delivery.worker_name)
+    c.drawCentredString(width - margin - 105, sig_y - 28, delivery.received_by or "")
+    c.setFillColor(colors.HexColor("#64748b"))
+    c.drawString(margin, 48, f"Generado: {utc_now().isoformat(timespec='seconds')}")
+    c.showPage()
+    c.save()
+    return stream.getvalue()
 
 
 def latest_catalog_payload(session: Session) -> dict[str, Any]:
@@ -2895,9 +3155,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     </section>
     <section id="epp" class="view">
       <div class="stats" id="eppStats"></div>
+      <datalist id="eppWorkerList"></datalist>
       <div class="panel toolbar">
         <label>Buscar<input id="eppSearch" placeholder="Codigo, descripcion, trabajador"></label>
-        <label>Estado<select id="eppStatus"><option value="">Todos</option><option>OK</option><option>BAJO MINIMO</option><option>SIN STOCK</option></select></label>
+        <label>Estado<select id="eppStatus"><option value="">Todos</option><option>OK</option><option>BAJO MINIMO</option><option>SIN STOCK</option><option>PROXIMO A REPOSICION</option><option>VENCIDO POR VIDA UTIL</option></select></label>
         <button class="btn" id="eppRefreshBtn">Actualizar EPP</button>
         <button class="btn secondary" id="eppExportBtn">Exportar Excel</button>
       </div>
@@ -2923,6 +3184,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn" id="eppSaveBtn">Guardar / modificar</button>
             <button class="btn danger" id="eppDeleteBtn">Eliminar</button>
             <button class="btn danger" id="eppDeleteAllBtn">Eliminar todo EPP</button>
+            <button class="btn secondary" id="eppQrBtn">QR articulo</button>
           </div>
           <div class="table-wrap" style="max-height:360px; margin-top:10px;"><table id="eppTable"></table></div>
         </div>
@@ -2933,7 +3195,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Tipo<select id="eppMovType"><option>ENTRADA</option><option>SALIDA</option><option>AJUSTE</option></select></label>
             <label>Cantidad<input id="eppMovQty" type="number" step="0.01" value="1"></label>
             <label>Referencia<input id="eppMovRef"></label>
-            <label>Trabajador<input id="eppMovWorker"></label>
+            <label>Trabajador<input id="eppMovWorker" list="eppWorkerList"></label>
             <label>No. empleado<input id="eppMovEmployee"></label>
             <label>Area<input id="eppMovArea"></label>
             <label class="wide">Notas<textarea id="eppMovNotes" rows="2"></textarea></label>
@@ -2942,7 +3204,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <h3>Entrega a trabajador</h3>
           <div class="movement-grid">
             <label>Fecha<input id="eppDelDate" type="date"></label>
-            <label>Trabajador<input id="eppDelWorker"></label>
+            <label>Trabajador<input id="eppDelWorker" list="eppWorkerList"></label>
             <label>No. empleado<input id="eppDelEmployee"></label>
             <label>Cantidad<input id="eppDelQty" type="number" step="0.01" value="1"></label>
             <label>Area / puesto<input id="eppDelArea"></label>
@@ -2952,8 +3214,24 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Estado<select id="eppDelCondition"><option>ENTREGADO</option><option>REPOSICION</option><option>DAÑADO</option><option>BAJA</option></select></label>
             <label class="wide">Notas<textarea id="eppDelNotes" rows="2"></textarea></label>
             <button class="btn wide" id="eppDelBtn">Registrar entrega</button>
+            <button class="btn secondary wide" id="eppLastPdfBtn">PDF ultima entrega</button>
           </div>
         </div>
+      </div>
+      <div class="panel">
+        <h3>Catalogo de trabajadores</h3>
+        <div class="movement-grid">
+          <label>No. empleado<input id="eppWorkerEmployee"></label>
+          <label>Trabajador<input id="eppWorkerName"></label>
+          <label>Area<input id="eppWorkerArea"></label>
+          <label>Puesto<input id="eppWorkerPosition"></label>
+        </div>
+        <div class="req-actions">
+          <button class="btn" id="eppWorkerSaveBtn">Guardar trabajador</button>
+          <button class="btn danger" id="eppWorkerDeleteBtn">Eliminar trabajador</button>
+          <button class="btn secondary" id="eppWorkerUseBtn">Usar en entrega</button>
+        </div>
+        <div class="table-wrap" style="max-height:220px; margin-top:10px;"><table id="eppWorkersTable"></table></div>
       </div>
       <div class="grid2">
         <div class="panel">
@@ -2989,7 +3267,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let products = [];
     let requisitions = [];
     let diesel = { equipment: [], records: [], days: [], rows: [], totals: {}, start: "", end: "", meta_lh: 25 };
-    let epp = { items: [], movements: [], deliveries: [], summary: {} };
+    let epp = { items: [], movements: [], deliveries: [], workers: [], summary: {} };
+    let currentEppWorkerId = null;
     let currentReqId = null;
     let currentReqItemIndex = null;
     let currentReqItems = [];
@@ -3459,6 +3738,44 @@ WAREHOUSE_HTML = r"""<!doctype html>
         `</tbody>`;
     }
     function eppSelectedCode(){ return ($("eppCode").value || "").trim().toUpperCase(); }
+    function eppStatusClass(status){
+      if(status === "OK") return "ok";
+      if(status === "SIN STOCK" || status === "VENCIDO POR VIDA UTIL") return "bad";
+      return "warn";
+    }
+    function eppWorkerLabel(row){
+      return row && row.employee_id ? `${row.employee_id} - ${row.worker_name}` : (row?.worker_name || "");
+    }
+    function findEppWorker(value){
+      const text = String(value || "").toUpperCase();
+      return (epp.workers || []).find(row => [eppWorkerLabel(row), row.worker_name, row.employee_id].some(v => String(v || "").toUpperCase() === text));
+    }
+    function fillWorkerForm(row){
+      currentEppWorkerId = row?.id || null;
+      $("eppWorkerEmployee").value = row?.employee_id || "";
+      $("eppWorkerName").value = row?.worker_name || "";
+      $("eppWorkerArea").value = row?.area || "";
+      $("eppWorkerPosition").value = row?.position || "";
+    }
+    function applyWorkerToEppForms(row){
+      if(!row) return;
+      $("eppDelWorker").value = row.worker_name || "";
+      $("eppDelEmployee").value = row.employee_id || "";
+      $("eppDelArea").value = row.area || row.position || "";
+      if(!$("eppDelReceived").value) $("eppDelReceived").value = row.worker_name || "";
+      $("eppMovWorker").value = row.worker_name || "";
+      $("eppMovEmployee").value = row.employee_id || "";
+      $("eppMovArea").value = row.area || row.position || "";
+    }
+    function renderEppWorkers(){
+      $("eppWorkerList").innerHTML = (epp.workers || []).filter(row => row.active !== 0).map(row => `<option value="${esc(eppWorkerLabel(row))}"></option>`).join("");
+      $("eppWorkersTable").innerHTML = `<thead><tr><th>No.</th><th>Trabajador</th><th>Area</th><th>Puesto</th></tr></thead><tbody>` +
+        (epp.workers || []).map(row => `<tr data-epp-worker="${row.id}"><td>${esc(row.employee_id)}</td><td>${esc(row.worker_name)}</td><td>${esc(row.area)}</td><td>${esc(row.position)}</td></tr>`).join("") + `</tbody>`;
+      document.querySelectorAll("[data-epp-worker]").forEach(tr => tr.addEventListener("click", () => {
+        const row = (epp.workers || []).find(item => String(item.id) === String(tr.dataset.eppWorker));
+        if(row) fillWorkerForm(row);
+      }));
+    }
     function clearEppForm(){
       ["eppCode","eppCategory","eppSize","eppRisk","eppLocation","eppNotes","eppDesc"].forEach(id => $(id).value = "");
       $("eppUnit").value = "PZA"; $("eppQty").value = "0"; $("eppMin").value = "0"; $("eppLife").value = "0"; $("eppTraining").value = "0";
@@ -3486,15 +3803,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Existencia total", num(s.total_quantity || 0)],
         ["Bajo minimo", s.low_stock || 0],
         ["Sin stock", s.out_stock || 0],
+        ["Prox. reposicion", s.due_soon || 0],
+        ["Vencidos", s.overdue || 0],
+        ["Trabajadores", s.workers || 0],
         ["Entregas", s.deliveries || 0],
       ].map(([k,v]) => `<div class="stat"><strong>${v}</strong>${k}</div>`).join("");
+      renderEppWorkers();
       const search = ($("eppSearch").value || "").toUpperCase();
       const status = $("eppStatus").value;
-      const rows = (epp.items || []).filter(row => (!status || row.status === status) && (!search || [row.code,row.description,row.category,row.size,row.risk_area,row.location].join(" ").toUpperCase().includes(search)));
-      $("eppTable").innerHTML = `<thead><tr><th>Estado</th><th>Codigo</th><th>Descripcion</th><th>Categoria</th><th>Talla</th><th>Exist.</th><th>Unidad</th><th>Min.</th><th>Vida dias</th><th>Area/riesgo</th><th>Ubicacion</th></tr></thead><tbody>` +
+      const rows = (epp.items || []).filter(row => (!status || row.status === status) && (!search || [row.code,row.description,row.category,row.size,row.risk_area,row.location,row.next_worker].join(" ").toUpperCase().includes(search)));
+      $("eppTable").innerHTML = `<thead><tr><th>Estado</th><th>Codigo</th><th>Descripcion</th><th>Categoria</th><th>Talla</th><th>Exist.</th><th>Unidad</th><th>Min.</th><th>Vida dias</th><th>Prox. repos.</th><th>QR</th><th>Area/riesgo</th><th>Ubicacion</th></tr></thead><tbody>` +
         rows.map(row => {
-          const cls = row.status === "OK" ? "ok" : (row.status === "SIN STOCK" ? "bad" : "warn");
-          return `<tr data-epp-code="${esc(row.code)}"><td><span class="pill ${cls}">${esc(row.status)}</span></td><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${esc(row.category)}</td><td>${esc(row.size)}</td><td>${num(row.quantity)}</td><td>${esc(row.unit || "PZA")}</td><td>${num(row.min_stock)}</td><td>${num(row.useful_life_days)}</td><td>${esc(row.risk_area)}</td><td>${esc(row.location)}</td></tr>`;
+          const cls = eppStatusClass(row.status);
+          return `<tr data-epp-code="${esc(row.code)}"><td><span class="pill ${cls}">${esc(row.status)}</span></td><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${esc(row.category)}</td><td>${esc(row.size)}</td><td>${num(row.quantity)}</td><td>${esc(row.unit || "PZA")}</td><td>${num(row.min_stock)}</td><td>${num(row.useful_life_days)}</td><td>${esc(row.next_due_date || "")}</td><td><a href="/api/epp/items/${encodeURIComponent(row.code)}/qr.pdf" target="_blank">QR</a></td><td>${esc(row.risk_area)}</td><td>${esc(row.location)}</td></tr>`;
         }).join("") + `</tbody>`;
       document.querySelectorAll("[data-epp-code]").forEach(tr => tr.addEventListener("click", () => {
         const row = (epp.items || []).find(item => item.code === tr.dataset.eppCode);
@@ -3507,8 +3828,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const code = eppSelectedCode();
       const match = row => !code || String(row.item_code || row.code || "").toUpperCase() === code;
       const deliveries = (epp.deliveries || []).filter(match).slice(0, 120);
-      $("eppDeliveriesTable").innerHTML = `<thead><tr><th>Fecha</th><th>Codigo</th><th>Trabajador</th><th>No.</th><th>Area</th><th>Cant.</th><th>Vence</th><th>Firma</th><th>Estado</th></tr></thead><tbody>` +
-        deliveries.map(row => `<tr><td>${esc(row.delivery_date)}</td><td>${esc(row.item_code)}</td><td>${esc(row.worker_name)}</td><td>${esc(row.employee_id)}</td><td>${esc(row.area)}</td><td>${num(row.quantity)}</td><td>${esc(row.due_date)}</td><td>${esc(row.signature)}</td><td>${esc(row.condition_status)}</td></tr>`).join("") + `</tbody>`;
+      $("eppDeliveriesTable").innerHTML = `<thead><tr><th>Fecha</th><th>Codigo</th><th>Trabajador</th><th>No.</th><th>Area</th><th>Cant.</th><th>Vence</th><th>Firma</th><th>Estado</th><th>PDF</th></tr></thead><tbody>` +
+        deliveries.map(row => `<tr><td>${esc(row.delivery_date)}</td><td>${esc(row.item_code)}</td><td>${esc(row.worker_name)}</td><td>${esc(row.employee_id)}</td><td>${esc(row.area)}</td><td>${num(row.quantity)}</td><td>${esc(row.due_date)}</td><td>${esc(row.signature)}</td><td>${esc(row.condition_status)}</td><td><a href="/api/epp/deliveries/${row.id}/pdf" target="_blank">PDF</a></td></tr>`).join("") + `</tbody>`;
       const movements = (epp.movements || []).filter(match).slice(0, 120);
       $("eppMovementsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Tipo</th><th>Codigo</th><th>Cant.</th><th>Saldo</th><th>Trabajador</th><th>Area</th><th>Ref.</th></tr></thead><tbody>` +
         movements.map(row => `<tr><td>${esc(row.movement_date)}</td><td>${esc(row.movement_type)}</td><td>${esc(row.item_code)}</td><td>${num(row.quantity)}</td><td>${num(row.balance_after)}</td><td>${esc(row.worker_name)}</td><td>${esc(row.area)}</td><td>${esc(row.reference)}</td></tr>`).join("") + `</tbody>`;
@@ -3543,8 +3864,41 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!r.ok) return alert(await apiError(r));
       clearEppForm(); await refreshEpp();
     }
+    async function saveEppWorker(){
+      if(!hasApiKey(true)) return;
+      const payload = {id:currentEppWorkerId, employee_id:$("eppWorkerEmployee").value, worker_name:$("eppWorkerName").value, area:$("eppWorkerArea").value, position:$("eppWorkerPosition").value};
+      const r = await fetch("/api/epp/workers", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!r.ok) return alert(await apiError(r));
+      await refreshEpp();
+    }
+    async function deleteEppWorker(){
+      if(!hasApiKey(true)) return;
+      if(!currentEppWorkerId) return alert("Selecciona un trabajador.");
+      if(!confirm("Eliminar trabajador del catalogo EPP?")) return;
+      const r = await fetch("/api/epp/workers/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id:currentEppWorkerId})});
+      if(!r.ok) return alert(await apiError(r));
+      fillWorkerForm(null); await refreshEpp();
+    }
+    function openEppQr(){
+      const code = eppSelectedCode();
+      if(!code) return alert("Selecciona o captura un codigo EPP.");
+      window.open(`/api/epp/items/${encodeURIComponent(code)}/qr.pdf`, "_blank");
+    }
+    function openLastEppDeliveryPdf(){
+      const code = eppSelectedCode();
+      const rows = (epp.deliveries || []).filter(row => !code || String(row.item_code || "").toUpperCase() === code);
+      if(!rows.length) return alert("No hay entrega para generar PDF.");
+      window.open(`/api/epp/deliveries/${rows[0].id}/pdf`, "_blank");
+    }
+    function applySelectedWorker(){
+      const row = currentEppWorkerId ? (epp.workers || []).find(item => String(item.id) === String(currentEppWorkerId)) : findEppWorker($("eppWorkerName").value);
+      if(!row) return alert("Selecciona un trabajador.");
+      applyWorkerToEppForms(row);
+    }
     async function saveEppMovement(){
       if(!hasApiKey(true)) return;
+      const worker = findEppWorker($("eppMovWorker").value);
+      if(worker) { $("eppMovWorker").value = worker.worker_name || ""; $("eppMovEmployee").value = worker.employee_id || ""; $("eppMovArea").value = worker.area || worker.position || ""; }
       const payload = { code:eppSelectedCode(), movement_date:$("eppMovDate").value, movement_type:$("eppMovType").value, quantity:$("eppMovQty").value, worker_name:$("eppMovWorker").value, employee_id:$("eppMovEmployee").value, area:$("eppMovArea").value, reference:$("eppMovRef").value, notes:$("eppMovNotes").value };
       const r = await fetch("/api/epp/movements", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!r.ok) return alert(await apiError(r));
@@ -3552,10 +3906,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     async function saveEppDelivery(){
       if(!hasApiKey(true)) return;
+      const worker = findEppWorker($("eppDelWorker").value);
+      if(worker) applyWorkerToEppForms(worker);
       const payload = { code:eppSelectedCode(), delivery_date:$("eppDelDate").value, worker_name:$("eppDelWorker").value, employee_id:$("eppDelEmployee").value, area:$("eppDelArea").value, quantity:$("eppDelQty").value, received_by:$("eppDelReceived").value, signature:$("eppDelSignature").value, training_done:$("eppDelTraining").value === "1", condition_status:$("eppDelCondition").value, notes:$("eppDelNotes").value };
       const r = await fetch("/api/epp/deliveries", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!r.ok) return alert(await apiError(r));
+      const saved = await r.json().catch(() => ({}));
       $("eppDelQty").value = "1"; $("eppDelNotes").value = ""; await refreshEpp();
+      if(saved.delivery_id) window.open(`/api/epp/deliveries/${saved.delivery_id}/pdf`, "_blank");
     }
     async function refreshEpp(){
       const r = await fetch("/api/epp", {headers: headers()});
@@ -4912,11 +5270,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("eppSaveBtn").addEventListener("click", () => saveEppItem().catch(showError));
     $("eppDeleteBtn").addEventListener("click", () => deleteEppItem().catch(showError));
     $("eppDeleteAllBtn").addEventListener("click", () => deleteAllEpp().catch(showError));
+    $("eppQrBtn").addEventListener("click", openEppQr);
+    $("eppWorkerSaveBtn").addEventListener("click", () => saveEppWorker().catch(showError));
+    $("eppWorkerDeleteBtn").addEventListener("click", () => deleteEppWorker().catch(showError));
+    $("eppWorkerUseBtn").addEventListener("click", applySelectedWorker);
     $("eppMovBtn").addEventListener("click", () => saveEppMovement().catch(showError));
     $("eppDelBtn").addEventListener("click", () => saveEppDelivery().catch(showError));
+    $("eppLastPdfBtn").addEventListener("click", openLastEppDeliveryPdf);
     $("eppExportBtn").addEventListener("click", () => exportEpp().catch(showError));
     $("eppImportBtn").addEventListener("click", () => importEpp().catch(showError));
     $("eppCode").addEventListener("input", renderEppHistory);
+    $("eppDelWorker").addEventListener("change", () => { const row = findEppWorker($("eppDelWorker").value); if(row) applyWorkerToEppForms(row); });
+    $("eppMovWorker").addEventListener("change", () => { const row = findEppWorker($("eppMovWorker").value); if(row) applyWorkerToEppForms(row); });
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
@@ -4983,10 +5348,13 @@ async def replace_epp_snapshot(request: Request, _auth: str | None = Header(defa
         raise HTTPException(status_code=400, detail="Inventario EPP invalido.")
     movements = payload.get("movements") if isinstance(payload, dict) and isinstance(payload.get("movements"), list) else []
     deliveries = payload.get("deliveries") if isinstance(payload, dict) and isinstance(payload.get("deliveries"), list) else []
+    workers = payload.get("workers") if isinstance(payload, dict) and isinstance(payload.get("workers"), list) else None
     with SessionLocal() as session:
         session.query(EppMovement).delete()
         session.query(EppDelivery).delete()
         session.query(EppItem).delete()
+        if workers is not None:
+            session.query(EppWorker).delete()
         imported = 0
         for row in rows:
             if not isinstance(row, dict) or not normalize_part_key(row.get("code")):
@@ -5057,6 +5425,20 @@ async def replace_epp_snapshot(request: Request, _auth: str | None = Header(defa
                     created_at=utc_now(),
                 )
             )
+        if workers is not None:
+            for row in workers:
+                if not isinstance(row, dict):
+                    continue
+                if not str(row.get("worker_name") or row.get("employee_id") or "").strip():
+                    continue
+                upsert_epp_worker(
+                    session,
+                    worker_name=str(row.get("worker_name") or row.get("employee_id") or ""),
+                    employee_id=str(row.get("employee_id") or ""),
+                    area=str(row.get("area") or ""),
+                    position=str(row.get("position") or ""),
+                    active=1 if row.get("active", 1) else 0,
+                )
         session.commit()
         return {"ok": True, "imported": imported}
 
@@ -5166,6 +5548,7 @@ async def save_epp_movement(request: Request, _auth: str | None = Header(default
             created_at=utc_now(),
         )
         session.add(movement)
+        ensure_epp_worker_from_values(session, movement.worker_name, movement.employee_id, movement.area)
         session.commit()
         return {"ok": True, "item": epp_item_payload(item), "movement_id": movement.id}
 
@@ -5228,8 +5611,79 @@ async def save_epp_delivery(request: Request, _auth: str | None = Header(default
         )
         session.add(delivery)
         session.add(movement)
+        ensure_epp_worker_from_values(session, delivery.worker_name, delivery.employee_id, delivery.area)
         session.commit()
         return {"ok": True, "item": epp_item_payload(item), "delivery_id": delivery.id, "due_date": due_date}
+
+
+@app.post("/api/epp/workers")
+async def save_epp_worker(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Trabajador invalido.")
+    with SessionLocal() as session:
+        row = upsert_epp_worker(
+            session,
+            worker_name=str(payload.get("worker_name") or ""),
+            employee_id=str(payload.get("employee_id") or ""),
+            area=str(payload.get("area") or ""),
+            position=str(payload.get("position") or ""),
+            active=1,
+        )
+        session.commit()
+        session.refresh(row)
+        return {"ok": True, "worker": epp_worker_payload(row)}
+
+
+@app.post("/api/epp/workers/delete")
+async def delete_epp_worker(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    worker_id = int(parse_float(payload.get("id") if isinstance(payload, dict) else 0, 0))
+    if worker_id <= 0:
+        raise HTTPException(status_code=400, detail="Selecciona trabajador.")
+    with SessionLocal() as session:
+        row = session.get(EppWorker, worker_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Trabajador no encontrado.")
+        session.delete(row)
+        session.commit()
+        return {"ok": True, "deleted": worker_id}
+
+
+@app.get("/api/epp/items/{code}/qr.pdf")
+def epp_item_qr_pdf(code: str) -> Response:
+    key = normalize_part_key(code)
+    with SessionLocal() as session:
+        item = session.scalar(select(EppItem).where(EppItem.code_key == key))
+        if item is None:
+            raise HTTPException(status_code=404, detail="EPP no encontrado.")
+        data = epp_qr_pdf_bytes(item)
+        filename = f"QR_EPP_{item.code}.pdf".replace(" ", "_")
+        return Response(
+            data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
+
+@app.get("/api/epp/deliveries/{delivery_id}/pdf")
+def epp_delivery_pdf(delivery_id: int) -> Response:
+    with SessionLocal() as session:
+        delivery = session.get(EppDelivery, delivery_id)
+        if delivery is None:
+            raise HTTPException(status_code=404, detail="Entrega EPP no encontrada.")
+        item = session.get(EppItem, delivery.item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="EPP no encontrado.")
+        data = epp_delivery_pdf_bytes(delivery, item)
+        filename = f"Entrega_EPP_{item.code}_{delivery.worker_name}_{delivery.delivery_date}.pdf".replace(" ", "_")
+        return Response(
+            data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
 
 
 @app.post("/api/epp/import")
@@ -5304,7 +5758,7 @@ def export_epp(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) 
     wb = Workbook()
     ws = wb.active
     ws.title = "Inventario EPP"
-    ws.append(["Codigo", "Descripcion", "Categoria", "Talla", "Cantidad", "Unidad", "Minimo", "Vida util dias", "Area riesgo", "Ubicacion", "Capacitacion", "Notas", "Estado", "Actualizado"])
+    ws.append(["Codigo", "Descripcion", "Categoria", "Talla", "Cantidad", "Unidad", "Minimo", "Vida util dias", "Prox. reposicion", "Trabajador prox.", "Vencidos", "Proximos", "Area riesgo", "Ubicacion", "Capacitacion", "Notas", "Estado", "QR", "Actualizado"])
     with SessionLocal() as session:
         payload = epp_payload(session)
         for row in payload.get("items") or []:
@@ -5317,12 +5771,24 @@ def export_epp(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) 
                 row.get("unit") or "PZA",
                 row.get("min_stock") or 0,
                 row.get("useful_life_days") or 0,
+                row.get("next_due_date") or "",
+                row.get("next_worker") or "",
+                row.get("overdue_deliveries") or 0,
+                row.get("due_soon_deliveries") or 0,
                 row.get("risk_area") or "",
                 row.get("location") or "",
                 "SI" if row.get("training_required") else "NO",
                 row.get("maintenance_notes") or "",
                 row.get("status") or "",
+                row.get("qr_payload") or "",
                 row.get("updated_at") or "",
+            ])
+        ws_workers = wb.create_sheet("Trabajadores")
+        ws_workers.append(["No empleado", "Trabajador", "Area", "Puesto", "Activo", "Actualizado"])
+        for row in payload.get("workers") or []:
+            ws_workers.append([
+                row.get("employee_id") or "", row.get("worker_name") or "", row.get("area") or "",
+                row.get("position") or "", "SI" if row.get("active", 1) else "NO", row.get("updated_at") or "",
             ])
         ws2 = wb.create_sheet("Entregas")
         ws2.append(["Fecha", "Codigo", "Trabajador", "No empleado", "Area", "Cantidad", "Vida util dias", "Fecha reposicion", "Recibio", "Firma", "Capacitado", "Estado", "Notas"])
