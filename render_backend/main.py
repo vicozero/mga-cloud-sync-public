@@ -5,6 +5,8 @@ import json
 import math
 import os
 import re
+import tempfile
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -16,6 +18,11 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_SHAPE_TYPE
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.util import Inches, Pt
 from reportlab.graphics import renderPDF
 from reportlab.graphics.barcode import code128, qr
 from reportlab.graphics.shapes import Drawing
@@ -370,6 +377,7 @@ PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
 REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
 DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
 DIESEL_LOGO_PATH = STATIC_DIR / "mga-corner-logo.jfif"
+MONTHLY_REPORT_TEMPLATE_PATH = STATIC_DIR / "monthly_report_template.pptx"
 KPI_FORMAT_PDFS = {
     "barrenacion": STATIC_DIR / "kpi_barrenacion_format.pdf",
     "rezagado": STATIC_DIR / "kpi_rezagado_format.pdf",
@@ -2330,6 +2338,632 @@ def kpi_format_image_bytes(path: Path) -> bytes:
         doc.close()
 
 
+MONTH_NAMES_ES_FULL = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+]
+PPT_EMU_PER_INCH = 914400
+PPT_BLUE = "08265b"
+PPT_TEAL = "0aa6a6"
+PPT_RED = "d71920"
+PPT_LIGHT = "eef3f9"
+PPT_LINE = "cfd8e5"
+PPT_TEXT = "061a3b"
+
+
+def month_bounds(year: int, month: int) -> tuple[str, str]:
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Mes invalido.")
+    start = datetime(year, month, 1).date()
+    if month == 12:
+        end = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+    else:
+        end = datetime(year, month + 1, 1).date() - timedelta(days=1)
+    return start.isoformat(), end.isoformat()
+
+
+def normalized_ascii(value: Any) -> str:
+    text = normalize_text(value)
+    return "".join(ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn")
+
+
+def portal_date_in_range(value: Any, start: str, end: str) -> bool:
+    text = str(value or "")[:10]
+    return bool(text) and start <= text <= end
+
+
+def portal_equipment_rows(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = portal.get("equipment") if isinstance(portal, dict) else []
+    return [row for row in rows if isinstance(row, dict) and (row.get("code") or row.get("equipment_code"))]
+
+
+def equipment_keys_py(value: Any) -> list[str]:
+    text = normalized_ascii(value)
+    if not text:
+        return []
+    first = re.split(r"\s+-\s+|\s+\(|\s+", text)[0] if text else ""
+    keys: set[str] = set()
+    for candidate in {text, first}:
+        raw = re.sub(r"[^A-Z0-9]", "", normalized_ascii(candidate))
+        if not raw:
+            continue
+        keys.add(raw)
+        keys.add(re.sub(r"([A-Z]+)0+(\d)", r"\1\2", raw))
+    return [key for key in keys if key]
+
+
+def kpi_unavailable_status(status: Any) -> bool:
+    text = normalized_ascii(status)
+    return any(token in text for token in ("NO DISPONIBLE", "FUERA", "NO DISP", "REPARACION", "MANTENIMIENTO"))
+
+
+def kpi_status_from_condition_py(value: Any) -> str:
+    text = normalized_ascii(value)
+    if not text:
+        return ""
+    if "STAND" in text:
+        return "Stand By"
+    if kpi_unavailable_status(text):
+        return "No Disponible"
+    if "DISPONIBLE" in text:
+        return "Disponible"
+    if "OPERATIVA" in text:
+        return "Operativa"
+    return "No Disponible"
+
+
+def availability_status_map_py(portal: dict[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    rows = portal.get("availability") if isinstance(portal, dict) else []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        status = kpi_status_from_condition_py(row.get("condition"))
+        if not status:
+            continue
+        for key in [*equipment_keys_py(row.get("eco")), *equipment_keys_py(row.get("equipment"))]:
+            result.setdefault(key, status)
+    return result
+
+
+def availability_status_for_equipment_py(eq: dict[str, Any], status_map: dict[str, str]) -> str:
+    for key in [*equipment_keys_py(eq.get("code") or eq.get("equipment_code")), *equipment_keys_py(eq.get("description"))]:
+        if key in status_map:
+            return status_map[key]
+    return ""
+
+
+def group_matches_py(eq: dict[str, Any], group: str) -> bool:
+    key = normalized_ascii(group or "Todos")
+    code = normalized_ascii(eq.get("code") or eq.get("equipment_code"))
+    text = normalized_ascii(f"{code} {eq.get('description') or ''} {eq.get('family') or ''}")
+    if "TODOS" in key:
+        return True
+    if "BARRENACION" in key:
+        return code.startswith(("JL", "JA")) or "JUMBO" in text or "BARREN" in text or "ANCLADOR" in text
+    if "REZAGADO" in key:
+        return code.startswith("ST") or any(token in text for token in ("SCOOP", "CATERPILLAR", "EPROC", "R1300", "R1600", "REZAG"))
+    return True
+
+
+def monthly_kpi_metric(period: float, worked: float, mp: float, mc: float, stops: float) -> dict[str, float]:
+    available = max(period - mp - mc, 0)
+    availability = max(min((available / period) * 100, 100), 0) if period > 0 else 0
+    utilization = max(min((worked / available) * 100, 100), 0) if available > 0 else 0
+    stop_count = max(stops, 0)
+    return {
+        "available": available,
+        "availability": availability,
+        "utilization": utilization,
+        "tmef": worked / stop_count if stop_count else worked,
+        "tmpr": mc / stop_count if stop_count else 0,
+    }
+
+
+def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str) -> dict[str, Any]:
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9) or 9
+    daily_hours = shift_hours * (parse_float(settings.get("turns_per_day"), 2) or 2)
+    try:
+        start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        days = max((end_date - start_date).days + 1, 1)
+    except ValueError:
+        days = 1
+    grouped: dict[str, dict[str, Any]] = {}
+    status_map = availability_status_map_py(portal)
+    for eq in portal_equipment_rows(portal):
+        if not group_matches_py(eq, group):
+            continue
+        code = str(eq.get("code") or eq.get("equipment_code") or "").strip()
+        availability_status = availability_status_for_equipment_py(eq, status_map)
+        grouped[code] = {
+            "code": code,
+            "description": str(eq.get("description") or ""),
+            "family": str(eq.get("family") or ""),
+            "status": availability_status or str(eq.get("status") or "Disponible"),
+            "availability_status": availability_status,
+            "capture_status": "",
+            "capture_status_order": "",
+            "period": days * daily_hours,
+            "worked": 0.0,
+            "mp": 0.0,
+            "mc": 0.0,
+            "stops": 0.0,
+            "unavailable_count": 0,
+        }
+    captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
+    for capture in captures:
+        if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
+            continue
+        code = str(capture.get("equipment_code") or capture.get("code") or "").strip()
+        if code not in grouped:
+            continue
+        row = grouped[code]
+        mp = parse_float(capture.get("mp_hours"), 0)
+        mc = parse_float(capture.get("mc_hours"), 0)
+        capture_status = str(capture.get("status") or "").strip()
+        if capture_status:
+            capture_order = f"{capture.get('work_date') or ''}-{str(capture.get('id') or '').zfill(10)}"
+            if not row["capture_status_order"] or capture_order >= row["capture_status_order"]:
+                row["capture_status"] = capture_status
+                row["capture_status_order"] = capture_order
+                if not row["availability_status"]:
+                    row["status"] = capture_status
+        if kpi_unavailable_status(capture_status):
+            base = daily_hours if normalized_ascii(capture.get("shift")) == "GENERAL" else shift_hours
+            mc += max(base - mp - mc, 0)
+            row["unavailable_count"] += 1
+            if not row["availability_status"]:
+                row["status"] = capture_status or "FUERA"
+        row["worked"] += parse_float(capture.get("worked_hours"), 0)
+        row["mp"] += mp
+        row["mc"] += mc
+        row["stops"] += parse_float(capture.get("stops"), 0)
+
+    rows: list[dict[str, Any]] = []
+    for row in sorted(grouped.values(), key=lambda item: item["code"]):
+        if row["availability_status"]:
+            row["status"] = row["availability_status"]
+        elif row["capture_status"]:
+            row["status"] = row["capture_status"]
+        out = row["worked"] <= 0 and (row["unavailable_count"] > 0 or kpi_unavailable_status(row["status"]))
+        metric_values = {"available": 0, "availability": 0, "utilization": 0, "tmef": 0, "tmpr": 0} if out else monthly_kpi_metric(row["period"], row["worked"], row["mp"], row["mc"], row["stops"])
+        row.update(metric_values)
+        row["out"] = out
+        row["availability_text"] = "FUERA" if out else f"{row['availability']:.1f}%"
+        row["utilization_text"] = "FUERA" if out else f"{row['utilization']:.1f}%"
+        rows.append(row)
+
+    totals = {"period": 0.0, "worked": 0.0, "mp": 0.0, "mc": 0.0, "stops": 0.0, "available": 0.0}
+    for row in rows:
+        totals["period"] += row["period"]
+        totals["worked"] += row["worked"]
+        totals["mp"] += row["mp"]
+        totals["mc"] += row["mc"]
+        totals["stops"] += row["stops"]
+        totals["available"] += row["available"]
+    totals["availability"] = (totals["available"] / totals["period"] * 100) if totals["period"] else 0
+    totals["utilization"] = (totals["worked"] / totals["available"] * 100) if totals["available"] else 0
+    totals["tmef"] = (totals["worked"] / totals["stops"]) if totals["stops"] else totals["worked"]
+    totals["tmpr"] = (totals["mc"] / totals["stops"]) if totals["stops"] else 0
+    return {"group": group, "start": start, "end": end, "rows": rows, "totals": totals}
+
+
+def ppt_rgb(hex_color: str) -> RGBColor:
+    clean = str(hex_color or "000000").strip().lstrip("#")
+    if len(clean) != 6:
+        clean = "000000"
+    return RGBColor(int(clean[0:2], 16), int(clean[2:4], 16), int(clean[4:6], 16))
+
+
+def ppt_slide_size(prs: Presentation) -> tuple[float, float]:
+    return prs.slide_width / PPT_EMU_PER_INCH, prs.slide_height / PPT_EMU_PER_INCH
+
+
+def ppt_clear_slide(slide) -> None:
+    for shape in list(slide.shapes):
+        parent = shape._element.getparent()
+        if parent is not None:
+            parent.remove(shape._element)
+
+
+def ppt_blank_layout(prs: Presentation):
+    return prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[0]
+
+
+def ppt_ensure_slide(prs: Presentation, index: int):
+    while len(prs.slides) <= index:
+        prs.slides.add_slide(ppt_blank_layout(prs))
+    return prs.slides[index]
+
+
+def ppt_rect(slide, x: float, y: float, w: float, h: float, fill: str = "ffffff", line: str | None = PPT_LINE):
+    shape = slide.shapes.add_shape(MSO_AUTO_SHAPE_TYPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = ppt_rgb(fill)
+    if line:
+        shape.line.color.rgb = ppt_rgb(line)
+        shape.line.width = Pt(0.6)
+    else:
+        shape.line.fill.background()
+    return shape
+
+
+def ppt_text(
+    slide,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    text: Any,
+    size: float = 12,
+    bold: bool = False,
+    color: str = PPT_TEXT,
+    align=PP_ALIGN.LEFT,
+) -> None:
+    shape = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+    frame = shape.text_frame
+    frame.clear()
+    frame.margin_left = Inches(0.03)
+    frame.margin_right = Inches(0.03)
+    frame.margin_top = Inches(0.02)
+    frame.margin_bottom = Inches(0.02)
+    lines = ("" if text is None else str(text)).splitlines() or [""]
+    for idx, line in enumerate(lines):
+        paragraph = frame.paragraphs[0] if idx == 0 else frame.add_paragraph()
+        paragraph.alignment = align
+        run = paragraph.add_run()
+        run.text = line
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        run.font.color.rgb = ppt_rgb(color)
+
+
+def ppt_add_header(slide, prs: Presentation, title: str, subtitle: str = "") -> None:
+    sw, _ = ppt_slide_size(prs)
+    ppt_rect(slide, 0, 0, sw, 0.58, PPT_BLUE, None)
+    if DIESEL_LOGO_PATH.exists():
+        try:
+            slide.shapes.add_picture(str(DIESEL_LOGO_PATH), Inches(0.18), Inches(0.12), width=Inches(0.7), height=Inches(0.34))
+        except Exception:
+            ppt_text(slide, 0.2, 0.14, 0.65, 0.3, "MGA", 12, True, "ffffff", PP_ALIGN.CENTER)
+    else:
+        ppt_text(slide, 0.2, 0.14, 0.65, 0.3, "MGA", 12, True, "ffffff", PP_ALIGN.CENTER)
+    ppt_text(slide, 1.05, 0.1, sw - 1.3, 0.25, title, 19, True, "ffffff")
+    if subtitle:
+        ppt_text(slide, 1.05, 0.35, sw - 1.3, 0.18, subtitle, 8.5, False, "dbeafe")
+
+
+def ppt_metric_progress(value: float, target: float, inverse: bool = False) -> float:
+    value = parse_float(value, 0)
+    target = max(parse_float(target, 1), 1)
+    if inverse:
+        return max(min((target / max(value, 0.1)) * 100, 100), 0)
+    return max(min((value / target) * 100, 100), 0)
+
+
+def ppt_metric_card(slide, x: float, y: float, w: float, h: float, label: str, value: str, note: str, progress: float, bad: bool = False) -> None:
+    color = PPT_RED if bad else PPT_TEAL
+    ppt_rect(slide, x, y, w, h, "ffffff", PPT_LINE)
+    ppt_text(slide, x + 0.13, y + 0.09, w - 0.26, 0.16, label.upper(), 8.5, True, "52627a")
+    ppt_text(slide, x + 0.13, y + 0.31, w - 0.26, 0.26, value, 19, True, "5d626a")
+    ppt_text(slide, x + 0.13, y + h - 0.27, w - 0.26, 0.16, note, 7.5, False, "52627a")
+    bar_w = w - 0.26
+    ppt_rect(slide, x + 0.13, y + h - 0.12, bar_w, 0.05, "e5e7eb", None)
+    ppt_rect(slide, x + 0.13, y + h - 0.12, bar_w * max(min(progress, 100), 0) / 100, 0.05, color, None)
+
+
+def ppt_cell_text(cell, value: Any, size: float = 7, bold: bool = False, color: str = PPT_TEXT, fill: str = "ffffff", align=PP_ALIGN.CENTER) -> None:
+    cell.text = "" if value is None else str(value)
+    cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+    cell.fill.solid()
+    cell.fill.fore_color.rgb = ppt_rgb(fill)
+    for paragraph in cell.text_frame.paragraphs:
+        paragraph.alignment = align
+        for run in paragraph.runs:
+            run.font.size = Pt(size)
+            run.font.bold = bold
+            run.font.color.rgb = ppt_rgb(color)
+
+
+def ppt_add_table(
+    slide,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    headers: list[str],
+    rows: list[list[Any]],
+    weights: list[float] | None = None,
+    font_size: float = 6.4,
+    left_cols: set[int] | None = None,
+) -> None:
+    left_cols = left_cols or set()
+    table_rows = max(len(rows) + 1, 2)
+    shape = slide.shapes.add_table(table_rows, len(headers), Inches(x), Inches(y), Inches(w), Inches(h))
+    table = shape.table
+    weights = weights or [1 for _ in headers]
+    total_weight = sum(weights) or 1
+    total_width = Inches(w)
+    for idx, weight in enumerate(weights[:len(headers)]):
+        table.columns[idx].width = int(total_width * weight / total_weight)
+    row_height = int(Inches(h) / table_rows)
+    for ridx in range(table_rows):
+        table.rows[ridx].height = row_height
+    for cidx, header in enumerate(headers):
+        ppt_cell_text(table.cell(0, cidx), header, font_size, True, "ffffff", PPT_BLUE, PP_ALIGN.CENTER)
+    for ridx in range(1, table_rows):
+        values = rows[ridx - 1] if ridx - 1 < len(rows) else ["" for _ in headers]
+        fill = "ffffff" if ridx % 2 else PPT_LIGHT
+        for cidx in range(len(headers)):
+            value = values[cidx] if cidx < len(values) else ""
+            ppt_cell_text(
+                table.cell(ridx, cidx),
+                value,
+                font_size,
+                False,
+                PPT_TEXT,
+                fill,
+                PP_ALIGN.LEFT if cidx in left_cols else PP_ALIGN.CENTER,
+            )
+
+
+def ppt_format_number(value: Any, decimals: int = 1) -> str:
+    return f"{parse_float(value, 0):.{decimals}f}"
+
+
+def ppt_format_pct(value: Any) -> str:
+    return f"{parse_float(value, 0):.1f}%"
+
+
+def ppt_add_bar_chart(slide, x: float, y: float, w: float, h: float, rows: list[dict[str, Any]], metric: str = "availability", target: float = 85) -> None:
+    ppt_rect(slide, x, y, w, h, "ffffff", PPT_LINE)
+    metric_label = {"availability": "% Disponibilidad", "utilization": "% Utilizacion", "tmef": "TMEF", "tmpr": "TMPR"}.get(metric, "% Disponibilidad")
+    ppt_text(slide, x + 0.12, y + 0.09, w - 0.24, 0.2, metric_label, 10, True, PPT_TEXT)
+    display = rows[:8]
+    values = [parse_float(row.get(metric), 0) for row in display]
+    axis_max = 120 if metric in {"availability", "utilization"} else max([target, *values, 1]) * 1.18
+    plot_x, plot_y = x + 0.35, y + 0.5
+    plot_w, plot_h = w - 0.65, h - 0.9
+    for idx in range(6):
+        yy = plot_y + plot_h * idx / 5
+        ppt_rect(slide, plot_x, yy, plot_w, 0.006, "dbe3ef", None)
+    if not display:
+        ppt_text(slide, x + 0.2, y + h / 2 - 0.1, w - 0.4, 0.2, "Sin datos KPI", 11, False, "64748b", PP_ALIGN.CENTER)
+        return
+    gap = 0.16
+    bar_w = max((plot_w - gap * (len(display) + 1)) / len(display), 0.24)
+    for idx, row in enumerate(display):
+        value = parse_float(row.get(metric), 0)
+        label = "FUERA" if row.get("out") and metric in {"availability", "utilization"} else ppt_format_number(value)
+        bh = max(min(value / max(axis_max, 1), 1) * plot_h, 0.04)
+        bx = plot_x + gap + idx * (bar_w + gap)
+        by = plot_y + plot_h - bh
+        ppt_rect(slide, bx, by, bar_w, bh, PPT_TEAL, None)
+        ppt_text(slide, bx - 0.05, by - 0.22, bar_w + 0.1, 0.15, label, 6.3, False, PPT_TEXT, PP_ALIGN.CENTER)
+        ppt_text(slide, bx - 0.08, plot_y + plot_h + 0.07, bar_w + 0.16, 0.16, row.get("code") or "-", 6.2, True, PPT_TEXT, PP_ALIGN.CENTER)
+    if metric in {"availability", "utilization"}:
+        target_y = plot_y + plot_h - min(target / 120, 1) * plot_h
+        ppt_rect(slide, plot_x, target_y, plot_w, 0.012, PPT_RED, None)
+
+
+def monthly_machine_slide(slide, prs: Presentation, portal: dict[str, Any], group: str, start: str, end: str, month_name: str, year: int) -> None:
+    ppt_clear_slide(slide)
+    report = monthly_kpi_report(portal, group, start, end)
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    target_availability = parse_float(settings.get("meta_availability"), 85) or 85
+    target_utilization = parse_float(settings.get("meta_utilization"), 75) or 75
+    target_tmef = parse_float(settings.get("meta_tmef"), 8) or 8
+    target_tmpr = parse_float(settings.get("meta_tmpr"), 4) or 4
+    totals = report["totals"]
+    sw, _ = ppt_slide_size(prs)
+    ppt_add_header(slide, prs, group, f"{month_name} {year} | {start} a {end}")
+    card_w = (sw - 0.7 - 0.24 * 3) / 4
+    card_y = 0.82
+    cards = [
+        ("% Disponibilidad", ppt_format_pct(totals["availability"]), f"Meta {ppt_format_pct(target_availability)}", ppt_metric_progress(totals["availability"], target_availability), totals["availability"] < target_availability),
+        ("% Utilizacion", ppt_format_pct(totals["utilization"]), f"Meta {ppt_format_pct(target_utilization)}", ppt_metric_progress(totals["utilization"], target_utilization), totals["utilization"] < target_utilization),
+        ("TMEF", f"{ppt_format_number(totals['tmef'])} h", f"Meta {ppt_format_number(target_tmef)} h", ppt_metric_progress(totals["tmef"], target_tmef), totals["tmef"] < target_tmef),
+        ("TMPR", f"{ppt_format_number(totals['tmpr'])} h", f"Meta {ppt_format_number(target_tmpr)} h", ppt_metric_progress(totals["tmpr"], target_tmpr, True), totals["tmpr"] > target_tmpr),
+    ]
+    for idx, (label, value, note, progress, bad) in enumerate(cards):
+        ppt_metric_card(slide, 0.35 + idx * (card_w + 0.24), card_y, card_w, 0.78, label, value, note, progress, bad)
+    ppt_add_bar_chart(slide, 0.35, 1.82, sw - 0.7, 2.18, report["rows"], "availability", target_availability)
+    display_rows = [
+        [
+            row.get("code"),
+            row.get("description"),
+            ppt_format_number(row.get("period")),
+            ppt_format_number(row.get("mp")),
+            ppt_format_number(row.get("mc")),
+            ppt_format_number(row.get("worked")),
+            ppt_format_number(row.get("stops"), 0),
+            row.get("availability_text"),
+            row.get("utilization_text"),
+            ppt_format_number(row.get("tmef")),
+            ppt_format_number(row.get("tmpr")),
+            "FUERA" if row.get("out") else row.get("status"),
+        ]
+        for row in report["rows"][:10]
+    ]
+    display_rows.append([
+        "",
+        f"Total {group}",
+        ppt_format_number(totals["period"]),
+        ppt_format_number(totals["mp"]),
+        ppt_format_number(totals["mc"]),
+        ppt_format_number(totals["worked"]),
+        ppt_format_number(totals["stops"], 0),
+        ppt_format_pct(totals["availability"]),
+        ppt_format_pct(totals["utilization"]),
+        ppt_format_number(totals["tmef"]),
+        ppt_format_number(totals["tmpr"]),
+        "",
+    ])
+    ppt_text(slide, 0.35, 4.18, sw - 0.7, 0.18, "REPORTE MENSUAL DE INDICADORES", 10, True, PPT_TEXT, PP_ALIGN.CENTER)
+    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "TMEF", "TMPR", "Estatus"]
+    weights = [0.55, 1.9, 0.85, 0.7, 0.7, 0.75, 0.7, 0.7, 0.7, 0.62, 0.62, 1.0]
+    ppt_add_table(slide, 0.32, 4.45, sw - 0.64, 2.55, headers, display_rows, weights, 5.4, {1})
+
+
+def monthly_tires_slide(slide, prs: Presentation, portal: dict[str, Any], month_name: str, year: int) -> None:
+    ppt_clear_slide(slide)
+    tire = portal.get("tire_kpi") if isinstance(portal.get("tire_kpi"), dict) else {}
+    rows = tire.get("rows") if isinstance(tire.get("rows"), list) else []
+    summary = tire.get("summary") if isinstance(tire.get("summary"), dict) else {}
+    sw, _ = ppt_slide_size(prs)
+    ppt_add_header(slide, prs, "Vida util de llantas", f"{month_name} {year}")
+    cards = [
+        ("Llantas", str(int(parse_float(summary.get("total"), len(rows)))), ""),
+        ("Vida prom.", ppt_format_pct(summary.get("avg_life")), ""),
+        ("Criticas", str(int(parse_float(summary.get("critical"), 0))), ""),
+        ("Proximas", str(int(parse_float(summary.get("soon"), 0))), ""),
+        ("Hrs rest. prom.", ppt_format_number(summary.get("avg_remaining_hours")), ""),
+    ]
+    card_w = (sw - 0.7 - 0.16 * 4) / 5
+    for idx, (label, value, note) in enumerate(cards):
+        ppt_metric_card(slide, 0.35 + idx * (card_w + 0.16), 0.82, card_w, 0.72, label, value, note, 100, False)
+    table_rows = []
+    for row in rows[:18]:
+        life = parse_float(row.get("life_percent") if row.get("life_percent") is not None else row.get("tread_remaining_percent"), 0)
+        table_rows.append([
+            row.get("equipment_code"),
+            row.get("tire_code"),
+            row.get("position"),
+            ppt_format_number(row.get("hours_used")),
+            ppt_format_number(row.get("life_remaining_hours")),
+            ppt_format_pct(life),
+            ppt_format_pct(life),
+            row.get("control_status") or "S/D",
+        ])
+    headers = ["Equipo", "Llanta", "Pos.", "Hrs uso", "Hrs rest.", "% vida", "% piso", "KPI"]
+    weights = [0.9, 1.5, 0.5, 0.8, 0.8, 0.7, 0.7, 0.8]
+    ppt_add_table(slide, 0.35, 1.78, sw - 0.7, 5.35, headers, table_rows, weights, 7.0, {1})
+
+
+def monthly_oil_slide(slide, prs: Presentation, portal: dict[str, Any], month_name: str, year: int) -> None:
+    ppt_clear_slide(slide)
+    oil = portal.get("oil_kpi") if isinstance(portal.get("oil_kpi"), dict) else {}
+    rows = oil.get("rows") if isinstance(oil.get("rows"), list) else []
+    totals = oil.get("totals") if isinstance(oil.get("totals"), dict) else {}
+    sw, _ = ppt_slide_size(prs)
+    ppt_add_header(slide, prs, "KPI aceites", f"{month_name} {year}")
+    metric_keys = [
+        ("Motor 15W40", "oil_motor_15w40"),
+        ("HCO ISO 68", "oil_hco_iso68"),
+        ("Trans. SAE 30", "oil_trans_sae30"),
+        ("SAE 50", "oil_sae50"),
+        ("Total", "total_liters"),
+    ]
+    if "total_liters" not in totals:
+        totals["total_liters"] = sum(parse_float(totals.get(key), 0) for _, key in metric_keys[:-1])
+    card_w = (sw - 0.7 - 0.16 * 4) / 5
+    for idx, (label, key) in enumerate(metric_keys):
+        ppt_metric_card(slide, 0.35 + idx * (card_w + 0.16), 0.82, card_w, 0.72, label, f"{ppt_format_number(totals.get(key))} L", "Consumo", 100, False)
+    sorted_rows = sorted(rows, key=lambda row: parse_float(row.get("total_liters"), 0), reverse=True)
+    table_rows = []
+    for row in sorted_rows[:15]:
+        total = parse_float(row.get("total_liters"), 0)
+        if not total:
+            total = sum(parse_float(row.get(key), 0) for _, key in metric_keys[:-1])
+        table_rows.append([
+            row.get("code") or row.get("equipment_code"),
+            row.get("description"),
+            ppt_format_number(row.get("worked_hours") or row.get("worked")),
+            ppt_format_number(row.get("oil_motor_15w40")),
+            ppt_format_number(row.get("oil_hco_iso68")),
+            ppt_format_number(row.get("oil_trans_sae30")),
+            ppt_format_number(row.get("oil_sae50")),
+            ppt_format_number(total),
+        ])
+    headers = ["Equipo", "Descripcion", "Hrs", "15W40", "ISO 68", "SAE 30", "SAE 50", "Total L"]
+    weights = [0.8, 2.2, 0.65, 0.65, 0.65, 0.65, 0.65, 0.75]
+    ppt_add_table(slide, 0.35, 1.78, sw - 0.7, 5.35, headers, table_rows, weights, 6.7, {1})
+
+
+def monthly_diesel_slide(slide, prs: Presentation, portal: dict[str, Any], month_name: str, year: int) -> None:
+    ppt_clear_slide(slide)
+    diesel = portal.get("diesel") if isinstance(portal.get("diesel"), dict) else {}
+    rows = diesel.get("rows") if isinstance(diesel.get("rows"), list) else []
+    totals = diesel.get("totals") if isinstance(diesel.get("totals"), dict) else {}
+    sw, _ = ppt_slide_size(prs)
+    ppt_add_header(slide, prs, "KPI diesel", f"{month_name} {year}")
+    cards = [
+        ("Consumo", f"{ppt_format_number(totals.get('diesel_liters'))} L", ""),
+        ("Horas", f"{ppt_format_number(totals.get('worked_hours'))} h", ""),
+        ("Rendimiento", f"{ppt_format_number(totals.get('rendimiento_lh'))} L/H", ""),
+        ("MGA disponible", f"{ppt_format_number(totals.get('mga_stock'))} L", ""),
+        ("PROSERMIN", f"{ppt_format_number(totals.get('prosermin_stock'))} L", ""),
+    ]
+    card_w = (sw - 0.7 - 0.16 * 4) / 5
+    for idx, (label, value, note) in enumerate(cards):
+        ppt_metric_card(slide, 0.35 + idx * (card_w + 0.16), 0.82, card_w, 0.72, label, value, note, 100, False)
+    table_rows = []
+    source_rows = rows if rows else diesel.get("records", [])
+    for row in source_rows[:16]:
+        hours = parse_float(row.get("worked_hours"), 0)
+        liters = parse_float(row.get("diesel_liters"), 0)
+        rendimiento = parse_float(row.get("rendimiento_lh"), 0) or (liters / hours if hours else 0)
+        table_rows.append([
+            row.get("equipment") or row.get("equipment_code"),
+            row.get("condition") or "",
+            ppt_format_number(row.get("horometer_initial")),
+            ppt_format_number(row.get("horometer_final")),
+            ppt_format_number(hours),
+            ppt_format_number(liters),
+            ppt_format_number(rendimiento),
+        ])
+    headers = ["Equipo", "Condicion", "HI", "HF", "Hrs", "Diesel L", "L/H"]
+    weights = [1.2, 1.1, 0.7, 0.7, 0.7, 0.8, 0.7]
+    ppt_add_table(slide, 0.35, 1.78, sw - 0.7, 5.35, headers, table_rows, weights, 7.0, {0})
+
+
+def iter_pptx_shapes(shapes):
+    for shape in shapes:
+        yield shape
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from iter_pptx_shapes(shape.shapes)
+
+
+def update_monthly_ppt_text(prs: Presentation, month_name: str, year: int) -> None:
+    replacements = {
+        "Reporte Mensual Abril": f"Reporte Mensual {month_name} {year}",
+        "REPORTE MENSUAL ABRIL": f"REPORTE MENSUAL {month_name.upper()} {year}",
+        "Mes de Abril": f"Mes de {month_name} {year}",
+        "MES DE ABRIL": f"MES DE {month_name.upper()} {year}",
+        "Abril": month_name,
+        "ABRIL": month_name.upper(),
+    }
+    for slide in prs.slides:
+        for shape in iter_pptx_shapes(slide.shapes):
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    text = run.text
+                    for source, target in replacements.items():
+                        text = text.replace(source, target)
+                    run.text = text
+
+
+def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int) -> bytes:
+    start, end = month_bounds(year, month)
+    month_name = MONTH_NAMES_ES_FULL[month - 1]
+    prs = Presentation(str(MONTHLY_REPORT_TEMPLATE_PATH)) if MONTHLY_REPORT_TEMPLATE_PATH.exists() else Presentation()
+    if len(prs.slides) == 0:
+        prs.slides.add_slide(ppt_blank_layout(prs))
+    update_monthly_ppt_text(prs, month_name, year)
+    monthly_machine_slide(ppt_ensure_slide(prs, 2), prs, portal, "Equipos de Barrenacion", start, end, month_name, year)
+    monthly_machine_slide(ppt_ensure_slide(prs, 3), prs, portal, "Equipos de Rezagado", start, end, month_name, year)
+    monthly_tires_slide(ppt_ensure_slide(prs, 4), prs, portal, month_name, year)
+    monthly_diesel_slide(ppt_ensure_slide(prs, 5), prs, portal, month_name, year)
+    monthly_oil_slide(ppt_ensure_slide(prs, 6), prs, portal, month_name, year)
+    stream = BytesIO()
+    prs.save(stream)
+    return stream.getvalue()
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
@@ -2512,6 +3146,31 @@ def get_kpi_format_image(group: str = Query(default="")) -> StreamingResponse:
         BytesIO(image),
         media_type="image/png",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/monthly-report/powerpoint")
+def get_monthly_report_powerpoint(
+    year: int = Query(default=0),
+    month: int = Query(default=0),
+) -> StreamingResponse:
+    now = utc_now()
+    year = year or now.year
+    month = month or now.month
+    if year < 2000 or year > 2100:
+        raise HTTPException(status_code=400, detail="Anio invalido.")
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+    data = monthly_report_pptx_bytes(portal, year, month)
+    month_name = MONTH_NAMES_ES_FULL[month - 1]
+    filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Mensual_{month_name}_{year}.pptx")
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
     )
 
 
@@ -2941,6 +3600,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <main>
     <nav class="tabs">
       <button class="active" data-tab="dashboard">Dashboard KPI</button>
+      <button data-tab="mensual">Reporte mensual</button>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
@@ -2969,6 +3629,27 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="kpi-side" id="kpiSideCards"></div>
         </div>
         <div class="table-wrap kpi-report-table"><table id="kpiTable"></table></div>
+      </div>
+    </section>
+    <section id="mensual" class="view">
+      <div class="panel toolbar">
+        <label>Mes<select id="monthlyMonth">
+          <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option><option value="4">Abril</option>
+          <option value="5">Mayo</option><option value="6">Junio</option><option value="7">Julio</option><option value="8">Agosto</option>
+          <option value="9">Septiembre</option><option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+        </select></label>
+        <label>Ano<input id="monthlyYear" type="number" min="2000" max="2100"></label>
+        <button class="btn" id="monthlyPptBtn">Descargar PowerPoint</button>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Reporte mensual PowerPoint</h3><span class="muted" id="monthlyStatus"></span></div>
+        <div class="stats">
+          <div class="stat"><strong>Barrenacion</strong>KPI mensual</div>
+          <div class="stat"><strong>Rezagado</strong>KPI mensual</div>
+          <div class="stat"><strong>Llantas</strong>Vida util</div>
+          <div class="stat"><strong>Diesel</strong>Consumo</div>
+          <div class="stat"><strong>Aceites</strong>KPI mensual</div>
+        </div>
       </div>
     </section>
     <section id="preventivos" class="view">
@@ -3280,6 +3961,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentDieselId = null;
     let currentDieselRecord = null;
     let selectedKpiMetric = "availability";
+    let monthlyPeriodInitialized = false;
     const AUTO_REFRESH_MS = 15000;
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
@@ -4099,6 +4781,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function renderPortalSelectors(){
       const period = portal.period || {};
       const today = toIsoDate(new Date());
+      if(!monthlyPeriodInitialized){
+        $("monthlyMonth").value = String(period.month || (new Date()).getMonth() + 1);
+        $("monthlyYear").value = String(period.year || (new Date()).getFullYear());
+        monthlyPeriodInitialized = true;
+      }
       if(!$("kpiStart").value) $("kpiStart").value = period.start || today;
       if(!$("kpiEnd").value) $("kpiEnd").value = period.end || today;
       if(!$("prBase").value) $("prBase").value = period.start || today;
@@ -5290,6 +5977,25 @@ WAREHOUSE_HTML = r"""<!doctype html>
       a.click();
       URL.revokeObjectURL(a.href);
     }
+    async function downloadMonthlyPowerPoint(){
+      const month = $("monthlyMonth").value || String((new Date()).getMonth() + 1);
+      const year = $("monthlyYear").value || String((new Date()).getFullYear());
+      $("monthlyStatus").textContent = "Generando...";
+      const params = new URLSearchParams({month, year});
+      const r = await fetch(`/api/monthly-report/powerpoint?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok){
+        $("monthlyStatus").textContent = "";
+        return alert(await apiError(r));
+      }
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      const label = monthNames[Number(month) - 1] || "Mes";
+      a.href = URL.createObjectURL(blob);
+      a.download = `Reporte_Mensual_${label}_${year}.pptx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      $("monthlyStatus").textContent = "PowerPoint generado";
+    }
     function renderAll(){
       renderStats();
       renderSelectors();
@@ -5314,6 +6020,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("renderKpiBtn").addEventListener("click", renderDashboard);
     $("printKpiBtn").addEventListener("click", printExactKpi);
     $("kpiImageBtn").addEventListener("click", () => downloadKpiImage().catch(showError));
+    $("monthlyPptBtn").addEventListener("click", () => downloadMonthlyPowerPoint().catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
