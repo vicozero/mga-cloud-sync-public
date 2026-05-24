@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
+from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_SHAPE_TYPE
@@ -2343,12 +2344,12 @@ MONTH_NAMES_ES_FULL = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
 PPT_EMU_PER_INCH = 914400
-PPT_BLUE = "08265b"
-PPT_TEAL = "0aa6a6"
-PPT_RED = "d71920"
-PPT_LIGHT = "eef3f9"
-PPT_LINE = "cfd8e5"
-PPT_TEXT = "061a3b"
+PPT_BLUE = "#08265b"
+PPT_TEAL = "#0aa6a6"
+PPT_RED = "#d71920"
+PPT_LIGHT = "#eef3f9"
+PPT_LINE = "#cfd8e5"
+PPT_TEXT = "#061a3b"
 
 
 def month_bounds(year: int, month: int) -> tuple[str, str]:
@@ -2927,14 +2928,7 @@ def iter_pptx_shapes(shapes):
 
 
 def update_monthly_ppt_text(prs: Presentation, month_name: str, year: int) -> None:
-    replacements = {
-        "Reporte Mensual Abril": f"Reporte Mensual {month_name} {year}",
-        "REPORTE MENSUAL ABRIL": f"REPORTE MENSUAL {month_name.upper()} {year}",
-        "Mes de Abril": f"Mes de {month_name} {year}",
-        "MES DE ABRIL": f"MES DE {month_name.upper()} {year}",
-        "Abril": month_name,
-        "ABRIL": month_name.upper(),
-    }
+    month_pattern = r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+"
     for slide in prs.slides:
         for shape in iter_pptx_shapes(slide.shapes):
             if not getattr(shape, "has_text_frame", False):
@@ -2942,9 +2936,528 @@ def update_monthly_ppt_text(prs: Presentation, month_name: str, year: int) -> No
             for paragraph in shape.text_frame.paragraphs:
                 for run in paragraph.runs:
                     text = run.text
-                    for source, target in replacements.items():
-                        text = text.replace(source, target)
+                    text = re.sub(
+                        rf"Reporte Mensual\s+{month_pattern}(?:\s+\d{{4}})?",
+                        f"Reporte Mensual {month_name} {year}",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    text = re.sub(
+                        rf"Mes de\s+{month_pattern}(?:\s+\d{{4}})?",
+                        f"Mes de {month_name} {year}",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    for source in MONTH_NAMES_ES_FULL:
+                        text = text.replace(source.upper(), month_name.upper()).replace(source, month_name)
                     run.text = text
+
+
+def pil_font(size: int, bold: bool = False):
+    names = (
+        ["arialbd.ttf", "DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+        if bold
+        else ["arial.ttf", "DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    )
+    for name in names:
+        try:
+            return ImageFont.truetype(name, max(int(size), 6))
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def pil_text_size(draw: ImageDraw.ImageDraw, text: Any, font) -> tuple[int, int]:
+    box = draw.textbbox((0, 0), str(text or ""), font=font)
+    return max(box[2] - box[0], 1), max(box[3] - box[1], 1)
+
+
+def pil_center(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: Any, font, fill: str) -> None:
+    w, h = pil_text_size(draw, text, font)
+    draw.text((xy[0] - w / 2, xy[1] - h / 2), str(text or ""), font=font, fill=fill)
+
+
+def pil_right(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: Any, font, fill: str) -> None:
+    w, h = pil_text_size(draw, text, font)
+    draw.text((xy[0] - w, xy[1] - h / 2), str(text or ""), font=font, fill=fill)
+
+
+def pil_truncate(draw: ImageDraw.ImageDraw, text: Any, font, max_width: int) -> str:
+    clean = str(text or "")
+    if draw.textlength(clean, font=font) <= max_width:
+        return clean
+    while clean and draw.textlength(clean + "...", font=font) > max_width:
+        clean = clean[:-1]
+    return f"{clean}..." if clean else ""
+
+
+def pil_metric_card(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    title: str,
+    value: str,
+    note: str,
+    color: str,
+    progress: float,
+    value_font,
+    title_font,
+    note_font,
+) -> None:
+    x1, y1, x2, y2 = box
+    draw.rectangle(box, fill="white", outline="#e4e7ec")
+    pil_center(draw, ((x1 + x2) / 2, y1 + (y2 - y1) * 0.22), title.upper(), title_font, "#5d6676")
+    pil_center(draw, ((x1 + x2) / 2, y1 + (y2 - y1) * 0.48), value, value_font, "#5d626a")
+    bar_x1 = x1 + max(6, int((x2 - x1) * 0.07))
+    bar_x2 = x2 - max(6, int((x2 - x1) * 0.07))
+    bar_y = y1 + int((y2 - y1) * 0.70)
+    bar_h = max(5, int((y2 - y1) * 0.08))
+    draw.rectangle((bar_x1, bar_y, bar_x2, bar_y + bar_h), fill="#e8ecf2")
+    fill_w = int((bar_x2 - bar_x1) * max(min(progress, 100), 0) / 100)
+    draw.rectangle((bar_x1, bar_y, bar_x1 + fill_w, bar_y + bar_h), fill=color)
+    draw.text((bar_x1, y2 - max(18, int((y2 - y1) * 0.14))), note, font=note_font, fill="#52627a")
+
+
+def monthly_image_metric_progress(value: float, target: float, inverse: bool = False) -> float:
+    value = parse_float(value, 0)
+    target = max(parse_float(target, 1), 1)
+    if inverse:
+        return min((target / max(value, 0.1)) * 100, 100)
+    return min((value / target) * 100, 100)
+
+
+def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start: str, end: str, path: Path, size: tuple[int, int]) -> None:
+    report = monthly_kpi_report(portal, group, start, end)
+    rows = report["rows"]
+    totals = report["totals"]
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    target_availability = parse_float(settings.get("meta_availability"), 85) or 85
+    target_utilization = parse_float(settings.get("meta_utilization"), 75) or 75
+    target_tmef = parse_float(settings.get("meta_tmef"), 8) or 8
+    target_tmpr = parse_float(settings.get("meta_tmpr"), 4) or 4
+    w, h = size
+    img = Image.new("RGB", size, "#eeeeee")
+    draw = ImageDraw.Draw(img)
+    title_font = pil_font(max(16, int(h * 0.052)), True)
+    section_font = pil_font(max(12, int(h * 0.034)), True)
+    value_font = pil_font(max(20, int(h * 0.066)), True)
+    small_font = pil_font(max(8, int(h * 0.022)))
+    axis_font = pil_font(max(8, int(h * 0.024)), True)
+    tab_font = pil_font(max(8, int(h * 0.023)))
+
+    draw.rectangle((0, 0, w, max(30, int(h * 0.09))), fill="white")
+    pil_center(draw, (w / 2, int(h * 0.048)), group, title_font, "#08265b")
+    side_w = int(w * 0.27)
+    gap = max(5, int(w * 0.004))
+    card_w = (side_w - gap) // 2
+    y_top = int(h * 0.12)
+    section_gap = int(h * 0.32)
+    card_h = int(h * 0.23)
+    right_x = w - side_w
+
+    pil_center(draw, (side_w / 2, y_top), "% Disponibilidad", section_font, "#6b7280")
+    pil_metric_card(draw, (0, y_top + 18, card_w, y_top + 18 + card_h), "", f"{totals['availability']:.1f}%", f"Meta {target_availability:.1f}%", PPT_TEAL, monthly_image_metric_progress(totals["availability"], target_availability), value_font, small_font, small_font)
+    pil_metric_card(draw, (card_w + gap, y_top + 18, side_w, y_top + 18 + card_h), "Meta", f"{target_availability:.1f}%", f"{totals['availability'] - target_availability:+.1f}%", PPT_TEAL, target_availability, value_font, small_font, small_font)
+
+    y2 = y_top + section_gap
+    pil_center(draw, (side_w / 2, y2), "% Utilizacion", section_font, "#6b7280")
+    pil_metric_card(draw, (0, y2 + 18, card_w, y2 + 18 + card_h), "", f"{totals['utilization']:.1f}%", f"Meta {target_utilization:.1f}%", PPT_RED, monthly_image_metric_progress(totals["utilization"], target_utilization), value_font, small_font, small_font)
+    pil_metric_card(draw, (card_w + gap, y2 + 18, side_w, y2 + 18 + card_h), "Meta", f"{target_utilization:.1f}%", f"{totals['utilization'] - target_utilization:+.1f}%", PPT_RED, target_utilization, value_font, small_font, small_font)
+
+    pil_center(draw, (right_x + side_w / 2, y_top), "TMEF", section_font, "#6b7280")
+    pil_metric_card(draw, (right_x, y_top + 18, right_x + card_w, y_top + 18 + card_h), "", f"{totals['tmef']:.1f} hrs", f"Meta {target_tmef:.1f} h", PPT_TEAL, monthly_image_metric_progress(totals["tmef"], target_tmef), value_font, small_font, small_font)
+    pil_metric_card(draw, (right_x + card_w + gap, y_top + 18, w, y_top + 18 + card_h), "Meta", f"{target_tmef:.1f} hrs", f"{totals['tmef'] - target_tmef:+.1f} h", PPT_TEAL, 100, value_font, small_font, small_font)
+
+    pil_center(draw, (right_x + side_w / 2, y2), "TMPR", section_font, "#6b7280")
+    pil_metric_card(draw, (right_x, y2 + 18, right_x + card_w, y2 + 18 + card_h), "", f"{totals['tmpr']:.1f} hrs", f"Meta {target_tmpr:.1f} h", PPT_RED, monthly_image_metric_progress(totals["tmpr"], target_tmpr, True), value_font, small_font, small_font)
+    pil_metric_card(draw, (right_x + card_w + gap, y2 + 18, w, y2 + 18 + card_h), "Meta", f"{target_tmpr:.1f} hrs", f"{target_tmpr - totals['tmpr']:+.1f} h", PPT_RED, 100, value_font, small_font, small_font)
+
+    chart_x = side_w + int(w * 0.03)
+    chart_y = int(h * 0.13)
+    chart_w = right_x - chart_x - int(w * 0.03)
+    chart_h = int(h * 0.76)
+    draw.rectangle((chart_x, chart_y, chart_x + chart_w, chart_y + chart_h), fill="white")
+    draw.text((chart_x + 6, chart_y + 6), "KPI", font=small_font, fill="#111827")
+    labels = ["% Disponibilidad", "% Utilizacion", "TMEF", "TMPR"]
+    tab_y = chart_y + int(h * 0.055)
+    tab_w = max(48, (chart_w - 24) // 4)
+    for idx, label in enumerate(labels):
+        tx = chart_x + 6 + idx * (tab_w + 4)
+        fill = PPT_TEAL if idx == 0 else "white"
+        draw.rectangle((tx, tab_y, tx + tab_w, tab_y + max(22, int(h * 0.055))), fill=fill, outline="#111111")
+        draw.text((tx + 5, tab_y + 5), label, font=tab_font, fill="#111111")
+    plot_x = chart_x + int(chart_w * 0.08)
+    plot_y = tab_y + max(42, int(h * 0.10))
+    plot_w = chart_w - int(chart_w * 0.14)
+    plot_h = chart_y + chart_h - plot_y - int(h * 0.12)
+    for value in range(0, 121, 20):
+        yy = plot_y + plot_h - int(plot_h * value / 120)
+        draw.line((plot_x, yy, plot_x + plot_w, yy), fill="#d8dde3", width=1)
+        draw.text((chart_x + 8, yy - 6), str(value), font=small_font, fill="#4b5563")
+    display = rows[:7]
+    if display:
+        bar_gap = max(8, int(plot_w * 0.035))
+        bar_w = max(12, int((plot_w - bar_gap * (len(display) + 1)) / max(len(display), 1)))
+        for idx, row in enumerate(display):
+            value = max(min(parse_float(row.get("availability"), 0), 120), 0)
+            x = plot_x + bar_gap + idx * (bar_w + bar_gap)
+            y = plot_y + plot_h - int(plot_h * value / 120)
+            draw.rectangle((x, y, x + bar_w, plot_y + plot_h), fill=PPT_TEAL)
+            pil_center(draw, (x + bar_w / 2, y - max(10, int(h * 0.025))), "FUERA" if row.get("out") else f"{value:.1f}", axis_font, "#5d626a")
+            pil_center(draw, (x + bar_w / 2, plot_y + plot_h + max(12, int(h * 0.032))), row.get("code") or "-", small_font, "#5d626a")
+    target_y = plot_y + plot_h - int(plot_h * target_availability / 120)
+    draw.line((plot_x, target_y, plot_x + plot_w, target_y), fill="#7f858c", width=1)
+    img.save(path, quality=95)
+
+
+def pil_table_cell(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], text: Any, font, fill: str, outline: str = "#111111", text_fill: str = "#555555", align: str = "center") -> None:
+    draw.rectangle(box, fill=fill, outline=outline)
+    x1, y1, x2, y2 = box
+    clean = pil_truncate(draw, text, font, max(x2 - x1 - 6, 1))
+    if align == "left":
+        draw.text((x1 + 4, y1 + max(2, (y2 - y1 - pil_text_size(draw, clean, font)[1]) / 2)), clean, font=font, fill=text_fill)
+    else:
+        pil_center(draw, ((x1 + x2) / 2, (y1 + y2) / 2), clean, font, text_fill)
+
+
+def create_monthly_kpi_table_image(portal: dict[str, Any], group: str, start: str, end: str, path: Path, size: tuple[int, int]) -> None:
+    report = monthly_kpi_report(portal, group, start, end)
+    rows = report["rows"]
+    totals = report["totals"]
+    w, h = size
+    img = Image.new("RGB", size, "#eeeeee")
+    draw = ImageDraw.Draw(img)
+    title_font = pil_font(max(11, int(h * 0.06)), True)
+    label_font = pil_font(max(8, int(h * 0.036)), True)
+    table_font = pil_font(max(7, int(h * 0.032)), True)
+    small_font = pil_font(max(6, int(h * 0.028)))
+    pil_center(draw, (w / 2, int(h * 0.08)), "REPORTE MENSUAL DE INDICADORES", title_font, "#111111")
+    start_day = int(str(start)[-2:]) if start else 1
+    end_day = int(str(end)[-2:]) if end else 31
+    draw.text((int(w * 0.36), int(h * 0.145)), "Dia Inicial:", font=label_font, fill="#666666")
+    draw.rectangle((int(w * 0.45), int(h * 0.125), int(w * 0.51), int(h * 0.19)), fill="white")
+    pil_center(draw, (int(w * 0.48), int(h * 0.158)), str(start_day), title_font, "#111111")
+    draw.text((int(w * 0.62), int(h * 0.145)), "Dia Final:", font=label_font, fill="#666666")
+    draw.rectangle((int(w * 0.70), int(h * 0.125), int(w * 0.76), int(h * 0.19)), fill="white")
+    pil_center(draw, (int(w * 0.73), int(h * 0.158)), str(end_day), title_font, "#111111")
+    table_top = int(h * 0.24)
+    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "TMEF", "TMPR", "Estatus"]
+    weights = [0.58, 2.15, 0.82, 0.72, 0.72, 0.78, 0.78, 0.72, 0.72, 0.68, 0.68, 1.15]
+    total_weight = sum(weights)
+    widths = [int(w * weight / total_weight) for weight in weights]
+    widths[-1] += w - sum(widths)
+    display_rows = rows[:8]
+    row_h = max(18, int((h - table_top - 5) / max(len(display_rows) + 2, 2)))
+    x = 0
+    for header, col_w in zip(headers, widths):
+        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, table_font, "white", "#111111", "#555555")
+        x += col_w
+    y = table_top + row_h
+    for row in display_rows:
+        fill = "#f5f5f5"
+        status = "FUERA" if row.get("out") else row.get("status")
+        values = [
+            row.get("code"),
+            row.get("description"),
+            f"{parse_float(row.get('period'), 0):.1f}",
+            f"{parse_float(row.get('mp'), 0):.1f}",
+            f"{parse_float(row.get('mc'), 0):.1f}",
+            f"{parse_float(row.get('worked'), 0):.1f}",
+            f"{parse_float(row.get('stops'), 0):.0f}",
+            row.get("availability_text"),
+            row.get("utilization_text"),
+            f"{parse_float(row.get('tmef'), 0):.1f}",
+            f"{parse_float(row.get('tmpr'), 0):.1f}",
+            status,
+        ]
+        x = 0
+        for idx, (value, col_w) in enumerate(zip(values, widths)):
+            color = PPT_TEAL if idx in (7, 8) and "FUERA" not in str(value) else ("#c00000" if "FUERA" in str(value) else "#555555")
+            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, fill, "#111111", color, "left" if idx == 1 else "center")
+            x += col_w
+        y += row_h
+    total_values = [
+        "",
+        f"Total {group}",
+        f"{totals['period']:.1f}",
+        f"{totals['mp']:.1f}",
+        f"{totals['mc']:.1f}",
+        f"{totals['worked']:.1f}",
+        f"{totals['stops']:.0f}",
+        f"{totals['availability']:.1f}%",
+        f"{totals['utilization']:.1f}%",
+        f"{totals['tmef']:.1f}",
+        f"{totals['tmpr']:.1f}",
+        "",
+    ]
+    x = 0
+    for idx, (value, col_w) in enumerate(zip(total_values, widths)):
+        pil_table_cell(draw, (x, y, x + col_w, min(y + row_h, h)), value, table_font, "white", "#111111", "#111111", "left" if idx == 1 else "center")
+        x += col_w
+    img.save(path, quality=95)
+
+
+def create_monthly_tire_image(portal: dict[str, Any], path: Path, size: tuple[int, int], month_name: str, year: int) -> None:
+    tire = portal.get("tire_kpi") if isinstance(portal.get("tire_kpi"), dict) else {}
+    rows = tire.get("rows") if isinstance(tire.get("rows"), list) else []
+    summary = tire.get("summary") if isinstance(tire.get("summary"), dict) else {}
+    w, h = size
+    img = Image.new("RGB", size, "#f5f8fc")
+    draw = ImageDraw.Draw(img)
+    title_font = pil_font(max(18, int(h * 0.055)), True)
+    stat_font = pil_font(max(14, int(h * 0.045)), True)
+    label_font = pil_font(max(8, int(h * 0.022)), True)
+    table_font = pil_font(max(7, int(h * 0.020)), True)
+    small_font = pil_font(max(7, int(h * 0.020)))
+    header_h = max(44, int(h * 0.105))
+    draw.rectangle((0, 0, w, header_h), fill=PPT_BLUE)
+    draw.text((max(16, int(w * 0.05)), int(header_h * 0.25)), f"VIDA UTIL DE LLANTAS - {month_name.upper()} {year}", font=title_font, fill="white")
+    stats = [
+        ("Llantas", summary.get("total", len(rows))),
+        ("Vida prom.", f"{parse_float(summary.get('avg_life'), 0):.0f}%"),
+        ("Criticas", summary.get("critical", 0)),
+        ("Proximas", summary.get("soon", 0)),
+        ("Hrs rest. prom.", f"{parse_float(summary.get('avg_remaining_hours'), 0):.0f}"),
+    ]
+    stat_y = header_h + max(8, int(h * 0.02))
+    stat_gap = max(4, int(w * 0.01))
+    stat_w = (w - stat_gap * 6) // 5
+    stat_h = max(44, int(h * 0.11))
+    for idx, (label, value) in enumerate(stats):
+        x = stat_gap + idx * (stat_w + stat_gap)
+        draw.rectangle((x, stat_y, x + stat_w, stat_y + stat_h), fill="white", outline="#d8dee8")
+        pil_center(draw, (x + stat_w / 2, stat_y + stat_h * 0.42), value, stat_font, PPT_TEAL if idx == 1 else "#0b2f6f")
+        pil_center(draw, (x + stat_w / 2, stat_y + stat_h * 0.72), label, label_font, "#667085")
+    headers = ["Equipo", "Llanta", "Pos.", "Hrs uso", "Hrs rest.", "% vida", "% piso", "KPI"]
+    weights = [0.85, 1.2, 0.45, 0.7, 0.8, 0.95, 0.65, 0.6]
+    total_weight = sum(weights)
+    widths = [int(w * weight / total_weight) for weight in weights]
+    widths[-1] += w - sum(widths)
+    table_top = stat_y + stat_h + max(8, int(h * 0.02))
+    row_h = max(18, int((h - table_top - 4) / max(min(len(rows), 14) + 1, 2)))
+    x = 0
+    for header, col_w in zip(headers, widths):
+        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, table_font, "#e8eef7", "#cdd5df", "#516173")
+        x += col_w
+    y = table_top + row_h
+    for row in rows[:14]:
+        life = max(min(parse_float(row.get("life_percent") if row.get("life_percent") is not None else row.get("tread_remaining_percent"), 0), 100), 0)
+        values = [
+            row.get("equipment_code"),
+            row.get("tire_code"),
+            row.get("position"),
+            f"{parse_float(row.get('hours_used'), 0):.0f}",
+            f"{parse_float(row.get('life_remaining_hours'), 0):.0f}",
+            f"{life:.0f}%",
+            f"{life:.0f}%",
+            row.get("control_status") or "S/D",
+        ]
+        x = 0
+        for idx, (value, col_w) in enumerate(zip(values, widths)):
+            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, "white", "#d8dee8", PPT_TEAL if idx in (5, 6, 7) else "#5c6673")
+            if idx == 5:
+                bx1 = x + max(4, int(col_w * 0.12))
+                by1 = y + int(row_h * 0.64)
+                bx2 = x + col_w - max(4, int(col_w * 0.12))
+                draw.rectangle((bx1, by1, bx2, by1 + max(4, int(row_h * 0.16))), fill="#e5e7eb")
+                draw.rectangle((bx1, by1, bx1 + int((bx2 - bx1) * life / 100), by1 + max(4, int(row_h * 0.16))), fill=PPT_TEAL)
+            x += col_w
+        y += row_h
+    img.save(path, quality=95)
+
+
+def create_monthly_diesel_image(portal: dict[str, Any], path: Path, size: tuple[int, int], start: str, end: str, month_name: str, year: int) -> None:
+    diesel = portal.get("diesel") if isinstance(portal.get("diesel"), dict) else {}
+    rows = diesel.get("rows") if isinstance(diesel.get("rows"), list) else []
+    records = diesel.get("records") if isinstance(diesel.get("records"), list) else []
+    totals = diesel.get("totals") if isinstance(diesel.get("totals"), dict) else {}
+    w, h = size
+    img = Image.new("RGB", size, "white")
+    draw = ImageDraw.Draw(img)
+    title_font = pil_font(max(18, int(h * 0.034)), True)
+    value_font = pil_font(max(20, int(h * 0.042)), True)
+    label_font = pil_font(max(10, int(h * 0.020)), True)
+    small_font = pil_font(max(8, int(h * 0.017)))
+    draw.rectangle((0, 0, w, int(h * 0.075)), fill=PPT_BLUE)
+    pil_center(draw, (w / 2, int(h * 0.038)), f"CONSUMO DE DIESEL ACUMULADO - {month_name.upper()} {year}", title_font, "white")
+    summary = [
+        ("Consumo total", f"{parse_float(totals.get('diesel_liters'), 0):,.0f} L"),
+        ("Horas trabajadas", f"{parse_float(totals.get('worked_hours'), 0):,.1f} h"),
+        ("Rendimiento", f"{parse_float(totals.get('rendimiento_lh'), 0):.1f} L/H"),
+        ("MGA disponible", f"{parse_float(totals.get('mga_stock'), 0):,.0f} L"),
+        ("PROSERMIN", f"{parse_float(totals.get('prosermin_stock'), 0):,.0f} L"),
+    ]
+    card_y = int(h * 0.10)
+    card_h = int(h * 0.105)
+    card_gap = int(w * 0.015)
+    card_w = (w - card_gap * 3) // 2
+    for idx, (label, value) in enumerate(summary):
+        x = card_gap + (idx % 2) * (card_w + card_gap)
+        y = card_y + (idx // 2) * (card_h + int(h * 0.018))
+        if idx == 4:
+            card_w2 = w - card_gap * 2
+        else:
+            card_w2 = card_w
+        draw.rectangle((x, y, x + card_w2, y + card_h), fill="#f8fafc", outline="#d6dee9")
+        draw.text((x + 12, y + 10), label.upper(), font=label_font, fill="#52627a")
+        draw.text((x + 12, y + card_h * 0.42), value, font=value_font, fill=PPT_TEAL if idx in (2, 3) else PPT_TEXT)
+    table_source = rows if rows else records
+    table_top = int(h * 0.47)
+    headers = ["Equipo", "Condicion", "Horas", "Diesel", "L/H"]
+    widths = [int(w * 0.25), int(w * 0.25), int(w * 0.16), int(w * 0.18), w - int(w * 0.84)]
+    row_h = max(24, int((h - table_top - 10) / 14))
+    x = 0
+    for header, col_w in zip(headers, widths):
+        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, label_font, PPT_BLUE, "#111111", "white")
+        x += col_w
+    y = table_top + row_h
+    for row in table_source[:13]:
+        hours = parse_float(row.get("worked_hours"), 0)
+        liters = parse_float(row.get("diesel_liters"), 0)
+        rendimiento = parse_float(row.get("rendimiento_lh"), 0) or (liters / hours if hours else 0)
+        values = [row.get("equipment") or row.get("equipment_code"), row.get("condition"), f"{hours:.1f}", f"{liters:.0f}", f"{rendimiento:.1f}"]
+        x = 0
+        for idx, (value, col_w) in enumerate(zip(values, widths)):
+            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, "#f8fafc" if y // row_h % 2 else "white", "#d6dee9", PPT_TEXT, "left" if idx < 2 else "center")
+            x += col_w
+        y += row_h
+    img.save(path, quality=95)
+
+
+def create_monthly_oil_image(portal: dict[str, Any], path: Path, size: tuple[int, int], start: str, end: str, month_name: str, year: int) -> None:
+    oil = portal.get("oil_kpi") if isinstance(portal.get("oil_kpi"), dict) else {}
+    rows = oil.get("rows") if isinstance(oil.get("rows"), list) else []
+    totals = dict(oil.get("totals") if isinstance(oil.get("totals"), dict) else {})
+    w, h = size
+    img = Image.new("RGB", size, "#f3f4f6")
+    draw = ImageDraw.Draw(img)
+    title_font = pil_font(max(28, int(h * 0.045)), True)
+    metric_font = pil_font(max(24, int(h * 0.038)), True)
+    label_font = pil_font(max(12, int(h * 0.018)), True)
+    small_font = pil_font(max(10, int(h * 0.015)))
+    draw.rectangle((0, 0, w, int(h * 0.09)), fill=PPT_BLUE)
+    pil_center(draw, (w / 2, int(h * 0.045)), f"KPI ACEITES - {month_name.upper()} {year}", title_font, "white")
+    metrics = [
+        ("Motor 15W40", "oil_motor_15w40"),
+        ("HCO ISO 68", "oil_hco_iso68"),
+        ("Trans. SAE 30", "oil_trans_sae30"),
+        ("SAE 50", "oil_sae50"),
+        ("85W140", "oil_85w140"),
+    ]
+    total = sum(parse_float(totals.get(key), 0) for _, key in metrics)
+    if not parse_float(totals.get("total_liters"), 0):
+        totals["total_liters"] = total
+    card_gap = int(w * 0.012)
+    card_w = (w - card_gap * 7) // 6
+    card_y = int(h * 0.12)
+    card_h = int(h * 0.12)
+    for idx, (label, key) in enumerate([*metrics, ("Total", "total_liters")]):
+        x = card_gap + idx * (card_w + card_gap)
+        draw.rectangle((x, card_y, x + card_w, card_y + card_h), fill="white", outline="#d6dee9")
+        pil_center(draw, (x + card_w / 2, card_y + card_h * 0.35), f"{parse_float(totals.get(key), 0):.1f} L", metric_font, PPT_TEAL if idx in (1, 5) else "#d6335c")
+        pil_center(draw, (x + card_w / 2, card_y + card_h * 0.72), label, label_font, "#52627a")
+    table_top = int(h * 0.30)
+    headers = ["Equipo", "Descripcion", "Hrs", "15W40", "ISO 68", "SAE30", "SAE50", "85W140", "Total"]
+    weights = [0.9, 2.0, 0.6, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75]
+    total_weight = sum(weights)
+    widths = [int(w * weight / total_weight) for weight in weights]
+    widths[-1] += w - sum(widths)
+    row_h = max(28, int((h - table_top - 20) / 18))
+    x = 0
+    for header, col_w in zip(headers, widths):
+        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, label_font, PPT_BLUE, "#111111", "white")
+        x += col_w
+    sorted_rows = sorted(rows, key=lambda row: sum(parse_float(row.get(key), 0) for _, key in metrics), reverse=True)
+    y = table_top + row_h
+    for row in sorted_rows[:16]:
+        values = [
+            row.get("code") or row.get("equipment_code"),
+            row.get("description"),
+            f"{parse_float(row.get('worked_hours') or row.get('worked'), 0):.1f}",
+            f"{parse_float(row.get('oil_motor_15w40'), 0):.1f}",
+            f"{parse_float(row.get('oil_hco_iso68'), 0):.1f}",
+            f"{parse_float(row.get('oil_trans_sae30'), 0):.1f}",
+            f"{parse_float(row.get('oil_sae50'), 0):.1f}",
+            f"{parse_float(row.get('oil_85w140'), 0):.1f}",
+            f"{sum(parse_float(row.get(key), 0) for _, key in metrics):.1f}",
+        ]
+        x = 0
+        for idx, (value, col_w) in enumerate(zip(values, widths)):
+            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, "white" if y // row_h % 2 else "#eef3f9", "#d6dee9", PPT_TEXT, "left" if idx == 1 else "center")
+            x += col_w
+        y += row_h
+    img.save(path, quality=95)
+
+
+def picture_pixel_size(shape) -> tuple[int, int]:
+    try:
+        image = Image.open(BytesIO(shape.image.blob))
+        return max(image.size[0], 1), max(image.size[1], 1)
+    except Exception:
+        return max(int(shape.width / 9525), 1), max(int(shape.height / 9525), 1)
+
+
+def replace_ppt_picture(slide, shape, image_path: Path) -> None:
+    left, top, width, height = shape.left, shape.top, shape.width, shape.height
+    parent = shape._element.getparent()
+    index = parent.index(shape._element)
+    parent.remove(shape._element)
+    new_picture = slide.shapes.add_picture(str(image_path), left, top, width, height)
+    new_element = new_picture._element
+    parent.remove(new_element)
+    parent.insert(index, new_element)
+
+
+def replace_single_picture(slide, image_path: Path) -> None:
+    pictures = [shape for shape in slide.shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    if not pictures:
+        return
+    replace_ppt_picture(slide, max(pictures, key=lambda shape: shape.width * shape.height), image_path)
+
+
+def add_full_slide_picture(slide, prs: Presentation, image_path: Path) -> None:
+    slide.shapes.add_picture(str(image_path), 0, 0, width=prs.slide_width, height=prs.slide_height)
+
+
+def slide_text(slide) -> str:
+    values: list[str] = []
+    for shape in iter_pptx_shapes(slide.shapes):
+        if getattr(shape, "has_text_frame", False):
+            values.append(shape.text)
+    return " ".join(values).upper()
+
+
+def replace_slide_report_pictures(slide, tmp_dir: Path, portal: dict[str, Any], group: str, start: str, end: str) -> None:
+    pictures = [shape for shape in slide.shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    if len(pictures) < 2:
+        return
+    pictures.sort(key=lambda item: item.top)
+    top_shape, table_shape = pictures[0], pictures[1]
+    dashboard_path = tmp_dir / f"{kpi_format_key(group) or 'kpi'}_dashboard.jpg"
+    table_path = tmp_dir / f"{kpi_format_key(group) or 'kpi'}_table.jpg"
+    create_monthly_kpi_dashboard_image(portal, group, start, end, dashboard_path, picture_pixel_size(top_shape))
+    create_monthly_kpi_table_image(portal, group, start, end, table_path, picture_pixel_size(table_shape))
+    replace_ppt_picture(slide, top_shape, dashboard_path)
+    replace_ppt_picture(slide, table_shape, table_path)
+
+
+def replace_or_add_oil_report_slide(prs: Presentation, tmp_dir: Path, portal: dict[str, Any], start: str, end: str, month_name: str, year: int) -> None:
+    target_slide = None
+    for slide in prs.slides:
+        if "ACEITE" in slide_text(slide) or "ACEITES" in slide_text(slide):
+            target_slide = slide
+            break
+    if target_slide is None:
+        target_slide = prs.slides.add_slide(ppt_blank_layout(prs))
+        marker = target_slide.shapes.add_textbox(0, 0, 1, 1)
+        marker.text = "KPI ACEITES"
+    pictures = [shape for shape in target_slide.shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    size = picture_pixel_size(max(pictures, key=lambda shape: shape.width * shape.height)) if pictures else (1600, 1200)
+    oil_path = tmp_dir / "kpi_aceites.jpg"
+    create_monthly_oil_image(portal, oil_path, size, start, end, month_name, year)
+    if pictures:
+        replace_single_picture(target_slide, oil_path)
+    else:
+        add_full_slide_picture(target_slide, prs, oil_path)
 
 
 def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int) -> bytes:
@@ -2954,11 +3467,25 @@ def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int) -> 
     if len(prs.slides) == 0:
         prs.slides.add_slide(ppt_blank_layout(prs))
     update_monthly_ppt_text(prs, month_name, year)
-    monthly_machine_slide(ppt_ensure_slide(prs, 2), prs, portal, "Equipos de Barrenacion", start, end, month_name, year)
-    monthly_machine_slide(ppt_ensure_slide(prs, 3), prs, portal, "Equipos de Rezagado", start, end, month_name, year)
-    monthly_tires_slide(ppt_ensure_slide(prs, 4), prs, portal, month_name, year)
-    monthly_diesel_slide(ppt_ensure_slide(prs, 5), prs, portal, month_name, year)
-    monthly_oil_slide(ppt_ensure_slide(prs, 6), prs, portal, month_name, year)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        if len(prs.slides) >= 3:
+            replace_slide_report_pictures(prs.slides[2], tmp_dir, portal, "Equipos de Barrenacion", start, end)
+        if len(prs.slides) >= 4:
+            replace_slide_report_pictures(prs.slides[3], tmp_dir, portal, "Equipos de Rezagado", start, end)
+        if len(prs.slides) >= 5:
+            pictures = [shape for shape in prs.slides[4].shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
+            size = picture_pixel_size(max(pictures, key=lambda shape: shape.width * shape.height)) if pictures else (440, 534)
+            tire_path = tmp_dir / "vida_util_llantas.jpg"
+            create_monthly_tire_image(portal, tire_path, size, month_name, year)
+            replace_single_picture(prs.slides[4], tire_path)
+        if len(prs.slides) >= 6:
+            pictures = [shape for shape in prs.slides[5].shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
+            size = picture_pixel_size(max(pictures, key=lambda shape: shape.width * shape.height)) if pictures else (1056, 1374)
+            diesel_path = tmp_dir / "diesel_acumulado.jpg"
+            create_monthly_diesel_image(portal, diesel_path, size, start, end, month_name, year)
+            replace_single_picture(prs.slides[5], diesel_path)
+        replace_or_add_oil_report_slide(prs, tmp_dir, portal, start, end, month_name, year)
     stream = BytesIO()
     prs.save(stream)
     return stream.getvalue()
