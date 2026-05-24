@@ -3292,14 +3292,19 @@ def create_monthly_tire_image(portal: dict[str, Any], path: Path, size: tuple[in
     w, h = size
     img = Image.new("RGB", size, "#f5f8fc")
     draw = ImageDraw.Draw(img)
-    title_font = pil_font(max(14, int(h * 0.042)), True)
+    title_text = f"VIDA UTIL DE LLANTAS - {month_name.upper()} {year}"
+    title_size = max(12, int(h * 0.040))
+    title_font = pil_font(title_size, True)
     stat_font = pil_font(max(12, int(h * 0.030)), True)
-    label_font = pil_font(max(8, int(h * 0.022)), True)
+    label_font = pil_font(max(6, int(h * 0.016)), True)
     table_font = pil_font(max(7, int(h * 0.020)), True)
     small_font = pil_font(max(7, int(h * 0.020)))
+    while title_size > 12 and draw.textlength(title_text, font=title_font) > w - max(16, int(w * 0.04)):
+        title_size -= 1
+        title_font = pil_font(title_size, True)
     header_h = int(h * 0.10)
     draw.rectangle((0, 0, w, header_h), fill=PPT_BLUE)
-    pil_center(draw, (w / 2, int(header_h * 0.50)), f"VIDA UTIL DE LLANTAS - {month_name.upper()} {year}", title_font, "white")
+    pil_center(draw, (w / 2, int(header_h * 0.50)), title_text, title_font, "white")
     stats = [
         ("Llantas", summary.get("total", len(rows))),
         ("Vida prom.", f"{parse_float(summary.get('avg_life'), 0):.0f}%"),
