@@ -7,7 +7,7 @@ import os
 import re
 import tempfile
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -2344,12 +2344,16 @@ MONTH_NAMES_ES_FULL = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
 PPT_EMU_PER_INCH = 914400
-PPT_BLUE = "#08265b"
-PPT_TEAL = "#0aa6a6"
-PPT_RED = "#d71920"
+PPT_BLUE = "#0b2f6f"
+PPT_TEAL = "#00a6a6"
+PPT_RED = "#e11d48"
 PPT_LIGHT = "#eef3f9"
 PPT_LINE = "#cfd8e5"
 PPT_TEXT = "#061a3b"
+MGA_BLUE = PPT_BLUE
+MGA_TEAL = PPT_TEAL
+MGA_TEAL_DARK = "#008b8b"
+MGA_RED = PPT_RED
 
 
 def month_bounds(year: int, month: int) -> tuple[str, str]:
@@ -2548,7 +2552,54 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
     totals["utilization"] = (totals["worked"] / totals["available"] * 100) if totals["available"] else 0
     totals["tmef"] = (totals["worked"] / totals["stops"]) if totals["stops"] else totals["worked"]
     totals["tmpr"] = (totals["mc"] / totals["stops"]) if totals["stops"] else 0
-    return {"group": group, "start": start, "end": end, "rows": rows, "totals": totals}
+    totals["reliability"] = totals["availability"]
+    return {
+        "group": group,
+        "start": start,
+        "end": end,
+        "start_day": int(str(start)[-2:]) if start else 1,
+        "end_day": int(str(end)[-2:]) if end else 31,
+        "rows": rows,
+        "totals": totals,
+    }
+
+
+def kpi_row_obj(row: dict[str, Any]):
+    return type(
+        "KpiMonthlyRow",
+        (),
+        {
+            "code": row.get("code") or "",
+            "description": row.get("description") or "",
+            "period_hours": parse_float(row.get("period"), 0),
+            "mp_hours": parse_float(row.get("mp"), 0),
+            "mc_hours": parse_float(row.get("mc"), 0),
+            "worked_hours": parse_float(row.get("worked"), 0),
+            "stops": int(parse_float(row.get("stops"), 0)),
+            "availability": parse_float(row.get("availability"), 0),
+            "utilization": parse_float(row.get("utilization"), 0),
+            "tmef": parse_float(row.get("tmef"), 0),
+            "tmpr": parse_float(row.get("tmpr"), 0),
+            "reliability": parse_float(row.get("reliability"), parse_float(row.get("availability"), 0)),
+            "status": "FUERA" if row.get("out") else str(row.get("status") or ""),
+        },
+    )()
+
+
+def monthly_kpi_row_objects(report: dict[str, Any]) -> list[Any]:
+    return [kpi_row_obj(row) for row in report.get("rows", [])]
+
+
+def is_kpi_out_row_py(row: Any) -> bool:
+    return (parse_float(getattr(row, "worked_hours", 0), 0) or 0) <= 0 and kpi_unavailable_status(getattr(row, "status", ""))
+
+
+def kpi_availability_text_py(row: Any, suffix: str = " %") -> str:
+    return "FUERA" if is_kpi_out_row_py(row) else f"{row.availability:.1f}{suffix}"
+
+
+def kpi_utilization_text_py(row: Any, suffix: str = " %") -> str:
+    return "FUERA" if is_kpi_out_row_py(row) else f"{row.utilization:.1f}{suffix}"
 
 
 def ppt_rgb(hex_color: str) -> RGBColor:
@@ -2979,11 +3030,11 @@ def pil_center(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: Any, fo
 
 def pil_right(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: Any, font, fill: str) -> None:
     w, h = pil_text_size(draw, text, font)
-    draw.text((xy[0] - w, xy[1] - h / 2), str(text or ""), font=font, fill=fill)
+    draw.text((xy[0] - w, xy[1]), str(text or ""), font=font, fill=fill)
 
 
 def pil_truncate(draw: ImageDraw.ImageDraw, text: Any, font, max_width: int) -> str:
-    clean = str(text or "")
+    clean = " ".join(str(text or "").split())
     if draw.textlength(clean, font=font) <= max_width:
         return clean
     while clean and draw.textlength(clean + "...", font=font) > max_width:
@@ -3017,6 +3068,28 @@ def pil_metric_card(
     draw.text((bar_x1, y2 - max(18, int((y2 - y1) * 0.14))), note, font=note_font, fill="#52627a")
 
 
+def pil_monthly_metric_card(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    value: str,
+    bar_color: str,
+    target_text: str,
+    font_value,
+    font_small,
+    fill_ratio: float = 0.74,
+) -> None:
+    x1, y1, x2, y2 = box
+    draw.rectangle(box, fill="white", outline="#e4e7ec")
+    pil_center(draw, ((x1 + x2) / 2, y1 + (y2 - y1) * 0.38), value, font_value, "#5d626a")
+    bar_x1 = x1 + 8
+    bar_x2 = x2 - 8
+    bar_y = y1 + int((y2 - y1) * 0.63)
+    draw.rectangle((bar_x1, bar_y, bar_x2, bar_y + 11), fill="#eef1f4")
+    draw.rectangle((bar_x1, bar_y, bar_x1 + int((bar_x2 - bar_x1) * max(min(fill_ratio, 1), 0)), bar_y + 11), fill=bar_color)
+    draw.text((x1 + 8, y2 - 22), "vs Meta", font=font_small, fill="#6b7280")
+    pil_right(draw, (x2 - 8, y2 - 22), target_text, font_small, "#111111")
+
+
 def monthly_image_metric_progress(value: float, target: float, inverse: bool = False) -> float:
     value = parse_float(value, 0)
     target = max(parse_float(target, 1), 1)
@@ -3027,7 +3100,7 @@ def monthly_image_metric_progress(value: float, target: float, inverse: bool = F
 
 def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start: str, end: str, path: Path, size: tuple[int, int]) -> None:
     report = monthly_kpi_report(portal, group, start, end)
-    rows = report["rows"]
+    rows = monthly_kpi_row_objects(report)
     totals = report["totals"]
     settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
     target_availability = parse_float(settings.get("meta_availability"), 85) or 85
@@ -3037,73 +3110,76 @@ def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start
     w, h = size
     img = Image.new("RGB", size, "#eeeeee")
     draw = ImageDraw.Draw(img)
-    title_font = pil_font(max(16, int(h * 0.052)), True)
-    section_font = pil_font(max(12, int(h * 0.034)), True)
-    value_font = pil_font(max(20, int(h * 0.066)), True)
-    small_font = pil_font(max(8, int(h * 0.022)))
-    axis_font = pil_font(max(8, int(h * 0.024)), True)
-    tab_font = pil_font(max(8, int(h * 0.023)))
+    title_font = pil_font(max(16, int(h * 0.045)), True)
+    section_font = pil_font(max(13, int(h * 0.035)), True)
+    value_font = pil_font(max(21, int(h * 0.065)), True)
+    small_font = pil_font(max(8, int(h * 0.018)))
+    axis_font = pil_font(max(8, int(h * 0.022)), True)
+    tab_font = pil_font(max(8, int(h * 0.022)))
 
-    draw.rectangle((0, 0, w, max(30, int(h * 0.09))), fill="white")
-    pil_center(draw, (w / 2, int(h * 0.048)), group, title_font, "#08265b")
-    side_w = int(w * 0.27)
-    gap = max(5, int(w * 0.004))
-    card_w = (side_w - gap) // 2
-    y_top = int(h * 0.12)
-    section_gap = int(h * 0.32)
-    card_h = int(h * 0.23)
+    draw.rectangle((0, 0, w, max(28, int(h * 0.08))), fill="white")
+    pil_center(draw, (w / 2, int(h * 0.045)), group, title_font, "#333333")
+    side_w = int(w * 0.265)
+    center_x = side_w + int(w * 0.025)
     right_x = w - side_w
+    center_w = max(w - side_w * 2 - int(w * 0.05), int(w * 0.42))
+    y_top = int(h * 0.095)
+    section_gap = int(h * 0.28)
+    card_h = int(h * 0.215)
+    gap = 5
+    card_w = (side_w - gap) // 2
 
-    pil_center(draw, (side_w / 2, y_top), "% Disponibilidad", section_font, "#6b7280")
-    pil_metric_card(draw, (0, y_top + 18, card_w, y_top + 18 + card_h), "", f"{totals['availability']:.1f}%", f"Meta {target_availability:.1f}%", PPT_TEAL, monthly_image_metric_progress(totals["availability"], target_availability), value_font, small_font, small_font)
-    pil_metric_card(draw, (card_w + gap, y_top + 18, side_w, y_top + 18 + card_h), "Meta", f"{target_availability:.1f}%", f"{totals['availability'] - target_availability:+.1f}%", PPT_TEAL, target_availability, value_font, small_font, small_font)
+    pil_center(draw, (side_w / 2, y_top + 11), "% Disponibilidad", section_font, "#7a7d82")
+    pil_monthly_metric_card(draw, (0, y_top + 28, card_w, y_top + 28 + card_h), f"{totals['availability']:.1f} %", MGA_TEAL, f"Meta {target_availability:.1f}%", value_font, small_font, totals["availability"] / 100)
+    pil_monthly_metric_card(draw, (card_w + gap, y_top + 28, side_w, y_top + 28 + card_h), f"{target_availability:.1f} %", MGA_TEAL, f"{totals['availability'] - target_availability:+.1f}%", value_font, small_font, target_availability / 100)
 
     y2 = y_top + section_gap
-    pil_center(draw, (side_w / 2, y2), "% Utilizacion", section_font, "#6b7280")
-    pil_metric_card(draw, (0, y2 + 18, card_w, y2 + 18 + card_h), "", f"{totals['utilization']:.1f}%", f"Meta {target_utilization:.1f}%", PPT_RED, monthly_image_metric_progress(totals["utilization"], target_utilization), value_font, small_font, small_font)
-    pil_metric_card(draw, (card_w + gap, y2 + 18, side_w, y2 + 18 + card_h), "Meta", f"{target_utilization:.1f}%", f"{totals['utilization'] - target_utilization:+.1f}%", PPT_RED, target_utilization, value_font, small_font, small_font)
+    pil_center(draw, (side_w / 2, y2 + 11), "% Utilizacion", section_font, "#7a7d82")
+    pil_monthly_metric_card(draw, (0, y2 + 28, card_w, y2 + 28 + card_h), f"{totals['utilization']:.1f} %", "#d36b73", f"Meta {target_utilization:.1f}%", value_font, small_font, totals["utilization"] / 100)
+    pil_monthly_metric_card(draw, (card_w + gap, y2 + 28, side_w, y2 + 28 + card_h), f"{target_utilization:.1f} %", "#d36b73", f"{totals['utilization'] - target_utilization:+.1f}%", value_font, small_font, target_utilization / 100)
 
-    pil_center(draw, (right_x + side_w / 2, y_top), "TMEF", section_font, "#6b7280")
-    pil_metric_card(draw, (right_x, y_top + 18, right_x + card_w, y_top + 18 + card_h), "", f"{totals['tmef']:.1f} hrs", f"Meta {target_tmef:.1f} h", PPT_TEAL, monthly_image_metric_progress(totals["tmef"], target_tmef), value_font, small_font, small_font)
-    pil_metric_card(draw, (right_x + card_w + gap, y_top + 18, w, y_top + 18 + card_h), "Meta", f"{target_tmef:.1f} hrs", f"{totals['tmef'] - target_tmef:+.1f} h", PPT_TEAL, 100, value_font, small_font, small_font)
+    pil_center(draw, (right_x + side_w / 2, y_top + 11), "TMEF", section_font, "#7a7d82")
+    pil_monthly_metric_card(draw, (right_x, y_top + 28, right_x + card_w, y_top + 28 + card_h), f"{totals['tmef']:.1f} hrs", MGA_TEAL, f"Meta {target_tmef:.1f} h", value_font, small_font, min(totals["tmef"] / max(target_tmef, 1), 1))
+    pil_monthly_metric_card(draw, (right_x + card_w + gap, y_top + 28, w, y_top + 28 + card_h), f"{target_tmef:.1f} hrs", "#c00000", f"{totals['tmef'] - target_tmef:+.1f} h", value_font, small_font, 0.36)
 
-    pil_center(draw, (right_x + side_w / 2, y2), "TMPR", section_font, "#6b7280")
-    pil_metric_card(draw, (right_x, y2 + 18, right_x + card_w, y2 + 18 + card_h), "", f"{totals['tmpr']:.1f} hrs", f"Meta {target_tmpr:.1f} h", PPT_RED, monthly_image_metric_progress(totals["tmpr"], target_tmpr, True), value_font, small_font, small_font)
-    pil_metric_card(draw, (right_x + card_w + gap, y2 + 18, w, y2 + 18 + card_h), "Meta", f"{target_tmpr:.1f} hrs", f"{target_tmpr - totals['tmpr']:+.1f} h", PPT_RED, 100, value_font, small_font, small_font)
+    pil_center(draw, (right_x + side_w / 2, y2 + 11), "TMPR", section_font, "#7a7d82")
+    pil_monthly_metric_card(draw, (right_x, y2 + 28, right_x + card_w, y2 + 28 + card_h), f"{totals['tmpr']:.1f} hrs", "#d36b73", f"Meta {target_tmpr:.1f} h", value_font, small_font, min(totals["tmpr"] / max(target_tmpr, 1), 1))
+    pil_monthly_metric_card(draw, (right_x + card_w + gap, y2 + 28, w, y2 + 28 + card_h), f"{target_tmpr:.1f} hrs", "#d36b73", f"{target_tmpr - totals['tmpr']:+.1f} h", value_font, small_font, 0.38)
 
-    chart_x = side_w + int(w * 0.03)
-    chart_y = int(h * 0.13)
-    chart_w = right_x - chart_x - int(w * 0.03)
-    chart_h = int(h * 0.76)
+    chart_x = center_x
+    chart_y = int(h * 0.12)
+    chart_w = min(center_w, right_x - center_x - int(w * 0.02))
+    chart_h = int(h * 0.75)
     draw.rectangle((chart_x, chart_y, chart_x + chart_w, chart_y + chart_h), fill="white")
-    draw.text((chart_x + 6, chart_y + 6), "KPI", font=small_font, fill="#111827")
+    draw.text((chart_x + 5, chart_y + 5), "KPI", font=small_font, fill="#333333")
     labels = ["% Disponibilidad", "% Utilizacion", "TMEF", "TMPR"]
-    tab_y = chart_y + int(h * 0.055)
-    tab_w = max(48, (chart_w - 24) // 4)
+    tab_y = chart_y + 24
+    tab_w = (chart_w - 20) // 4
     for idx, label in enumerate(labels):
-        tx = chart_x + 6 + idx * (tab_w + 4)
-        fill = PPT_TEAL if idx == 0 else "white"
-        draw.rectangle((tx, tab_y, tx + tab_w, tab_y + max(22, int(h * 0.055))), fill=fill, outline="#111111")
-        draw.text((tx + 5, tab_y + 5), label, font=tab_font, fill="#111111")
+        tx = chart_x + 5 + idx * (tab_w + 4)
+        fill = MGA_TEAL if idx in (0, 2, 3) else "white"
+        draw.rounded_rectangle((tx, tab_y, tx + tab_w, tab_y + 24), radius=3, fill=fill, outline="#222222", width=1)
+        draw.text((tx + 7, tab_y + 6), label, font=tab_font, fill="#111111")
     plot_x = chart_x + int(chart_w * 0.08)
-    plot_y = tab_y + max(42, int(h * 0.10))
+    plot_y = tab_y + 50
     plot_w = chart_w - int(chart_w * 0.14)
-    plot_h = chart_y + chart_h - plot_y - int(h * 0.12)
-    for value in range(0, 121, 20):
-        yy = plot_y + plot_h - int(plot_h * value / 120)
+    plot_h = chart_h - 100
+    for pct in range(0, 121, 20):
+        yy = plot_y + plot_h - int(plot_h * pct / 120)
         draw.line((plot_x, yy, plot_x + plot_w, yy), fill="#d8dde3", width=1)
-        draw.text((chart_x + 8, yy - 6), str(value), font=small_font, fill="#4b5563")
+        draw.text((chart_x + 8, yy - 6), str(pct), font=small_font, fill="#4b5563")
     display = rows[:7]
     if display:
         bar_gap = max(8, int(plot_w * 0.035))
         bar_w = max(12, int((plot_w - bar_gap * (len(display) + 1)) / max(len(display), 1)))
         for idx, row in enumerate(display):
-            value = max(min(parse_float(row.get("availability"), 0), 120), 0)
+            value = max(min(row.availability, 120), 0)
             x = plot_x + bar_gap + idx * (bar_w + bar_gap)
             y = plot_y + plot_h - int(plot_h * value / 120)
             draw.rectangle((x, y, x + bar_w, plot_y + plot_h), fill=PPT_TEAL)
-            pil_center(draw, (x + bar_w / 2, y - max(10, int(h * 0.025))), "FUERA" if row.get("out") else f"{value:.1f}", axis_font, "#5d626a")
-            pil_center(draw, (x + bar_w / 2, plot_y + plot_h + max(12, int(h * 0.032))), row.get("code") or "-", small_font, "#5d626a")
+            pil_center(draw, (x + bar_w / 2, y - 12), "FUERA" if is_kpi_out_row_py(row) else f"{row.availability:.0f}", axis_font, "#5d626a")
+            pil_center(draw, (x + bar_w / 2, plot_y + plot_h + 13), row.code or "-", small_font, "#5d626a")
+            pil_center(draw, (x + bar_w / 2, plot_y + plot_h - 8), "0", axis_font, "#5d626a")
     target_y = plot_y + plot_h - int(plot_h * target_availability / 120)
     draw.line((plot_x, target_y, plot_x + plot_w, target_y), fill="#7f858c", width=1)
     img.save(path, quality=95)
@@ -3121,78 +3197,91 @@ def pil_table_cell(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], te
 
 def create_monthly_kpi_table_image(portal: dict[str, Any], group: str, start: str, end: str, path: Path, size: tuple[int, int]) -> None:
     report = monthly_kpi_report(portal, group, start, end)
-    rows = report["rows"]
+    rows = monthly_kpi_row_objects(report)
     totals = report["totals"]
     w, h = size
     img = Image.new("RGB", size, "#eeeeee")
     draw = ImageDraw.Draw(img)
-    title_font = pil_font(max(11, int(h * 0.06)), True)
-    label_font = pil_font(max(8, int(h * 0.036)), True)
-    table_font = pil_font(max(7, int(h * 0.032)), True)
-    small_font = pil_font(max(6, int(h * 0.028)))
-    pil_center(draw, (w / 2, int(h * 0.08)), "REPORTE MENSUAL DE INDICADORES", title_font, "#111111")
-    start_day = int(str(start)[-2:]) if start else 1
-    end_day = int(str(end)[-2:]) if end else 31
-    draw.text((int(w * 0.36), int(h * 0.145)), "Dia Inicial:", font=label_font, fill="#666666")
-    draw.rectangle((int(w * 0.45), int(h * 0.125), int(w * 0.51), int(h * 0.19)), fill="white")
-    pil_center(draw, (int(w * 0.48), int(h * 0.158)), str(start_day), title_font, "#111111")
-    draw.text((int(w * 0.62), int(h * 0.145)), "Dia Final:", font=label_font, fill="#666666")
-    draw.rectangle((int(w * 0.70), int(h * 0.125), int(w * 0.76), int(h * 0.19)), fill="white")
-    pil_center(draw, (int(w * 0.73), int(h * 0.158)), str(end_day), title_font, "#111111")
-    table_top = int(h * 0.24)
-    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "TMEF", "TMPR", "Estatus"]
-    weights = [0.58, 2.15, 0.82, 0.72, 0.72, 0.78, 0.78, 0.72, 0.72, 0.68, 0.68, 1.15]
+    title_font = pil_font(max(13, int(h * 0.055)), True)
+    label_font = pil_font(max(9, int(h * 0.037)), True)
+    table_font = pil_font(max(8, int(h * 0.031)), True)
+    small_font = pil_font(max(7, int(h * 0.026)))
+
+    pil_center(draw, (w / 2, int(h * 0.07)), "REPORTE MENSUAL DE INDICADORES", title_font, "#111111")
+    draw.text((int(w * 0.36), int(h * 0.13)), "Dia Inicial:", font=label_font, fill="#777777")
+    draw.rectangle((int(w * 0.44), int(h * 0.115), int(w * 0.50), int(h * 0.175)), fill="white")
+    pil_center(draw, (int(w * 0.47), int(h * 0.145)), str(report["start_day"]), title_font, "#111111")
+    draw.text((int(w * 0.62), int(h * 0.13)), "Dia Final:", font=label_font, fill="#777777")
+    draw.rectangle((int(w * 0.70), int(h * 0.115), int(w * 0.76), int(h * 0.175)), fill="white")
+    pil_center(draw, (int(w * 0.73), int(h * 0.145)), str(report["end_day"]), title_font, "#111111")
+
+    table_top = int(h * 0.22)
+    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "TMEF", "TMPR", "Confiabilidad", "Estatus"]
+    weights = [0.55, 1.95, 0.8, 0.75, 0.75, 0.75, 0.8, 0.75, 0.75, 0.75, 0.75, 0.95, 1.25]
     total_weight = sum(weights)
     widths = [int(w * weight / total_weight) for weight in weights]
     widths[-1] += w - sum(widths)
     display_rows = rows[:8]
-    row_h = max(18, int((h - table_top - 5) / max(len(display_rows) + 2, 2)))
+    total_label = "Total Equipos de Barrenacion" if "barrenacion" in group.lower() else "Total Equipos de Rezagado"
+    total_row = type(
+        "KpiMonthlyRow",
+        (),
+        {
+            "code": "",
+            "description": total_label,
+            "period_hours": totals["period"],
+            "mp_hours": totals["mp"],
+            "mc_hours": totals["mc"],
+            "worked_hours": totals["worked"],
+            "stops": int(totals["stops"]),
+            "availability": totals["availability"],
+            "utilization": totals["utilization"],
+            "tmef": totals["tmef"],
+            "tmpr": totals["tmpr"],
+            "reliability": totals.get("reliability", totals["availability"]),
+            "status": "",
+        },
+    )()
+    table_rows = display_rows + [total_row]
+    row_count = len(table_rows) + 1
+    row_h = max(16, int((h - table_top - 6) / max(row_count, 1)))
     x = 0
     for header, col_w in zip(headers, widths):
-        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, table_font, "white", "#111111", "#555555")
+        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, table_font, "white", "#222222", "#666666")
         x += col_w
-    y = table_top + row_h
-    for row in display_rows:
-        fill = "#f5f5f5"
-        status = "FUERA" if row.get("out") else row.get("status")
+    for ridx, row in enumerate(table_rows, 1):
+        is_total = ridx == len(table_rows)
+        y = table_top + ridx * row_h
+        fill = "#d9d9d9" if is_total else "#efefef"
         values = [
-            row.get("code"),
-            row.get("description"),
-            f"{parse_float(row.get('period'), 0):.1f}",
-            f"{parse_float(row.get('mp'), 0):.1f}",
-            f"{parse_float(row.get('mc'), 0):.1f}",
-            f"{parse_float(row.get('worked'), 0):.1f}",
-            f"{parse_float(row.get('stops'), 0):.0f}",
-            row.get("availability_text"),
-            row.get("utilization_text"),
-            f"{parse_float(row.get('tmef'), 0):.1f}",
-            f"{parse_float(row.get('tmpr'), 0):.1f}",
-            status,
+            row.code,
+            row.description,
+            f"{row.period_hours:.1f}" if not is_total else f"{row.period_hours:.2f}",
+            f"{row.mp_hours:.1f}" if not is_total else f"{row.mp_hours:.2f}",
+            f"{row.mc_hours:.1f}" if not is_total else f"{row.mc_hours:.2f}",
+            f"{row.worked_hours:.1f}",
+            f"{row.stops}",
+            kpi_availability_text_py(row),
+            kpi_utilization_text_py(row),
+            f"{row.tmef:.1f}",
+            f"{row.tmpr:.1f}",
+            f"{row.reliability:.0f}%",
+            row.status,
         ]
         x = 0
-        for idx, (value, col_w) in enumerate(zip(values, widths)):
-            color = PPT_TEAL if idx in (7, 8) and "FUERA" not in str(value) else ("#c00000" if "FUERA" in str(value) else "#555555")
-            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, fill, "#111111", color, "left" if idx == 1 else "center")
+        for cidx, (value, col_w) in enumerate(zip(values, widths)):
+            cell_fill = "#ffd966" if is_total and cidx == 11 and "rezagado" not in group.lower() else fill
+            text_fill = "#666666"
+            if value == "FUERA":
+                text_fill = "#c76870"
+            elif cidx == 7:
+                text_fill = MGA_TEAL
+            elif cidx in (8, 10) and (is_total or row.utilization < 50):
+                text_fill = "#c76870"
+            elif cidx == 12 and value:
+                text_fill = "#c76870" if kpi_unavailable_status(value) else MGA_TEAL
+            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, table_font if cidx != 1 else small_font, cell_fill, "#222222", text_fill)
             x += col_w
-        y += row_h
-    total_values = [
-        "",
-        f"Total {group}",
-        f"{totals['period']:.1f}",
-        f"{totals['mp']:.1f}",
-        f"{totals['mc']:.1f}",
-        f"{totals['worked']:.1f}",
-        f"{totals['stops']:.0f}",
-        f"{totals['availability']:.1f}%",
-        f"{totals['utilization']:.1f}%",
-        f"{totals['tmef']:.1f}",
-        f"{totals['tmpr']:.1f}",
-        "",
-    ]
-    x = 0
-    for idx, (value, col_w) in enumerate(zip(total_values, widths)):
-        pil_table_cell(draw, (x, y, x + col_w, min(y + row_h, h)), value, table_font, "white", "#111111", "#111111", "left" if idx == 1 else "center")
-        x += col_w
     img.save(path, quality=95)
 
 
@@ -3203,14 +3292,14 @@ def create_monthly_tire_image(portal: dict[str, Any], path: Path, size: tuple[in
     w, h = size
     img = Image.new("RGB", size, "#f5f8fc")
     draw = ImageDraw.Draw(img)
-    title_font = pil_font(max(18, int(h * 0.055)), True)
-    stat_font = pil_font(max(14, int(h * 0.045)), True)
+    title_font = pil_font(max(14, int(h * 0.042)), True)
+    stat_font = pil_font(max(12, int(h * 0.030)), True)
     label_font = pil_font(max(8, int(h * 0.022)), True)
     table_font = pil_font(max(7, int(h * 0.020)), True)
     small_font = pil_font(max(7, int(h * 0.020)))
-    header_h = max(44, int(h * 0.105))
+    header_h = int(h * 0.10)
     draw.rectangle((0, 0, w, header_h), fill=PPT_BLUE)
-    draw.text((max(16, int(w * 0.05)), int(header_h * 0.25)), f"VIDA UTIL DE LLANTAS - {month_name.upper()} {year}", font=title_font, fill="white")
+    pil_center(draw, (w / 2, int(header_h * 0.50)), f"VIDA UTIL DE LLANTAS - {month_name.upper()} {year}", title_font, "white")
     stats = [
         ("Llantas", summary.get("total", len(rows))),
         ("Vida prom.", f"{parse_float(summary.get('avg_life'), 0):.0f}%"),
@@ -3253,13 +3342,20 @@ def create_monthly_tire_image(portal: dict[str, Any], path: Path, size: tuple[in
         ]
         x = 0
         for idx, (value, col_w) in enumerate(zip(values, widths)):
-            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, "white", "#d8dee8", PPT_TEAL if idx in (5, 6, 7) else "#5c6673")
             if idx == 5:
-                bx1 = x + max(4, int(col_w * 0.12))
-                by1 = y + int(row_h * 0.64)
-                bx2 = x + col_w - max(4, int(col_w * 0.12))
-                draw.rectangle((bx1, by1, bx2, by1 + max(4, int(row_h * 0.16))), fill="#e5e7eb")
-                draw.rectangle((bx1, by1, bx1 + int((bx2 - bx1) * life / 100), by1 + max(4, int(row_h * 0.16))), fill=PPT_TEAL)
+                draw.rectangle((x, y, x + col_w, y + row_h), fill="white", outline="#d8dee8")
+                bx1 = x + 6
+                by1 = y + max(5, (row_h - 8) // 2)
+                bx2 = x + col_w - max(42, int(col_w * 0.34))
+                bar_h = max(4, int(row_h * 0.16))
+                draw.rounded_rectangle((bx1, by1, bx2, by1 + bar_h), radius=3, fill="#e5e7eb")
+                fill_w = int((bx2 - bx1) * life / 100)
+                if fill_w > 0:
+                    draw.rounded_rectangle((bx1, by1, bx1 + fill_w, by1 + bar_h), radius=3, fill=PPT_TEAL)
+                draw.rectangle((bx1, by1, bx2, by1 + bar_h), outline="#d1d5db")
+                pil_right(draw, (x + col_w - 6, y + max(2, (row_h - pil_text_size(draw, values[5], small_font)[1]) / 2)), values[5], small_font, "#344054")
+            else:
+                pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, "white", "#d8dee8", PPT_TEAL if idx in (6, 7) else "#5c6673")
             x += col_w
         y += row_h
     img.save(path, quality=95)
@@ -3270,56 +3366,235 @@ def create_monthly_diesel_image(portal: dict[str, Any], path: Path, size: tuple[
     rows = diesel.get("rows") if isinstance(diesel.get("rows"), list) else []
     records = diesel.get("records") if isinstance(diesel.get("records"), list) else []
     totals = diesel.get("totals") if isinstance(diesel.get("totals"), dict) else {}
+    meta = parse_float(diesel.get("meta_lh") or (portal.get("settings") or {}).get("meta_diesel_lh"), 25) or 25
     w, h = size
-    img = Image.new("RGB", size, "white")
+    img = Image.new("RGB", size, "#f4f7fb")
     draw = ImageDraw.Draw(img)
-    title_font = pil_font(max(18, int(h * 0.034)), True)
-    value_font = pil_font(max(20, int(h * 0.042)), True)
-    label_font = pil_font(max(10, int(h * 0.020)), True)
-    small_font = pil_font(max(8, int(h * 0.017)))
-    draw.rectangle((0, 0, w, int(h * 0.075)), fill=PPT_BLUE)
-    pil_center(draw, (w / 2, int(h * 0.038)), f"CONSUMO DE DIESEL ACUMULADO - {month_name.upper()} {year}", title_font, "white")
-    summary = [
-        ("Consumo total", f"{parse_float(totals.get('diesel_liters'), 0):,.0f} L"),
-        ("Horas trabajadas", f"{parse_float(totals.get('worked_hours'), 0):,.1f} h"),
-        ("Rendimiento", f"{parse_float(totals.get('rendimiento_lh'), 0):.1f} L/H"),
-        ("MGA disponible", f"{parse_float(totals.get('mga_stock'), 0):,.0f} L"),
-        ("PROSERMIN", f"{parse_float(totals.get('prosermin_stock'), 0):,.0f} L"),
-    ]
-    card_y = int(h * 0.10)
-    card_h = int(h * 0.105)
-    card_gap = int(w * 0.015)
-    card_w = (w - card_gap * 3) // 2
-    for idx, (label, value) in enumerate(summary):
-        x = card_gap + (idx % 2) * (card_w + card_gap)
-        y = card_y + (idx // 2) * (card_h + int(h * 0.018))
-        if idx == 4:
-            card_w2 = w - card_gap * 2
-        else:
-            card_w2 = card_w
-        draw.rectangle((x, y, x + card_w2, y + card_h), fill="#f8fafc", outline="#d6dee9")
-        draw.text((x + 12, y + 10), label.upper(), font=label_font, fill="#52627a")
-        draw.text((x + 12, y + card_h * 0.42), value, font=value_font, fill=PPT_TEAL if idx in (2, 3) else PPT_TEXT)
-    table_source = rows if rows else records
-    table_top = int(h * 0.47)
-    headers = ["Equipo", "Condicion", "Horas", "Diesel", "L/H"]
-    widths = [int(w * 0.25), int(w * 0.25), int(w * 0.16), int(w * 0.18), w - int(w * 0.84)]
-    row_h = max(24, int((h - table_top - 10) / 14))
-    x = 0
-    for header, col_w in zip(headers, widths):
-        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, label_font, PPT_BLUE, "#111111", "white")
-        x += col_w
-    y = table_top + row_h
-    for row in table_source[:13]:
+    title_font = pil_font(max(24, int(w * 0.022)), True)
+    subtitle_font = pil_font(max(13, int(w * 0.011)), True)
+    card_label_font = pil_font(max(13, int(w * 0.010)), True)
+    card_value_font = pil_font(max(26, int(w * 0.024)), True)
+    small_font = pil_font(max(10, int(w * 0.008)))
+    axis_font = pil_font(max(10, int(w * 0.008)), True)
+    table_font = pil_font(max(10, int(w * 0.008)))
+    table_bold = pil_font(max(10, int(w * 0.008)), True)
+
+    def rendimiento_text(value: float | None) -> str:
+        return "S/H" if value is None else f"{value:.1f}"
+
+    def metric_card(box: tuple[int, int, int, int], label: str, value: str, note: str, progress: float, bad: bool = False) -> None:
+        x1, y1, x2, y2 = box
+        draw.rounded_rectangle(box, radius=8, fill="white", outline="#d5dde8")
+        draw.text((x1 + 18, y1 + 15), label.upper(), font=card_label_font, fill="#52627a")
+        draw.text((x1 + 18, y1 + 43), value, font=card_value_font, fill=MGA_BLUE)
+        draw.text((x1 + 18, y2 - 32), note, font=small_font, fill="#65758b")
+        bar_x1, bar_y = x1 + 18, y2 - 15
+        bar_x2 = x2 - 18
+        draw.rounded_rectangle((bar_x1, bar_y, bar_x2, bar_y + 8), radius=4, fill="#e5e9ef")
+        fill_w = int((bar_x2 - bar_x1) * max(min(progress, 100), 0) / 100)
+        draw.rounded_rectangle((bar_x1, bar_y, bar_x1 + fill_w, bar_y + 8), radius=4, fill=MGA_RED if bad else MGA_TEAL)
+
+    def diesel_status(row: dict[str, Any], rendimiento: float | None) -> str:
         hours = parse_float(row.get("worked_hours"), 0)
         liters = parse_float(row.get("diesel_liters"), 0)
-        rendimiento = parse_float(row.get("rendimiento_lh"), 0) or (liters / hours if hours else 0)
-        values = [row.get("equipment") or row.get("equipment_code"), row.get("condition"), f"{hours:.1f}", f"{liters:.0f}", f"{rendimiento:.1f}"]
-        x = 0
-        for idx, (value, col_w) in enumerate(zip(values, widths)):
-            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, "#f8fafc" if y // row_h % 2 else "white", "#d6dee9", PPT_TEXT, "left" if idx < 2 else "center")
-            x += col_w
-        y += row_h
+        if liters > 0 and hours <= 0:
+            return "SIN HORAS"
+        if rendimiento is not None and rendimiento > meta:
+            return "ALTO"
+        return "OK"
+
+    source_rows = rows if rows else records
+    normalized_rows: list[dict[str, Any]] = []
+    for row in source_rows:
+        hours = parse_float(row.get("worked_hours"), 0)
+        liters = parse_float(row.get("diesel_liters"), 0)
+        rendimiento = parse_float(row.get("rendimiento_lh"), 0) or (liters / hours if hours else None)
+        normalized_rows.append({
+            "equipment": row.get("equipment") or row.get("equipment_code") or "",
+            "condition": row.get("condition") or "",
+            "horometer_initial": parse_float(row.get("horometer_initial"), 0),
+            "horometer_final": parse_float(row.get("horometer_final"), 0),
+            "worked_hours": hours,
+            "diesel_liters": liters,
+            "rendimiento_lh": rendimiento,
+            "status": diesel_status(row, rendimiento),
+        })
+    total_liters = parse_float(totals.get("diesel_liters"), 0) or 0
+    mga_liters = parse_float(totals.get("mga_stock"), 0) or 0
+    prosermin_liters = parse_float(totals.get("prosermin_stock"), 0) or 0
+    total_hours = parse_float(totals.get("worked_hours"), 0) or 0
+    avg_value = parse_float(totals.get("rendimiento_lh"), 0) or (total_liters / total_hours if total_hours else None)
+    critical = sum(1 for row in normalized_rows if row["status"] in {"ALTO", "SIN HORAS"})
+    active_rows = [row for row in normalized_rows if row["diesel_liters"] > 0 or row["worked_hours"] > 0]
+
+    sx = w / 1056
+    sy = h / 1374
+
+    def rx(value: float) -> int:
+        return int(value * sx)
+
+    def ry(value: float) -> int:
+        return int(value * sy)
+
+    def rbox(box: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+        return (rx(box[0]), ry(box[1]), rx(box[2]), ry(box[3]))
+
+    def diesel_bad(row: dict[str, Any]) -> bool:
+        return row["status"] in {"ALTO", "SIN HORAS"}
+
+    def status_pill(box: tuple[int, int, int, int], text: str, bad: bool) -> None:
+        x1, y1, x2, y2 = box
+        fill = "#fde1e4" if bad else "#dff7ef"
+        text_color = MGA_RED if bad else MGA_TEAL_DARK
+        draw.rounded_rectangle((x1, y1, x2, y2), radius=max(5, ry(8)), fill=fill)
+        pil_center(draw, ((x1 + x2) / 2, (y1 + y2) / 2), text, small_font, text_color)
+
+    def card(box: tuple[float, float, float, float], label: str, value: str, note: str, progress: float, bad: bool = False) -> None:
+        x1, y1, x2, y2 = rbox(box)
+        draw.rounded_rectangle((x1, y1, x2, y2), radius=rx(7), fill="white", outline="#d5dde8")
+        draw.rectangle((x1, y1 + rx(6), x1 + rx(4), y2 - rx(6)), fill=MGA_TEAL)
+        draw.text((x1 + rx(14), y1 + ry(15)), label.upper(), font=card_label_font, fill="#52627a")
+        draw.text((x1 + rx(14), y1 + ry(42)), value, font=card_value_font, fill=MGA_BLUE)
+        draw.text((x1 + rx(14), y2 - ry(34)), note, font=small_font, fill="#65758b")
+        bar_x1 = x1 + rx(14)
+        bar_x2 = x2 - rx(14)
+        bar_y = y2 - ry(16)
+        draw.rounded_rectangle((bar_x1, bar_y, bar_x2, bar_y + ry(7)), radius=ry(4), fill="#e8edf3")
+        fill_w = int((bar_x2 - bar_x1) * max(min(progress, 100), 0) / 100)
+        if fill_w > 0:
+            draw.rounded_rectangle((bar_x1, bar_y, bar_x1 + fill_w, bar_y + ry(7)), radius=ry(4), fill=MGA_RED if bad else MGA_TEAL)
+
+    img.paste("#f4f7fb", (0, 0, w, h))
+    draw.rounded_rectangle(rbox((16, 16, 1040, 88)), radius=rx(5), fill=MGA_BLUE)
+    draw.text((rx(31), ry(24)), "MGA MANTENIMIENTO", font=subtitle_font, fill="#dbeafe")
+    draw.text((rx(31), ry(40)), "KPI DIESEL", font=pil_font(max(18, int(w * 0.026)), True), fill="white")
+    draw.text((rx(31), ry(70)), f"{start} a {end}", font=small_font, fill="#dbeafe")
+    pil_right(draw, (rx(1024), ry(26)), "RENDIMIENTO PROMEDIO", subtitle_font, "#dbeafe")
+    pil_right(draw, (rx(1024), ry(44)), rendimiento_text(avg_value), pil_font(max(22, int(w * 0.028)), True), "white")
+    pil_right(draw, (rx(1024), ry(76)), f"Meta {meta:.1f} L/H", small_font, "#dbeafe")
+
+    analyzed_days = max(1, (date.fromisoformat(end) - date.fromisoformat(start)).days + 1)
+    total_stock = max(mga_liters + prosermin_liters, 1)
+    cards = [
+        ((16, 100, 179, 196), "Equipos", f"{len(active_rows)}", "con captura diesel", 100 if active_rows else 0, False),
+        ((190, 100, 352, 196), "Consumo total", f"{total_liters:.1f} L", f"{analyzed_days} dias analizados", min(total_liters / 40000 * 100, 100), False),
+        ((363, 100, 525, 196), "Diesel MGA", f"{mga_liters:.1f} L", "disponible MGA", mga_liters / total_stock * 100, False),
+        ((536, 100, 698, 196), "Diesel PROSERMIN", f"{prosermin_liters:.1f} L", "disponible PROSERMIN", prosermin_liters / total_stock * 100, False),
+        ((709, 100, 871, 196), "Horas trabajadas", f"{total_hours:.1f} h", "horas del periodo", min(total_hours / 1000 * 100, 100), False),
+        ((882, 100, 1040, 196), "Rendimiento", f"{rendimiento_text(avg_value)}", f"Meta {meta:.1f} L/H", ((avg_value or 0) / max(meta, 1)) * 100, avg_value is not None and avg_value > meta),
+    ]
+    for item in cards:
+        card(*item)
+
+    chart_box = rbox((16, 209, 628, 622))
+    draw.rounded_rectangle(chart_box, radius=rx(7), fill="white", outline="#d5dde8")
+    draw.text((chart_box[0] + rx(12), chart_box[1] + ry(14)), "Consumo por equipo", font=subtitle_font, fill=MGA_BLUE)
+    pil_right(draw, (chart_box[2] - rx(16), chart_box[1] + ry(15)), "TOP 12", small_font, "#667085")
+    chart_rows = sorted(active_rows, key=lambda row: row["diesel_liters"], reverse=True)[:12]
+    max_liters = max([row["diesel_liters"] for row in chart_rows] or [1])
+    list_y = chart_box[1] + ry(45)
+    row_gap = max(20, int((chart_box[3] - list_y - ry(14)) / max(len(chart_rows), 1)))
+    for idx, row in enumerate(chart_rows):
+        y = list_y + idx * row_gap
+        name = pil_truncate(draw, row["equipment"], table_bold, rx(112))
+        draw.text((chart_box[0] + rx(12), y), name, font=table_bold, fill=MGA_BLUE)
+        draw.text((chart_box[0] + rx(12), y + ry(14)), row["status"], font=small_font, fill="#6b7280")
+        bar_x1 = chart_box[0] + rx(132)
+        bar_x2 = chart_box[2] - rx(150)
+        bar_y = y + ry(7)
+        draw.rounded_rectangle((bar_x1, bar_y, bar_x2, bar_y + ry(9)), radius=ry(5), fill="#e8edf3")
+        fill_w = int((bar_x2 - bar_x1) * row["diesel_liters"] / max_liters)
+        if fill_w > 0:
+            draw.rounded_rectangle((bar_x1, bar_y, bar_x1 + fill_w, bar_y + ry(9)), radius=ry(5), fill=MGA_RED if diesel_bad(row) else MGA_TEAL)
+        pil_right(draw, (chart_box[2] - rx(76), y + ry(4)), f"{row['diesel_liters']:.1f} L", table_bold, "#344054")
+        pil_right(draw, (chart_box[2] - rx(12), y + ry(4)), rendimiento_text(row["rendimiento_lh"]), small_font, "#64748b")
+
+    right_x1, right_x2 = rx(640), rx(1040)
+    panel1 = (right_x1, ry(219), right_x2, ry(319))
+    draw.rounded_rectangle(panel1, radius=rx(8), fill="white", outline="#d5dde8")
+    draw.text((panel1[0] + rx(12), panel1[1] + ry(28)), "RENDIMIENTO PROMEDIO", font=small_font, fill="#667085")
+    pil_center(draw, ((panel1[0] + panel1[2]) / 2, panel1[1] + ry(31)), rendimiento_text(avg_value), pil_font(max(18, int(w * 0.030)), True), MGA_BLUE)
+    pil_right(draw, (panel1[2] - rx(16), panel1[1] + ry(32)), f"Meta {meta:.1f} L/H", small_font, "#667085")
+    bar_x1, bar_x2 = panel1[0] + rx(22), panel1[2] - rx(22)
+    bar_y = panel1[1] + ry(52)
+    draw.rounded_rectangle((bar_x1, bar_y, bar_x2, bar_y + ry(13)), radius=ry(7), fill="#e8edf3")
+    progress = min(((avg_value or 0) / max(meta, 1)) * 100, 100)
+    if progress:
+        draw.rounded_rectangle((bar_x1, bar_y, bar_x1 + int((bar_x2 - bar_x1) * progress / 100), bar_y + ry(13)), radius=ry(7), fill=MGA_RED if avg_value and avg_value > meta else MGA_TEAL)
+    marker_x = bar_x1 + int((bar_x2 - bar_x1) * min(meta / max(meta * 1.2, 1), 1))
+    draw.line((marker_x, bar_y - ry(6), marker_x, bar_y + ry(19)), fill=MGA_BLUE, width=max(1, rx(2)))
+
+    panel2 = (right_x1, ry(328), right_x2, ry(456))
+    draw.rounded_rectangle(panel2, radius=rx(8), fill="white", outline="#d5dde8")
+    draw.text((panel2[0] + rx(12), panel2[1] + ry(18)), "Existencia disponible", font=subtitle_font, fill=MGA_BLUE)
+    stock_x1, stock_x2 = panel2[0] + rx(22), panel2[2] - rx(22)
+    stock_y = panel2[1] + ry(52)
+    draw.rounded_rectangle((stock_x1, stock_y, stock_x2, stock_y + ry(16)), radius=ry(8), fill="#e8edf3")
+    mga_w = int((stock_x2 - stock_x1) * mga_liters / total_stock)
+    pro_w = int((stock_x2 - stock_x1) * prosermin_liters / total_stock)
+    if mga_w > 0:
+        draw.rounded_rectangle((stock_x1, stock_y, stock_x1 + mga_w, stock_y + ry(16)), radius=ry(8), fill=MGA_TEAL)
+    if pro_w > 0:
+        draw.rounded_rectangle((stock_x1 + mga_w, stock_y, stock_x1 + mga_w + pro_w, stock_y + ry(16)), radius=ry(8), fill="#f59e0b")
+    for idx, (label, value, color) in enumerate([("MGA", mga_liters, MGA_TEAL), ("PROSERMIN", prosermin_liters, "#f59e0b")]):
+        yy = panel2[1] + ry(85 + idx * 23)
+        draw.rectangle((panel2[0] + rx(24), yy - ry(5), panel2[0] + rx(32), yy + ry(3)), fill=color)
+        draw.text((panel2[0] + rx(40), yy - ry(8)), label, font=small_font, fill="#64748b")
+        pil_right(draw, (panel2[2] - rx(18), yy - ry(8)), f"{value:.1f} L", table_bold, "#64748b")
+
+    list_panel = (right_x1, ry(466), right_x2, ry(622))
+    top_side_rows = chart_rows[:4]
+    sub_h = int((list_panel[3] - list_panel[1]) / max(len(top_side_rows), 1))
+    for idx, row in enumerate(top_side_rows):
+        y1 = list_panel[1] + idx * sub_h
+        draw.rounded_rectangle((list_panel[0], y1, list_panel[2], y1 + sub_h - ry(5)), radius=rx(5), fill="white", outline="#edf1f6")
+        draw.text((list_panel[0] + rx(14), y1 + ry(15)), pil_truncate(draw, row["equipment"], table_bold, rx(180)), font=table_bold, fill=MGA_BLUE)
+        pil_right(draw, (list_panel[2] - rx(16), y1 + ry(16)), f"{row['status']} | {rendimiento_text(row['rendimiento_lh'])}", small_font, "#64748b")
+
+    table_left = rx(16)
+    table_top = ry(633)
+    table_w = w - rx(32)
+    headers = ["EQUIPO", "CONDICION", "HI", "HF", "HRS TRAB", "DIESEL L", "REND. L/H", "META", "KPI"]
+    weights = [0.18, 0.20, 0.08, 0.08, 0.10, 0.12, 0.10, 0.07, 0.09]
+    col_w = [int(table_w * value / sum(weights)) for value in weights]
+    col_w[-1] += table_w - sum(col_w)
+    table_rows = sorted(normalized_rows, key=lambda row: row["diesel_liters"], reverse=True)
+    max_table_rows = max(1, min(len(table_rows), int((h - table_top - ry(44)) / max(20, ry(26)))))
+    table_rows = table_rows[:max_table_rows]
+    row_h = max(20, int((h - table_top - ry(22)) / max(len(table_rows) + 2, 1)))
+    x = table_left
+    for header, cw in zip(headers, col_w):
+        pil_table_cell(draw, (x, table_top, x + cw, table_top + row_h), header, table_bold, "#dfe8f3", "#d5dde8", "#0f274f")
+        x += cw
+    for idx, row in enumerate(table_rows, 1):
+        y = table_top + idx * row_h
+        fill = "#ffffff" if idx % 2 else "#f3f7fb"
+        values = [
+            row["equipment"],
+            row["condition"],
+            f"{row['horometer_initial']:.1f}" if row["horometer_initial"] else "",
+            f"{row['horometer_final']:.1f}" if row["horometer_final"] else "",
+            f"{row['worked_hours']:.1f}",
+            f"{row['diesel_liters']:.1f}",
+            rendimiento_text(row["rendimiento_lh"]),
+            f"{meta:.1f}",
+            row["status"],
+        ]
+        x = table_left
+        for col_idx, (value, cw) in enumerate(zip(values, col_w)):
+            if col_idx == 8:
+                draw.rectangle((x, y, x + cw, y + row_h), fill=fill, outline="#d5dde8")
+                status_pill((x + rx(8), y + ry(6), x + cw - rx(8), y + row_h - ry(6)), str(value), diesel_bad(row))
+            else:
+                text_fill = MGA_BLUE if col_idx == 0 else "#344054"
+                pil_table_cell(draw, (x, y, x + cw, y + row_h), value, table_font if col_idx != 0 else table_bold, fill, "#d5dde8", text_fill, "left" if col_idx in (0, 1) else "center")
+            x += cw
+    total_y = table_top + (len(table_rows) + 1) * row_h
+    x = table_left
+    total_values = ["Total", "", "", "", f"{total_hours:.1f}", f"{total_liters:.1f}", rendimiento_text(avg_value), f"{meta:.1f}", f"{critical} revision"]
+    for col_idx, (value, cw) in enumerate(zip(total_values, col_w)):
+        pil_table_cell(draw, (x, total_y, x + cw, total_y + row_h), value, table_bold, "#eafaf5", "#d5dde8", MGA_BLUE if col_idx == 0 else "#0f274f", "center")
+        x += cw
     img.save(path, quality=95)
 
 
@@ -3328,63 +3603,215 @@ def create_monthly_oil_image(portal: dict[str, Any], path: Path, size: tuple[int
     rows = oil.get("rows") if isinstance(oil.get("rows"), list) else []
     totals = dict(oil.get("totals") if isinstance(oil.get("totals"), dict) else {})
     w, h = size
-    img = Image.new("RGB", size, "#f3f4f6")
+    img = Image.new("RGB", size, "#eeeeee")
     draw = ImageDraw.Draw(img)
-    title_font = pil_font(max(28, int(h * 0.045)), True)
-    metric_font = pil_font(max(24, int(h * 0.038)), True)
-    label_font = pil_font(max(12, int(h * 0.018)), True)
-    small_font = pil_font(max(10, int(h * 0.015)))
-    draw.rectangle((0, 0, w, int(h * 0.09)), fill=PPT_BLUE)
-    pil_center(draw, (w / 2, int(h * 0.045)), f"KPI ACEITES - {month_name.upper()} {year}", title_font, "white")
-    metrics = [
+    title_font = pil_font(max(18, int(h * 0.022)), True)
+    section_font = pil_font(max(14, int(h * 0.018)), True)
+    value_font = pil_font(max(28, int(h * 0.035)), True)
+    small_font = pil_font(max(9, int(h * 0.012)))
+    axis_font = pil_font(max(10, int(h * 0.014)))
+    table_title_font = pil_font(max(13, int(h * 0.015)), True)
+    table_header_font = pil_font(max(9, int(h * 0.012)), True)
+    table_cell_font = pil_font(max(8, int(h * 0.011)), True)
+    oil_columns = [
         ("Motor 15W40", "oil_motor_15w40"),
-        ("HCO ISO 68", "oil_hco_iso68"),
-        ("Trans. SAE 30", "oil_trans_sae30"),
+        ("ISO 68", "oil_hco_iso68"),
+        ("SAE 30", "oil_trans_sae30"),
         ("SAE 50", "oil_sae50"),
         ("85W140", "oil_85w140"),
     ]
-    total = sum(parse_float(totals.get(key), 0) for _, key in metrics)
-    if not parse_float(totals.get("total_liters"), 0):
-        totals["total_liters"] = total
-    card_gap = int(w * 0.012)
-    card_w = (w - card_gap * 7) // 6
-    card_y = int(h * 0.12)
-    card_h = int(h * 0.12)
-    for idx, (label, key) in enumerate([*metrics, ("Total", "total_liters")]):
-        x = card_gap + idx * (card_w + card_gap)
-        draw.rectangle((x, card_y, x + card_w, card_y + card_h), fill="white", outline="#d6dee9")
-        pil_center(draw, (x + card_w / 2, card_y + card_h * 0.35), f"{parse_float(totals.get(key), 0):.1f} L", metric_font, PPT_TEAL if idx in (1, 5) else "#d6335c")
-        pil_center(draw, (x + card_w / 2, card_y + card_h * 0.72), label, label_font, "#52627a")
-    table_top = int(h * 0.30)
-    headers = ["Equipo", "Descripcion", "Hrs", "15W40", "ISO 68", "SAE30", "SAE50", "85W140", "Total"]
-    weights = [0.9, 2.0, 0.6, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75]
-    total_weight = sum(weights)
-    widths = [int(w * weight / total_weight) for weight in weights]
-    widths[-1] += w - sum(widths)
-    row_h = max(28, int((h - table_top - 20) / 18))
-    x = 0
+    for _label, key in oil_columns:
+        totals.setdefault(key, sum(parse_float(row.get(key), 0) for row in rows))
+    month_idx = MONTH_NAMES_ES_FULL.index(month_name) + 1 if month_name in MONTH_NAMES_ES_FULL else 1
+    month_short = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"][max(min(month_idx, 12), 1) - 1]
+    month_label = f"{month_short}-{str(year)[-2:]}"
+
+    def row_total(row: dict[str, Any]) -> float:
+        return sum(parse_float(row.get(key), 0) for _label, key in oil_columns)
+
+    def oil_group(row: dict[str, Any]) -> str:
+        group = normalized_ascii(row.get("group"))
+        if group in {"BARRENACION", "REZAGADO", "UTILITARIO"}:
+            return group
+        code = normalized_ascii(row.get("code") or row.get("equipment_code"))
+        text = normalized_ascii(f"{code} {row.get('description') or ''}")
+        if code.startswith(("JL", "JA")) or "JUMBO" in text:
+            return "BARRENACION"
+        if code.startswith("ST") or "SCOOP" in text or "R1300" in text or "R1600" in text:
+            return "REZAGADO"
+        return "UTILITARIO"
+
+    def metric_section(box, title, period_value, accumulated_value, bar_color):
+        x1, y1, x2, y2 = box
+        title_h = max(24, int((y2 - y1) * 0.24))
+        gap = 6
+        card_y1 = y1 + title_h
+        card_w = (x2 - x1 - gap) // 2
+        draw.rectangle((x1, y1, x2, y1 + title_h), fill="white", outline="#e5e7eb")
+        pil_center(draw, ((x1 + x2) / 2, y1 + title_h / 2), title, section_font, "#707780")
+        for cx1, cy1, cx2, cy2, value, caption, color in [
+            (x1, card_y1, x1 + card_w, y2, period_value, "Consumo semanal", bar_color),
+            (x1 + card_w + gap, card_y1, x2, y2, accumulated_value, "Consumo total acumulado", "#a40000" if bar_color != MGA_TEAL else bar_color),
+        ]:
+            draw.rectangle((cx1, cy1, cx2, cy2), fill="white")
+            pil_center(draw, ((cx1 + cx2) / 2, cy1 + (cy2 - cy1) * 0.32), f"{value:.2f}", value_font, "#777d86")
+            bar_y = cy1 + int((cy2 - cy1) * 0.56)
+            bar_h = max(7, int((cy2 - cy1) * 0.10))
+            draw.rectangle((cx1 + 4, bar_y, cx2 - 4, bar_y + bar_h), fill=color)
+            pil_center(draw, ((cx1 + cx2) / 2, cy2 - max(15, int((cy2 - cy1) * 0.14))), caption, small_font, "#4b5563")
+
+    top_h = max(30, int(h * 0.036))
+    draw.rectangle((0, 0, w, top_h), fill="white")
+    pil_center(draw, (w / 2, top_h / 2), 'Consumo de aceite de equipos "Providencia"', title_font, "#333333")
+    pil_center(draw, (int(w * 0.23), top_h / 2), month_label, section_font, "#111111")
+    pil_center(draw, (int(w * 0.94), top_h / 2), month_label, section_font, "#111111")
+
+    side_w = int(w * 0.265)
+    center_gap = int(w * 0.015)
+    center_x = side_w + center_gap
+    right_x = w - side_w
+    center_w = right_x - center_x - center_gap
+    section_h = int(h * 0.125)
+    section_1_y = top_h + int(h * 0.005)
+    section_2_y = section_1_y + section_h + int(h * 0.052)
+    for box, title, key, color in [
+        ((0, section_1_y, side_w - 6, section_1_y + section_h), "Consumo de Aceite HCO", "oil_hco_iso68", MGA_TEAL),
+        ((0, section_2_y, side_w - 6, section_2_y + section_h), "Consumo de Aceite SAE 30", "oil_trans_sae30", "#d76f75"),
+        ((right_x + 6, section_1_y, w, section_1_y + section_h), "Consumo de Aceite de Motor", "oil_motor_15w40", "#d76f75"),
+        ((right_x + 6, section_2_y, w, section_2_y + section_h), "Consumo de Aceite SAE 50", "oil_sae50", "#d76f75"),
+    ]:
+        value = parse_float(totals.get(key), 0)
+        metric_section(box, title, value, value, color)
+
+    chart_box = (center_x, top_h + int(h * 0.020), center_x + center_w, int(h * 0.425))
+    x1, y1, x2, y2 = chart_box
+    draw.rectangle(chart_box, fill="white", outline="#d1d5db")
+    chart_rows = sorted([row for row in rows if row_total(row) > 0], key=row_total, reverse=True)[:6] or rows[:6]
+    plot_x = x1 + int((x2 - x1) * 0.07)
+    plot_y = y1 + int((y2 - y1) * 0.11)
+    plot_w = int((x2 - x1) * 0.88)
+    plot_h = int((y2 - y1) * 0.64)
+    max_value = max([max([parse_float(row.get(key), 0) for _label, key in oil_columns] or [0]) for row in chart_rows] or [1])
+    axis_max = max(100, int(((max_value * 1.25) + 9) // 10 * 10))
+    colors_by_column = {
+        "oil_motor_15w40": "#4472c4",
+        "oil_hco_iso68": "#ed7d31",
+        "oil_trans_sae30": "#a5a5a5",
+        "oil_sae50": "#ffc000",
+        "oil_85w140": "#5b9bd5",
+    }
+    for value in range(0, axis_max + 1, max(axis_max // 5, 10)):
+        yy = plot_y + plot_h - int(plot_h * value / axis_max)
+        draw.line((plot_x, yy, plot_x + plot_w, yy), fill="#d9d9d9", width=1)
+        pil_right(draw, (plot_x - 10, yy - 8), str(value), axis_font, "#111111")
+    if chart_rows:
+        cluster_w = plot_w / max(len(chart_rows), 1)
+        bar_w = max(2, int(cluster_w / (len(oil_columns) + 2)))
+        for idx, row in enumerate(chart_rows):
+            cluster_x = plot_x + idx * cluster_w + max(2, int(cluster_w * 0.13))
+            for series_idx, (_label, key) in enumerate(oil_columns):
+                value = parse_float(row.get(key), 0)
+                bar_h = int(plot_h * value / axis_max) if axis_max else 0
+                bx1 = int(cluster_x + series_idx * bar_w)
+                bx2 = bx1 + max(1, bar_w - 1)
+                by1 = plot_y + plot_h - bar_h
+                if value:
+                    draw.rectangle((bx1, by1, bx2, plot_y + plot_h), fill=colors_by_column[key])
+                pil_center(draw, ((bx1 + bx2) / 2, by1 - 10 if value else plot_y + plot_h - 10), f"{value:.0f}", small_font, "#111111")
+            pil_center(draw, (cluster_x + (len(oil_columns) * bar_w) / 2, plot_y + plot_h + 18), row.get("code") or row.get("equipment_code") or "", axis_font, "#111111")
+    legend_y = y2 - int((y2 - y1) * 0.08)
+    legend_x = x1 + int((x2 - x1) * 0.25)
+    for label, key in oil_columns:
+        draw.rectangle((legend_x, legend_y - 5, legend_x + 10, legend_y + 5), fill=colors_by_column[key])
+        draw.text((legend_x + 15, legend_y - 9), label, font=axis_font, fill="#111111")
+        legend_x += int((x2 - x1) * 0.14)
+
+    grouped = {"BARRENACION": [], "REZAGADO": [], "UTILITARIO": []}
+    for row in rows:
+        grouped.setdefault(oil_group(row), []).append(row)
+    group_totals = {}
+    for group_name, group_rows in grouped.items():
+        group_totals[group_name] = {
+            "period": sum(parse_float(row.get("period_hours") or row.get("period"), 0) for row in group_rows),
+            "worked": sum(parse_float(row.get("worked_hours") or row.get("worked"), 0) for row in group_rows),
+            **{key: sum(parse_float(row.get(key), 0) for row in group_rows) for _label, key in oil_columns},
+        }
+    total_values = {
+        "period": sum(group_totals[g]["period"] for g in group_totals),
+        "worked": sum(group_totals[g]["worked"] for g in group_totals),
+        **{key: sum(group_totals[g][key] for g in group_totals) for _label, key in oil_columns},
+    }
+    table_x = int(w * 0.07)
+    table_top = int(h * 0.525)
+    table_w = int(w * 0.64)
+    table_box = (table_x, table_top, table_x + table_w, h - int(h * 0.025))
+    tx1, ty1, tx2, ty2 = table_box
+    draw.rectangle((tx1, ty1 - 68, tx2, ty1 - 6), fill="#f3f3f3")
+    pil_center(draw, ((tx1 + tx2) / 2, ty1 - 52), "REPORTE SEMANAL CONSUMO DE ACEITES", table_title_font, "#111111")
+    draw.text((tx1 + int(table_w * 0.40), ty1 - 28), "Dia Inicial:", font=table_header_font, fill="#707780")
+    draw.rectangle((tx1 + int(table_w * 0.52), ty1 - 42, tx1 + int(table_w * 0.61), ty1 - 18), fill="white")
+    pil_center(draw, (tx1 + int(table_w * 0.565), ty1 - 30), str(int(str(start)[-2:])), table_header_font, "#111111")
+    draw.text((tx1 + int(table_w * 0.74), ty1 - 28), "Dia Final:", font=table_header_font, fill="#707780")
+    draw.rectangle((tx1 + int(table_w * 0.84), ty1 - 42, tx1 + int(table_w * 0.93), ty1 - 18), fill="white")
+    pil_center(draw, (tx1 + int(table_w * 0.885), ty1 - 30), str(int(str(end)[-2:])), table_header_font, "#111111")
+    headers = ["# Eco", "Equipo", "Hrs\nPeriodo", "Hrs\nTrab", "Consumo\nMotor\n15W40", "Consumo\nISO 68", "SAE30", "SAE 50", "85W140"]
+    weights = [1.05, 2.65, 0.95, 0.95, 1.05, 0.95, 0.95, 0.95, 0.95]
+    widths = [int(table_w * weight / sum(weights)) for weight in weights]
+    widths[-1] += table_w - sum(widths)
+    table_rows = []
+    subtotal_labels = {"BARRENACION": "ACUMULADO EQ'S DE\nBARRENACION", "REZAGADO": "EQUIPO REZAGADO", "UTILITARIO": "EQUIPO UTILITARIO"}
+    for group_name in ("BARRENACION", "REZAGADO", "UTILITARIO"):
+        for row in grouped.get(group_name, [])[:5]:
+            table_rows.append(("row", row, group_name))
+        if grouped.get(group_name):
+            table_rows.append(("subtotal", group_totals[group_name], subtotal_labels[group_name]))
+    table_rows.append(("total", total_values, "Total de Aceite Utilizado"))
+    row_h = max(14, min(28, int((ty2 - ty1) / max(len(table_rows) + 1, 1))))
+    header_h = max(row_h + 4, 30)
+    x = tx1
     for header, col_w in zip(headers, widths):
-        pil_table_cell(draw, (x, table_top, x + col_w, table_top + row_h), header, label_font, PPT_BLUE, "#111111", "white")
+        draw.rectangle((x, ty1, x + col_w, ty1 + header_h), fill="white", outline="#111111")
+        draw.text((x + 3, ty1 + 3), header.replace("\n", " "), font=table_header_font, fill="#666666")
         x += col_w
-    sorted_rows = sorted(rows, key=lambda row: sum(parse_float(row.get(key), 0) for _, key in metrics), reverse=True)
-    y = table_top + row_h
-    for row in sorted_rows[:16]:
-        values = [
-            row.get("code") or row.get("equipment_code"),
-            row.get("description"),
-            f"{parse_float(row.get('worked_hours') or row.get('worked'), 0):.1f}",
-            f"{parse_float(row.get('oil_motor_15w40'), 0):.1f}",
-            f"{parse_float(row.get('oil_hco_iso68'), 0):.1f}",
-            f"{parse_float(row.get('oil_trans_sae30'), 0):.1f}",
-            f"{parse_float(row.get('oil_sae50'), 0):.1f}",
-            f"{parse_float(row.get('oil_85w140'), 0):.1f}",
-            f"{sum(parse_float(row.get(key), 0) for _, key in metrics):.1f}",
-        ]
-        x = 0
-        for idx, (value, col_w) in enumerate(zip(values, widths)):
-            pil_table_cell(draw, (x, y, x + col_w, y + row_h), value, small_font, "white" if y // row_h % 2 else "#eef3f9", "#d6dee9", PPT_TEXT, "left" if idx == 1 else "center")
+    current_y = ty1 + header_h
+    for kind, source, label in table_rows:
+        fill = "#fff200" if kind == "total" else "#ffd966" if kind == "subtotal" else "#efefef"
+        if kind == "row":
+            values = [
+                source.get("code") or source.get("equipment_code"),
+                source.get("description"),
+                f"{parse_float(source.get('period_hours') or source.get('period'), 0):.1f}",
+                f"{parse_float(source.get('worked_hours') or source.get('worked'), 0):.1f}" if parse_float(source.get("worked_hours") or source.get("worked"), 0) else "",
+                f"{parse_float(source.get('oil_motor_15w40'), 0):.2f}",
+                f"{parse_float(source.get('oil_hco_iso68'), 0):.1f}",
+                f"{parse_float(source.get('oil_trans_sae30'), 0):.2f}",
+                f"{parse_float(source.get('oil_sae50'), 0):.2f}",
+                f"{parse_float(source.get('oil_85w140'), 0):.2f}",
+            ]
+        else:
+            values = ["", label, f"{source.get('period', 0):.1f}" if kind != "total" else "", f"{source.get('worked', 0):.1f}", *[f"{source.get(key, 0):.1f}" for _label, key in oil_columns]]
+        x = tx1
+        for cidx, (value, col_w) in enumerate(zip(values, widths)):
+            text_fill = "#f05b5b" if kind == "row" and cidx >= 4 and parse_float(value, 0) == 0 else "#666666"
+            pil_table_cell(draw, (x, current_y, x + col_w, current_y + row_h), value, small_font if cidx == 1 else table_cell_font, fill, "#111111", text_fill)
             x += col_w
-        y += row_h
+        current_y += row_h
+        if current_y > ty2:
+            break
+
+    stock_box = (table_x + table_w + int(w * 0.018), table_top, w - int(w * 0.025), h - int(h * 0.025))
+    sx1, sy1, sx2, sy2 = stock_box
+    draw.rectangle(stock_box, fill="white", outline="#cbd5e1")
+    header_h = max(34, int((sy2 - sy1) * 0.09))
+    draw.rectangle((sx1, sy1, sx2, sy1 + header_h), fill=MGA_BLUE)
+    pil_center(draw, ((sx1 + sx2) / 2, sy1 + header_h / 2), "PEDIDO DE LUBRICANTES", table_title_font, "white")
+    for idx, (label, value) in enumerate([("Pedido 7d", 0), ("Pedido 15d", 0), ("Pedido 30d", 0)]):
+        card_w = (sx2 - sx1) / 3
+        cx1 = int(sx1 + idx * card_w)
+        cx2 = int(sx1 + (idx + 1) * card_w)
+        draw.rectangle((cx1, sy1 + header_h, cx2, sy1 + header_h + 52), fill="#f8fafc", outline="#e2e8f0")
+        pil_center(draw, ((cx1 + cx2) / 2, sy1 + header_h + 20), f"{value:.1f} L", table_header_font, MGA_TEAL)
+        pil_center(draw, ((cx1 + cx2) / 2, sy1 + header_h + 38), label, small_font, "#475569")
     img.save(path, quality=95)
 
 
