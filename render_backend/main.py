@@ -1335,6 +1335,7 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
             continue
         records.append(normalized_record)
     records = sorted(records, key=lambda row: (row["work_date"], row["equipment"], row["shift"]), reverse=True)
+    bitacora_hours = diesel_bitacora_hours_by_equipment(portal, start_iso, end_iso, equipment_aliases)
 
     days_by_date: dict[str, dict[str, Any]] = {}
     if isinstance(diesel_portal, dict):
@@ -1383,8 +1384,12 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
 
     rows = []
     for bucket in buckets.values():
-        worked = bucket["worked_hours"]
+        bitacora = bitacora_hours.get(bucket["equipment"], {})
+        bitacora_worked = parse_float(bitacora.get("worked_hours"), 0)
+        worked = bitacora_worked if bitacora_worked > 0 else bucket["worked_hours"]
         liters = bucket["diesel_liters"]
+        hi_values = bitacora.get("hi_values") or bucket["hi_values"]
+        hf_values = bitacora.get("hf_values") or bucket["hf_values"]
         rendimiento = liters / worked if worked > 0 else None
         if liters <= 0:
             status = "SIN CONSUMO"
@@ -1398,9 +1403,10 @@ def diesel_payload(session: Session, start: str = "", end: str = "", meta_lh: fl
             {
                 "equipment": bucket["equipment"],
                 "condition": bucket["condition"],
-                "horometer_initial": min(bucket["hi_values"]) if bucket["hi_values"] else 0,
-                "horometer_final": max(bucket["hf_values"]) if bucket["hf_values"] else 0,
+                "horometer_initial": min(hi_values) if hi_values else 0,
+                "horometer_final": max(hf_values) if hf_values else 0,
                 "worked_hours": worked,
+                "hours_source": "bitacora" if bitacora_worked > 0 else "diesel",
                 "diesel_liters": liters,
                 "rendimiento_lh": rendimiento,
                 "status": status,
@@ -1559,6 +1565,42 @@ def diesel_equipment_alias_map(
             add_alias(diesel_canonical_equipment(text, aliases), text)
 
     return aliases
+
+
+def diesel_bitacora_hours_by_equipment(
+    portal: dict[str, Any] | None,
+    start: str,
+    end: str,
+    aliases: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    captures = portal.get("captures") if isinstance(portal, dict) else []
+    if not isinstance(captures, list):
+        return {}
+    buckets: dict[str, dict[str, Any]] = {}
+    for capture in captures:
+        if not isinstance(capture, dict):
+            continue
+        work_date = str(capture.get("work_date") or "")
+        if not work_date or work_date < start or work_date > end:
+            continue
+        equipment = diesel_canonical_equipment(
+            capture.get("equipment_code") or capture.get("equipment") or capture.get("code") or capture.get("eco"),
+            aliases,
+        )
+        if not equipment:
+            continue
+        bucket = buckets.setdefault(equipment, {"hi_values": [], "hf_values": [], "worked_hours": 0.0})
+        hi = parse_float(capture.get("hi") or capture.get("horometer_initial"), 0)
+        hf = parse_float(capture.get("hf") or capture.get("horometer_final"), 0)
+        worked = parse_float(capture.get("worked_hours"), 0)
+        if worked <= 0 and hi > 0 and hf >= hi:
+            worked = hf - hi
+        if hi > 0:
+            bucket["hi_values"].append(hi)
+        if hf > 0:
+            bucket["hf_values"].append(hf)
+        bucket["worked_hours"] += max(worked, 0)
+    return buckets
 
 
 def diesel_template_equipment_keys(value: Any) -> list[str]:
@@ -6162,12 +6204,50 @@ WAREHOUSE_HTML = r"""<!doctype html>
           return `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.tire_code)}</td><td>${esc(row.position)}</td><td>${esc(row.brand)}</td><td>${one(row.hours_used)}</td><td>${one(row.life_remaining_hours)}</td><td>${pct(value)}</td><td>${pct(value)}</td><td><span class="pill ${cls}">${esc(status || "S/D")}</span></td><td>${esc(row.recommendation || "")}</td></tr>`;
         }).join("") + `</tbody>`;
     }
+    function dieselCaptureHoursFromBitacora(capture){
+      const hi = Number(capture?.hi || capture?.horometer_initial || 0);
+      const hf = Number(capture?.hf || capture?.horometer_final || 0);
+      const worked = Number(capture?.worked_hours || 0);
+      if(worked > 0) return worked;
+      if(hi > 0 && hf >= hi) return hf - hi;
+      return 0;
+    }
+    function dieselBitacoraHoursByEquipment(start, end, aliasMap=dieselBaseEquipmentAliasMap()){
+      const grouped = new Map();
+      (portal.captures || []).filter(capture => inRange(capture.work_date, start, end)).forEach(capture => {
+        const equipment = dieselCanonicalEquipment(capture.equipment_code || capture.equipment || capture.code || capture.eco || "", aliasMap);
+        if(!equipment) return;
+        addDieselEquipmentAlias(aliasMap, equipment, [capture.equipment_code, capture.equipment, capture.code, capture.eco]);
+        if(!grouped.has(equipment)) grouped.set(equipment, {hi_values:[], hf_values:[], worked_hours:0});
+        const row = grouped.get(equipment);
+        const hi = Number(capture.hi || capture.horometer_initial || 0);
+        const hf = Number(capture.hf || capture.horometer_final || 0);
+        if(hi > 0) row.hi_values.push(hi);
+        if(hf > 0) row.hf_values.push(hf);
+        row.worked_hours += dieselCaptureHoursFromBitacora(capture);
+      });
+      return grouped;
+    }
+    function dieselApplyBitacoraHours(row, bitacoraHours){
+      const bitacora = bitacoraHours.get(row.equipment);
+      const bitacoraWorked = bitacora ? Number(bitacora.worked_hours || 0) : 0;
+      const hiValues = bitacora && bitacora.hi_values.length ? bitacora.hi_values : (row.hi_values || row.hi || []);
+      const hfValues = bitacora && bitacora.hf_values.length ? bitacora.hf_values : (row.hf_values || row.hf || []);
+      return {
+        ...row,
+        horometer_initial: hiValues.length ? Math.min(...hiValues) : 0,
+        horometer_final: hfValues.length ? Math.max(...hfValues) : 0,
+        worked_hours: bitacoraWorked > 0 ? bitacoraWorked : Number(row.worked_hours || 0),
+        hours_source: bitacoraWorked > 0 ? "bitacora" : (row.hours_source || "diesel"),
+      };
+    }
     function dieselKpiRowsForPeriod(){
       const start = $("kpiStart").value;
       const end = $("kpiEnd").value;
       const meta = Number($("dieselMeta").value || diesel.meta_lh || (portal.settings || {}).meta_diesel_lh || 25);
       const grouped = {};
       const aliasMap = dieselBaseEquipmentAliasMap();
+      const bitacoraHours = dieselBitacoraHoursByEquipment(start, end, aliasMap);
       const periodRecords = (diesel.records || []).filter(row => inRange(row.work_date, start, end));
       periodRecords.forEach(record => {
         const equipment = dieselCanonicalEquipment(record.equipment, aliasMap);
@@ -6186,15 +6266,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         row.diesel_liters += Number(record.diesel_liters || 0);
       });
       const rows = Object.values(grouped).map(row => {
-        const rendimiento = row.worked_hours > 0 ? row.diesel_liters / row.worked_hours : null;
+        const merged = dieselApplyBitacoraHours(row, bitacoraHours);
+        const rendimiento = merged.worked_hours > 0 ? merged.diesel_liters / merged.worked_hours : null;
         let status = "OK";
-        if(row.diesel_liters <= 0) status = "SIN CONSUMO";
-        else if(row.worked_hours <= 0) status = "SIN HORAS";
+        if(merged.diesel_liters <= 0) status = "SIN CONSUMO";
+        else if(merged.worked_hours <= 0) status = "SIN HORAS";
         else if(rendimiento !== null && rendimiento > meta) status = "ALTO";
         return {
-          ...row,
-          horometer_initial: row.hi.length ? Math.min(...row.hi) : 0,
-          horometer_final: row.hf.length ? Math.max(...row.hf) : 0,
+          ...merged,
           rendimiento_lh: rendimiento,
           status,
         };
@@ -6233,7 +6312,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         dieselKpiCardHtml("Consumo total", `${one(liters)} L`, `${days} dias analizados`, liters > 0 ? 100 : 0),
         dieselKpiCardHtml("Diesel MGA", `${one(mga)} L`, "disponible MGA", (mga / supplierTotal) * 100),
         dieselKpiCardHtml("Diesel PROSERMIN", `${one(prosermin)} L`, "disponible PROSERMIN", (prosermin / supplierTotal) * 100),
-        dieselKpiCardHtml("Horas trabajadas", `${one(totals.worked_hours)} h`, "horas del periodo", Math.min(Number(totals.worked_hours || 0) / Math.max(report.rows.length * 10, 1) * 100, 100)),
+        dieselKpiCardHtml("Horas trabajadas", `${one(totals.worked_hours)} h`, "horas de bitacora", Math.min(Number(totals.worked_hours || 0) / Math.max(report.rows.length * 10, 1) * 100, 100)),
         dieselKpiCardHtml("Rendimiento", avg == null ? "S/H" : `${one(avg)} L/H`, `Meta ${one(report.meta)} L/H`, avg == null ? 0 : Math.min((avg / Math.max(report.meta, 1)) * 100, 100), avg != null && avg > report.meta),
       ].join("");
     }
@@ -6630,6 +6709,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function groupedDieselRows(rows){
       const aliasMap = dieselBaseEquipmentAliasMap();
+      const bitacoraHours = dieselBitacoraHoursByEquipment(diesel.start || $("dieselStart").value, diesel.end || $("dieselEnd").value, aliasMap);
       const grouped = new Map();
       (rows || []).forEach(raw => {
         const equipment = dieselCanonicalEquipment(raw.equipment, aliasMap);
@@ -6649,18 +6729,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
       });
       const meta = Number($("dieselMeta").value || diesel.meta_lh || 25);
       return [...grouped.values()].map(row => {
-        const rendimiento = row.worked_hours > 0 ? row.diesel_liters / row.worked_hours : null;
+        const merged = dieselApplyBitacoraHours(row, bitacoraHours);
+        const rendimiento = merged.worked_hours > 0 ? merged.diesel_liters / merged.worked_hours : null;
         let status = "OK";
-        if(row.diesel_liters <= 0) status = "SIN CONSUMO";
-        else if(row.worked_hours <= 0) status = "SIN HORAS";
+        if(merged.diesel_liters <= 0) status = "SIN CONSUMO";
+        else if(merged.worked_hours <= 0) status = "SIN HORAS";
         else if(rendimiento !== null && rendimiento > meta) status = "ALTO";
         return {
-          equipment: row.equipment,
-          condition: row.condition,
-          horometer_initial: row.hi_values.length ? Math.min(...row.hi_values) : 0,
-          horometer_final: row.hf_values.length ? Math.max(...row.hf_values) : 0,
-          worked_hours: row.worked_hours,
-          diesel_liters: row.diesel_liters,
+          equipment: merged.equipment,
+          condition: merged.condition,
+          horometer_initial: merged.horometer_initial,
+          horometer_final: merged.horometer_final,
+          worked_hours: merged.worked_hours,
+          hours_source: merged.hours_source,
+          diesel_liters: merged.diesel_liters,
           rendimiento_lh: rendimiento,
           status,
         };
