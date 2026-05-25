@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+from copy import copy
 import tempfile
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.styles import Alignment
 from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -261,6 +263,16 @@ class CloudRequisition(Base):
     recommendation: Mapped[str] = mapped_column(String(80), default="ORIGINAL")
     status: Mapped[str] = mapped_column(String(80), default="Abierta")
     notes: Mapped[str] = mapped_column(Text, default="")
+    purchase_status: Mapped[str] = mapped_column(String(120), default="")
+    purchase_order: Mapped[str] = mapped_column(String(120), default="")
+    purchase_order_date: Mapped[str] = mapped_column(String(20), default="")
+    supplier: Mapped[str] = mapped_column(String(220), default="")
+    buyer: Mapped[str] = mapped_column(String(180), default="")
+    expected_date: Mapped[str] = mapped_column(String(20), default="")
+    received_date: Mapped[str] = mapped_column(String(20), default="")
+    tracking_notes: Mapped[str] = mapped_column(Text, default="")
+    tracking_source_file: Mapped[str] = mapped_column(String(260), default="")
+    tracking_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     items: Mapped[list["CloudRequisitionItem"]] = relationship(
         back_populates="requisition",
@@ -345,18 +357,37 @@ Base.metadata.create_all(engine)
 
 
 def ensure_cloud_schema() -> None:
+    requisition_columns = {
+        "purchase_status": "VARCHAR(120) DEFAULT ''",
+        "purchase_order": "VARCHAR(120) DEFAULT ''",
+        "purchase_order_date": "VARCHAR(20) DEFAULT ''",
+        "supplier": "VARCHAR(220) DEFAULT ''",
+        "buyer": "VARCHAR(180) DEFAULT ''",
+        "expected_date": "VARCHAR(20) DEFAULT ''",
+        "received_date": "VARCHAR(20) DEFAULT ''",
+        "tracking_notes": "TEXT DEFAULT ''",
+        "tracking_source_file": "VARCHAR(260) DEFAULT ''",
+        "tracking_updated_at": "TIMESTAMP",
+    }
     if database_url().startswith("sqlite"):
         try:
             with engine.begin() as conn:
                 columns = {row[1] for row in conn.execute(sql_text("PRAGMA table_info(mga_diesel_day)")).fetchall()}
                 if "prosermin_stock" not in columns:
                     conn.execute(sql_text("ALTER TABLE mga_diesel_day ADD COLUMN prosermin_stock FLOAT DEFAULT 0"))
+                req_columns = {row[1] for row in conn.execute(sql_text("PRAGMA table_info(mga_requisition)")).fetchall()}
+                for column, definition in requisition_columns.items():
+                    if column not in req_columns:
+                        conn.execute(sql_text(f"ALTER TABLE mga_requisition ADD COLUMN {column} {definition}"))
         except Exception:
             pass
         return
     try:
         with engine.begin() as conn:
             conn.execute(sql_text("ALTER TABLE mga_diesel_day ADD COLUMN IF NOT EXISTS prosermin_stock DOUBLE PRECISION DEFAULT 0"))
+            for column, definition in requisition_columns.items():
+                pg_definition = definition.replace("VARCHAR", "VARCHAR")
+                conn.execute(sql_text(f"ALTER TABLE mga_requisition ADD COLUMN IF NOT EXISTS {column} {pg_definition}"))
     except Exception:
         pass
 
@@ -376,6 +407,7 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
 REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
+REQUISITION_TRACKING_TEMPLATE_PATH = STATIC_DIR / "requisition_tracking_template.xlsx"
 DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
 DIESEL_LOGO_PATH = STATIC_DIR / "mga-corner-logo.jfif"
 MONTHLY_REPORT_TEMPLATE_PATH = STATIC_DIR / "monthly_report_template.pptx"
@@ -433,6 +465,9 @@ def normalize_text(value: Any) -> str:
 def normalize_part_key(value: Any) -> str:
     text = normalize_text(value)
     return "".join(ch for ch in text if ch.isalnum())
+
+
+REQUISITION_REFERENCE_RE = re.compile(r"\b(REQ|SER|SERV)\s*[\.\-_]?\s*0*(\d+)\b", re.IGNORECASE)
 
 
 def product_search_text(item: dict[str, Any]) -> str:
@@ -580,6 +615,127 @@ def epp_field_for(header: Any) -> str | None:
         "MANTENIMIENTO": "maintenance_notes",
     }
     return mapping.get(text)
+
+
+def requisition_tracking_field_for(header: Any) -> str | None:
+    text = normalize_part_key(header)
+    mapping = {
+        "FOLIO": "folio",
+        "REQUISICION": "folio",
+        "REQUISICIONES": "folio",
+        "REQUISICIÓN": "folio",
+        "REQ": "folio",
+        "NUMREQ": "folio",
+        "NOREQ": "folio",
+        "NOREQUISICION": "folio",
+        "NOREQUISICIÓN": "folio",
+        "NUMEROREQ": "folio",
+        "NUMEROREQUISICION": "folio",
+        "NUMEROREQUISICIÓN": "folio",
+        "FOLIOREQ": "folio",
+        "FOLIOREQUISICION": "folio",
+        "NO": "folio",
+        "DESCRIPCION": "description",
+        "DESCRIPCIÃ“N": "description",
+        "DESCRIPCIONREQ": "description",
+        "CONCEPTO": "description",
+        "NOECON": "equipment",
+        "NOECONOMICO": "equipment",
+        "NUMEROECONOMICO": "equipment",
+        "EQUIPO": "equipment",
+        "ESTATUS": "purchase_status",
+        "ESTADO": "purchase_status",
+        "STATUS": "purchase_status",
+        "ESTATUSCOMPRAS": "purchase_status",
+        "STATUSCOMPRAS": "purchase_status",
+        "SEGUIMIENTO": "purchase_status",
+        "ORDENCOMPRA": "purchase_order",
+        "ORDENDECOMPRA": "purchase_order",
+        "OC": "purchase_order",
+        "OCSAP": "purchase_order",
+        "PO": "purchase_order",
+        "PONUMBER": "purchase_order",
+        "PEDIDO": "purchase_order",
+        "NUMOC": "purchase_order",
+        "NOOC": "purchase_order",
+        "FECHAOC": "purchase_order_date",
+        "FECHAORDENCOMPRA": "purchase_order_date",
+        "PROVEEDOR": "supplier",
+        "PROVEEDORASIGNADO": "supplier",
+        "SUPPLIER": "supplier",
+        "COMPRADOR": "buyer",
+        "BUYER": "buyer",
+        "RESPONSABLE": "buyer",
+        "TE": "expected_date",
+        "TENTREGA": "expected_date",
+        "TIEMPOENTREGA": "expected_date",
+        "TIEMPODEENTREGA": "expected_date",
+        "FECHAENTREGA": "expected_date",
+        "FECHAPROMESA": "expected_date",
+        "FECHAESTIMADA": "expected_date",
+        "FECHAESTIMADAENTREGA": "expected_date",
+        "PROMESA": "expected_date",
+        "ETA": "expected_date",
+        "ENTREGAESTIMADA": "expected_date",
+        "FECHARECEPCION": "received_date",
+        "FECHARECIBIDO": "received_date",
+        "RECIBIDO": "received_date",
+        "OBSERVACIONES": "tracking_notes",
+        "OBS": "tracking_notes",
+        "NOTAS": "tracking_notes",
+        "COMENTARIOS": "tracking_notes",
+        "COMENTARIOSCOMPRAS": "tracking_notes",
+        "COMENTARIOSPROYECTO": "tracking_notes",
+        "COMENTARIOSCOMPRASYOPROYECTO": "tracking_notes",
+    }
+    return mapping.get(text)
+
+
+def excel_cell_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def split_requisition_reference(value: Any) -> tuple[str, str]:
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return "", ""
+    match = REQUISITION_REFERENCE_RE.search(text)
+    if not match:
+        return normalize_requisition_folio(text), ""
+    prefix = "SER" if match.group(1).upper().startswith("SER") else "REQ"
+    folio = f"{prefix}-{int(match.group(2)):04d}"
+    description = f"{text[:match.start()]} {text[match.end():]}".strip(" .-:/")
+    return folio, normalize_text(description)
+
+
+def normalize_requisition_folio(value: Any) -> str:
+    text = normalize_text(value)
+    if not text:
+        return ""
+    match = REQUISITION_REFERENCE_RE.search(text)
+    if match:
+        prefix = "SER" if match.group(1).startswith("SER") else "REQ"
+        return f"{prefix}-{int(match.group(2)):04d}"
+    text = text.replace(" ", "")
+    return text
+
+
+def requisition_lookup(session: Session, folio: str) -> CloudRequisition | None:
+    normalized = normalize_requisition_folio(folio)
+    if not normalized:
+        return None
+    row = session.scalar(select(CloudRequisition).where(CloudRequisition.folio == normalized))
+    if row is not None:
+        return row
+    compact = normalize_part_key(normalized)
+    rows = session.scalars(select(CloudRequisition)).all()
+    return next((candidate for candidate in rows if normalize_part_key(candidate.folio) == compact), None)
 
 
 def add_unique(values: list[str], value: Any) -> None:
@@ -2004,6 +2160,16 @@ def requisition_payload(row: CloudRequisition, include_items: bool = False) -> d
         "recommendation": row.recommendation,
         "status": row.status,
         "notes": row.notes,
+        "purchase_status": row.purchase_status,
+        "purchase_order": row.purchase_order,
+        "purchase_order_date": row.purchase_order_date,
+        "supplier": row.supplier,
+        "buyer": row.buyer,
+        "expected_date": row.expected_date,
+        "received_date": row.received_date,
+        "tracking_notes": row.tracking_notes,
+        "tracking_source_file": row.tracking_source_file,
+        "tracking_updated_at": row.tracking_updated_at.isoformat(timespec="seconds") if row.tracking_updated_at else "",
         "items_count": len([item for item in row.items if item.active]),
         "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else "",
         "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
@@ -2022,6 +2188,215 @@ def requisition_payload(row: CloudRequisition, include_items: bool = False) -> d
             if item.active
         ]
     return payload
+
+
+def tracking_equipment_code(value: Any) -> str:
+    text = normalize_text(value)
+    match = re.search(r"([A-Z]{1,4})[- ]?0*(\d{1,4})", text)
+    if match:
+        return f"{match.group(1)}-{int(match.group(2)):03d}"
+    return text or "PARA STOCK"
+
+
+def tracking_category_for_equipment(value: Any) -> str:
+    code = tracking_equipment_code(value)
+    text = normalize_text(value)
+    if code.startswith("JL") or code.startswith("JA") or "JUMBO" in text:
+        return "Jumbos:"
+    if code.startswith("ST") or "SCOOP" in text:
+        return "Scoop Tram"
+    if code.startswith("RET") or "RETRO" in text:
+        return "Retroexcavadoras"
+    if code.startswith(("MG", "CBP")) or "CAMION" in text or "VEHIC" in text:
+        return "Camiones y vehiculos"
+    if "STOCK" in text or "TALLER" in text:
+        return "Almacen"
+    return "Otros"
+
+
+def tracking_requisition_description(req: CloudRequisition, item: CloudRequisitionItem | None = None) -> str:
+    parts = [req.folio]
+    if item is not None:
+        if item.part_number:
+            parts.append(item.part_number)
+        if item.description:
+            parts.append(item.description)
+    elif req.notes:
+        parts.append(req.notes)
+    return " ".join(str(part or "").strip() for part in parts if str(part or "").strip())
+
+
+def tracking_comments(req: CloudRequisition) -> str:
+    parts = []
+    if req.purchase_status:
+        parts.append(req.purchase_status)
+    elif req.status:
+        parts.append(req.status)
+    if req.tracking_notes:
+        parts.append(req.tracking_notes)
+    return " / ".join(part for part in parts if part)
+
+
+def infer_purchase_status(purchase_order: Any, notes: Any) -> str:
+    if excel_cell_text(purchase_order):
+        return "CON ORDEN DE COMPRA"
+    text = normalize_text(notes)
+    if not text:
+        return ""
+    if "CANCEL" in text:
+        return "CANCELADO"
+    if "RECIB" in text or "COLOCADO" in text:
+        return "RECIBIDO"
+    if "COTIZ" in text:
+        return "COTIZANDO"
+    if "ORDEN DE COMPRA" in text or "CON OC" in text:
+        return "CON ORDEN DE COMPRA"
+    return "EN SEGUIMIENTO"
+
+
+def requisition_tracking_export_rows(session: Session) -> list[dict[str, Any]]:
+    requisitions = session.scalars(
+        select(CloudRequisition).order_by(CloudRequisition.equipment.asc(), CloudRequisition.folio.asc())
+    ).all()
+    rows: list[dict[str, Any]] = []
+    for req in requisitions:
+        active_items = [item for item in sorted(req.items, key=lambda item: (item.sort_order, item.id)) if item.active]
+        items = active_items or [None]
+        for item in items:
+            rows.append(
+                {
+                    "category": tracking_category_for_equipment(req.equipment),
+                    "equipment": tracking_equipment_code(req.equipment),
+                    "description": tracking_requisition_description(req, item),
+                    "purchase_order": req.purchase_order,
+                    "delivery_time": req.expected_date or req.purchase_order_date or req.received_date,
+                    "supplier": req.supplier,
+                    "comments": tracking_comments(req),
+                }
+            )
+    order = {"Jumbos:": 0, "Scoop Tram": 1, "Retroexcavadoras": 2, "Camiones y vehiculos": 3, "Almacen": 4, "Otros": 5}
+    return sorted(rows, key=lambda row: (order.get(row["category"], 9), row["equipment"], row["description"]))
+
+
+def requisition_tracking_week_title() -> str:
+    month_names = [
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE",
+    ]
+    today = utc_now().date()
+    start = today - timedelta(days=today.weekday())
+    end = start + timedelta(days=6)
+    if start.month == end.month:
+        date_text = f"DEL {start.day:02d} AL {end.day:02d} DE {month_names[end.month - 1]}"
+    else:
+        date_text = f"DEL {start.day:02d} DE {month_names[start.month - 1]} AL {end.day:02d} DE {month_names[end.month - 1]}"
+    return f"SEMANA {date_text} PROVIDENCIA"
+
+
+def copy_cell_format(source, target) -> None:
+    if source.has_style:
+        target._style = copy(source._style)
+    if source.number_format:
+        target.number_format = source.number_format
+    if source.alignment:
+        target.alignment = copy(source.alignment)
+    if source.protection:
+        target.protection = copy(source.protection)
+
+
+def prepare_tracking_export_sheet(ws, row_count: int) -> None:
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_row >= 6:
+            ws.unmerge_cells(str(merged))
+    needed_rows = max(6 + max(row_count, 1) + 3, 40)
+    if ws.max_row < needed_rows:
+        ws.insert_rows(ws.max_row + 1, needed_rows - ws.max_row)
+    for row_idx in range(6, needed_rows + 1):
+        ws.row_dimensions[row_idx].height = ws.row_dimensions[6].height or 27
+        for col_idx in range(1, 8):
+            copy_cell_format(ws.cell(6, col_idx), ws.cell(row_idx, col_idx))
+            ws.cell(row_idx, col_idx).value = None
+
+
+def build_requisition_tracking_workbook(session: Session) -> bytes:
+    if REQUISITION_TRACKING_TEMPLATE_PATH.exists():
+        wb = load_workbook(REQUISITION_TRACKING_TEMPLATE_PATH)
+        ws = wb.worksheets[-1]
+        ws.title = "SEGUIMIENTO REQ"
+        for sheet in list(wb.worksheets):
+            if sheet is not ws:
+                wb.remove(sheet)
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "SEGUIMIENTO REQ"
+        ws.append(["Equipos"])
+        ws.append([])
+        ws.append(["Descripcion", "No. Econ", requisition_tracking_week_title(), "", "", "", ""])
+        ws.append(["", "", "Requisiciones", "Orden de Compra", "T.E", "Proveedor", "Comentarios Compras Y/O Proyecto"])
+        ws.append(["Equipos:", "SEGUIMIENTO DE REQUISICIONES"])
+    rows = requisition_tracking_export_rows(session)
+    prepare_tracking_export_sheet(ws, len(rows))
+    ws["C3"] = requisition_tracking_week_title()
+    ws["A5"] = "Equipos:"
+    ws["B5"] = "SEGUIMIENTO DE REQUISICIONES"
+
+    if not rows:
+        rows = [
+            {
+                "category": "Sin datos",
+                "equipment": "",
+                "description": "SIN REQUISICIONES PARA EXPORTAR",
+                "purchase_order": "",
+                "delivery_time": "",
+                "supplier": "",
+                "comments": "",
+            }
+        ]
+
+    start_row = 6
+    category_start = start_row
+    equipment_start = start_row
+    previous_category = rows[0]["category"]
+    previous_equipment = rows[0]["equipment"]
+    for offset, row in enumerate(rows):
+        row_idx = start_row + offset
+        category = row["category"]
+        equipment = row["equipment"]
+        if category != previous_category:
+            if row_idx - category_start > 1:
+                ws.merge_cells(start_row=category_start, start_column=1, end_row=row_idx - 1, end_column=1)
+            previous_category = category
+            category_start = row_idx
+        if equipment != previous_equipment:
+            if row_idx - equipment_start > 1:
+                ws.merge_cells(start_row=equipment_start, start_column=2, end_row=row_idx - 1, end_column=2)
+            previous_equipment = equipment
+            equipment_start = row_idx
+        ws.cell(row_idx, 1).value = category
+        ws.cell(row_idx, 2).value = equipment
+        ws.cell(row_idx, 3).value = row["description"]
+        ws.cell(row_idx, 4).value = row["purchase_order"]
+        ws.cell(row_idx, 5).value = row["delivery_time"]
+        ws.cell(row_idx, 6).value = row["supplier"]
+        ws.cell(row_idx, 7).value = row["comments"]
+        for col_idx in range(1, 8):
+            ws.cell(row_idx, col_idx).alignment = copy(ws.cell(row_idx, col_idx).alignment)
+            ws.cell(row_idx, col_idx).alignment = Alignment(
+                horizontal=ws.cell(row_idx, col_idx).alignment.horizontal or "center",
+                vertical="center",
+                wrap_text=True,
+            )
+    end_row = start_row + len(rows) - 1
+    if end_row - category_start >= 1:
+        ws.merge_cells(start_row=category_start, start_column=1, end_row=end_row, end_column=1)
+    if end_row - equipment_start >= 1:
+        ws.merge_cells(start_row=equipment_start, start_column=2, end_row=end_row, end_column=2)
+
+    output = BytesIO()
+    wb.save(output)
+    wb.close()
+    return output.getvalue()
 
 
 def text_width(c: pdf_canvas.Canvas, text: str, size: float, bold: bool = False) -> float:
@@ -4041,6 +4416,152 @@ def get_requisition(requisition_id: int) -> dict[str, Any]:
         return {"ok": True, "requisition": requisition_payload(row, include_items=True)}
 
 
+@app.post("/api/requisition-tracking/import")
+async def import_requisition_tracking(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Carga invalida.")
+    data = str(payload.get("data") or "")
+    if "," in data and data.startswith("data:"):
+        data = data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo leer el archivo: {exc}")
+    file_name = str(payload.get("file_name") or "seguimiento_requisiciones.xlsx")
+    try:
+        wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Excel invalido: {exc}")
+
+    parsed_rows: list[dict[str, Any]] = []
+    skipped = 0
+    try:
+        sheet_layouts: list[tuple[str, int, dict[int, str], bool]] = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            header_row = None
+            fields: dict[int, str] = {}
+            for idx, values in enumerate(ws.iter_rows(min_row=1, max_row=min(ws.max_row, 30), values_only=True), 1):
+                mapped = {col_idx: requisition_tracking_field_for(value) for col_idx, value in enumerate(values)}
+                mapped = {col_idx: field for col_idx, field in mapped.items() if field}
+                if "folio" in mapped.values() and (
+                    "purchase_status" in mapped.values()
+                    or "purchase_order" in mapped.values()
+                    or "supplier" in mapped.values()
+                    or "expected_date" in mapped.values()
+                ):
+                    header_row = idx
+                    fields = mapped
+                    break
+            if header_row is None:
+                continue
+            mtto_layout = fields.get(2) == "folio" and fields.get(3) == "purchase_order"
+            sheet_layouts.append((sheet_name, header_row, fields, mtto_layout))
+        if any(layout[3] for layout in sheet_layouts):
+            sheet_layouts = [layout for layout in sheet_layouts if layout[3]][-1:]
+        for sheet_name, header_row, fields, mtto_layout in sheet_layouts:
+            ws = wb[sheet_name]
+            current_category = ""
+            current_equipment = ""
+            for values in ws.iter_rows(min_row=header_row + 1, values_only=True):
+                if mtto_layout:
+                    category = excel_cell_text(values[0] if len(values) > 0 else None)
+                    equipment = excel_cell_text(values[1] if len(values) > 1 else None)
+                    if category:
+                        current_category = category
+                    if equipment:
+                        current_equipment = equipment
+                item: dict[str, Any] = {"sheet": sheet_name}
+                for col_idx, field in fields.items():
+                    item[field] = values[col_idx] if col_idx < len(values) else None
+                if mtto_layout and current_equipment and "equipment" not in item:
+                    item["equipment"] = current_equipment
+                if mtto_layout and current_category:
+                    item["category"] = current_category
+                raw_folio = item.get("folio")
+                if mtto_layout and not REQUISITION_REFERENCE_RE.search(str(raw_folio or "")):
+                    skipped += 1
+                    continue
+                folio, parsed_description = split_requisition_reference(raw_folio)
+                if not folio:
+                    skipped += 1
+                    continue
+                item["folio"] = folio
+                if parsed_description and not excel_cell_text(item.get("description")):
+                    item["description"] = parsed_description
+                parsed_rows.append(item)
+    finally:
+        wb.close()
+    if not parsed_rows:
+        raise HTTPException(status_code=400, detail="No encontre columnas de folio y seguimiento/OC en el Excel.")
+
+    create_missing = bool(payload.get("create_missing", False))
+    unmatched: list[str] = []
+    updated = 0
+    created = 0
+    now = utc_now()
+    date_fields = {"purchase_order_date", "expected_date", "received_date"}
+    text_fields = {"purchase_status", "purchase_order", "supplier", "buyer", "tracking_notes"}
+    with SessionLocal() as session:
+        for item in parsed_rows:
+            row = requisition_lookup(session, str(item.get("folio") or ""))
+            if row is None:
+                if not create_missing:
+                    unmatched.append(str(item.get("folio") or ""))
+                    continue
+                row = CloudRequisition(
+                    folio=str(item.get("folio") or ""),
+                    request_date=utc_now().date().isoformat(),
+                    authorization_date=utc_now().date().isoformat(),
+                    equipment=normalize_text(item.get("equipment") or "SIN RELACIONAR"),
+                    notes=normalize_text(item.get("description")),
+                    created_at=now,
+                )
+                session.add(row)
+                created += 1
+            changed = False
+            equipment = normalize_text(item.get("equipment"))
+            if equipment and normalize_text(row.equipment) in {"", "SIN RELACIONAR"}:
+                row.equipment = equipment
+                changed = True
+            description = normalize_text(item.get("description"))
+            if description and not str(row.notes or "").strip():
+                row.notes = description
+                changed = True
+            for field in text_fields:
+                value = excel_cell_text(item.get(field))
+                if value:
+                    setattr(row, field, normalize_text(value) if field != "tracking_notes" else value)
+                    changed = True
+            for field in date_fields:
+                value = excel_cell_text(item.get(field))
+                if value:
+                    setattr(row, field, iso_date(value))
+                    changed = True
+            inferred_status = infer_purchase_status(row.purchase_order, row.tracking_notes)
+            if inferred_status and not row.purchase_status:
+                row.purchase_status = inferred_status
+                changed = True
+            if changed:
+                row.tracking_source_file = file_name
+                row.tracking_updated_at = now
+                row.updated_at = now
+                updated += 1
+        session.commit()
+        rows = session.scalars(select(CloudRequisition).order_by(CloudRequisition.request_date.desc(), CloudRequisition.id.desc()).limit(300)).all()
+        return {
+            "ok": True,
+            "imported_rows": len(parsed_rows),
+            "updated": updated,
+            "created": created,
+            "skipped": skipped,
+            "unmatched": sorted(set(unmatched))[:80],
+            "requisitions": [requisition_payload(row) for row in rows],
+        }
+
+
 @app.post("/api/requisitions")
 async def save_requisition(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
@@ -4070,6 +4591,16 @@ async def save_requisition(request: Request, _auth: str | None = Header(default=
         row.recommendation = normalize_text(payload.get("recommendation") or "ORIGINAL")
         row.status = str(payload.get("status") or "Abierta").strip() or "Abierta"
         row.notes = str(payload.get("notes") or "").strip()
+        if any(key in payload for key in ("purchase_status", "purchase_order", "purchase_order_date", "supplier", "buyer", "expected_date", "received_date", "tracking_notes")):
+            row.purchase_status = str(payload.get("purchase_status") or "").strip()
+            row.purchase_order = normalize_text(payload.get("purchase_order"))
+            row.purchase_order_date = iso_date(payload.get("purchase_order_date")) if payload.get("purchase_order_date") else ""
+            row.supplier = normalize_text(payload.get("supplier"))
+            row.buyer = normalize_text(payload.get("buyer"))
+            row.expected_date = iso_date(payload.get("expected_date")) if payload.get("expected_date") else ""
+            row.received_date = iso_date(payload.get("received_date")) if payload.get("received_date") else ""
+            row.tracking_notes = str(payload.get("tracking_notes") or "").strip()
+            row.tracking_updated_at = utc_now()
         row.updated_at = utc_now()
         items = payload.get("items")
         if isinstance(items, list):
@@ -4106,6 +4637,19 @@ def delete_requisition(requisition_id: int, _auth: str | None = Header(default=N
         session.delete(row)
         session.commit()
         return {"ok": True}
+
+
+@app.get("/api/requisition-tracking/export")
+def export_requisition_tracking(_auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> StreamingResponse:
+    require_api_key(_auth)
+    with SessionLocal() as session:
+        workbook = build_requisition_tracking_workbook(session)
+    filename = f"MTTO_PROVIDENCIA_SEGUIMIENTO_REQ_{utc_now().date().isoformat()}.xlsx"
+    return StreamingResponse(
+        BytesIO(workbook),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/requisitions/{requisition_id}/pdf")
@@ -4381,6 +4925,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
     input, select, textarea { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; background:white; outline:none; transition:border .15s ease, box-shadow .15s ease; }
+    .inline-check { display:flex; align-items:center; gap:8px; min-height:38px; }
+    .inline-check input { width:auto; }
     input:focus, select:focus, textarea:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(0,156,154,.14); }
     .stats { display:grid; grid-template-columns:repeat(5, 1fr); gap:10px; }
     .stat { position:relative; overflow:hidden; background:linear-gradient(180deg,#fff,#f8fbff); border:1px solid var(--line); padding:14px 15px; border-radius:8px; box-shadow:0 10px 26px rgba(7,31,73,.08); }
@@ -4606,6 +5152,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
       <button data-tab="requisiciones">Requisiciones</button>
+      <button data-tab="seguimientoReq">Seguimiento req.</button>
       <button data-tab="diesel">Diesel</button>
       <button data-tab="epp">EPP almacen</button>
       <button data-tab="equipos">Filtros por equipo</button>
@@ -4731,6 +5278,46 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="table-wrap" style="max-height:300px; margin-top:10px;"><table id="reqProductsTable"></table></div>
           <h3>Requisiciones guardadas</h3>
           <div class="table-wrap" style="max-height:360px;"><table id="reqListTable"></table></div>
+        </div>
+      </div>
+    </section>
+    <section id="seguimientoReq" class="view">
+      <div class="panel toolbar">
+        <label>Buscar<input id="trackSearch" placeholder="Folio, OC, proveedor, estatus"></label>
+        <label>Estatus<select id="trackStatus"><option value="">Todos</option><option value="sin_oc">Sin OC</option><option value="con_oc">Con OC</option><option value="recibido">Recibido</option></select></label>
+        <input id="trackImportFile" type="file" accept=".xlsx,.xlsm">
+        <label class="inline-check"><input id="trackCreateMissing" type="checkbox"> Crear folios faltantes</label>
+        <button class="btn" id="trackImportBtn">Importar seguimiento</button>
+        <button class="btn secondary" id="trackExportBtn">Descargar Excel</button>
+        <button class="btn secondary" id="trackRefreshBtn">Actualizar</button>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Seguimiento de compras</h3><span class="muted" id="trackSummary"></span></div>
+          <div class="table-wrap" style="max-height:620px;"><table id="trackTable"></table></div>
+          <pre id="trackImportResult"></pre>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Actualizar requisicion</h3><span class="muted" id="trackSelected"></span></div>
+          <div class="req-header-grid">
+            <label>Folio<input id="trackFolio" readonly></label>
+            <label>Fecha requisicion<input id="trackReqDate" readonly></label>
+            <label>Equipo<input id="trackEquipment" readonly></label>
+            <label>Estatus compras<input id="trackPurchaseStatus" list="trackStatusOptions"></label>
+            <datalist id="trackStatusOptions"><option>EN REVISION</option><option>COTIZANDO</option><option>POR AUTORIZAR</option><option>CON ORDEN DE COMPRA</option><option>PARCIAL</option><option>RECIBIDO</option><option>CANCELADO</option></datalist>
+            <label>Orden de compra<input id="trackPurchaseOrder" placeholder="OC / PO"></label>
+            <label>Fecha OC<input id="trackPurchaseOrderDate" type="date"></label>
+            <label>Proveedor<input id="trackSupplier"></label>
+            <label>Comprador<input id="trackBuyer"></label>
+            <label>T.E / Promesa<input id="trackExpectedDate" type="text" placeholder="3 SEMANAS, INMEDIATA o fecha"></label>
+            <label>Fecha recibido<input id="trackReceivedDate" type="date"></label>
+            <label class="wide">Notas compras<textarea id="trackNotes" rows="4"></textarea></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn" id="trackSaveBtn">Guardar seguimiento</button>
+            <button class="btn secondary" id="trackOpenReqBtn">Abrir en requisiciones</button>
+          </div>
+          <div class="table-wrap" style="max-height:260px; margin-top:10px;"><table id="trackItemsTable"></table></div>
         </div>
       </div>
     </section>
@@ -4959,6 +5546,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentReqId = null;
     let currentReqItemIndex = null;
     let currentReqItems = [];
+    let currentTrackId = null;
+    let currentTrackItems = [];
     let currentDieselId = null;
     let currentDieselRecord = null;
     let selectedKpiMetric = "availability";
@@ -6626,6 +7215,126 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderReqList();
       renderReqItems();
     }
+    function trackingState(row){
+      const status = String(row.purchase_status || "").toUpperCase();
+      const oc = String(row.purchase_order || "").trim();
+      if(status.includes("RECIB") || row.received_date) return {label:"Recibido", cls:"ok"};
+      if(oc) return {label:"Con OC", cls:"ok"};
+      if(status.includes("CANCEL")) return {label:"Cancelado", cls:"bad"};
+      if(status) return {label:status, cls:"warn"};
+      return {label:"Sin seguimiento", cls:"bad"};
+    }
+    function trackingRows(){
+      const search = ($("trackSearch").value || "").toUpperCase();
+      const status = $("trackStatus").value;
+      return (requisitions || []).filter(row => {
+        const state = trackingState(row);
+        const hasOc = String(row.purchase_order || "").trim() !== "";
+        const received = state.label === "Recibido";
+        const statusOk = !status || (status === "sin_oc" && !hasOc && !received) || (status === "con_oc" && hasOc && !received) || (status === "recibido" && received);
+        const text = [row.folio,row.equipment,row.status,row.purchase_status,row.purchase_order,row.supplier,row.buyer,row.tracking_notes].join(" ").toUpperCase();
+        return statusOk && (!search || text.includes(search));
+      });
+    }
+    function renderTracking(){
+      const rows = trackingRows();
+      const total = requisitions.length || 0;
+      const withOc = (requisitions || []).filter(row => String(row.purchase_order || "").trim()).length;
+      const received = (requisitions || []).filter(row => trackingState(row).label === "Recibido").length;
+      $("trackSummary").textContent = `${rows.length} visibles | ${withOc}/${total} con OC | ${received} recibido(s)`;
+      $("trackTable").innerHTML = `<thead><tr><th>Estado</th><th>Folio</th><th>Req.</th><th>Equipo</th><th>OC</th><th>Proveedor</th><th>Promesa</th><th>Actualizado</th></tr></thead><tbody>` +
+        rows.map(row => {
+          const state = trackingState(row);
+          return `<tr data-track-id="${row.id}" style="cursor:pointer"><td><span class="pill ${state.cls}">${esc(state.label)}</span></td><td>${esc(row.folio)}</td><td>${esc(row.request_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.purchase_order)}</td><td>${esc(row.supplier)}</td><td>${esc(row.expected_date || row.received_date || "")}</td><td>${esc(row.tracking_updated_at || "")}</td></tr>`;
+        }).join("") + `</tbody>`;
+      document.querySelectorAll("[data-track-id]").forEach(row => row.addEventListener("click", () => loadTrack(row.dataset.trackId).catch(showError)));
+      if(currentTrackId && !rows.some(row => String(row.id) === String(currentTrackId))) clearTrackForm();
+    }
+    function clearTrackForm(){
+      currentTrackId = null;
+      currentTrackItems = [];
+      ["trackFolio","trackReqDate","trackEquipment","trackPurchaseStatus","trackPurchaseOrder","trackPurchaseOrderDate","trackSupplier","trackBuyer","trackExpectedDate","trackReceivedDate","trackNotes"].forEach(id => $(id).value = "");
+      $("trackSelected").textContent = "Selecciona una requisicion.";
+      renderTrackItems();
+    }
+    function setTrackForm(row){
+      currentTrackId = row?.id || null;
+      currentTrackItems = row?.items || [];
+      $("trackFolio").value = row?.folio || "";
+      $("trackReqDate").value = row?.request_date || "";
+      $("trackEquipment").value = row?.equipment || "";
+      $("trackPurchaseStatus").value = row?.purchase_status || "";
+      $("trackPurchaseOrder").value = row?.purchase_order || "";
+      $("trackPurchaseOrderDate").value = row?.purchase_order_date || "";
+      $("trackSupplier").value = row?.supplier || "";
+      $("trackBuyer").value = row?.buyer || "";
+      $("trackExpectedDate").value = row?.expected_date || "";
+      $("trackReceivedDate").value = row?.received_date || "";
+      $("trackNotes").value = row?.tracking_notes || "";
+      $("trackSelected").textContent = currentTrackId ? `${row.folio} | ${row.items_count || currentTrackItems.length} partida(s)` : "Selecciona una requisicion.";
+      renderTrackItems();
+    }
+    function renderTrackItems(){
+      $("trackItemsTable").innerHTML = `<thead><tr><th>Cant.</th><th>Unidad</th><th>No. parte</th><th>Descripcion</th></tr></thead><tbody>` +
+        (currentTrackItems || []).map(item => `<tr><td>${num(item.quantity)}</td><td>${esc(item.unit)}</td><td>${esc(item.part_number)}</td><td>${esc(item.description)}</td></tr>`).join("") + `</tbody>`;
+    }
+    async function loadTrack(rowId){
+      const r = await fetch(`/api/requisitions/${rowId}`, {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      const payload = await r.json();
+      setTrackForm(payload.requisition);
+    }
+    async function saveTrack(){
+      if(!currentTrackId) return alert("Selecciona una requisicion.");
+      if(!hasApiKey(true)) return;
+      const base = (requisitions || []).find(row => String(row.id) === String(currentTrackId)) || {};
+      const payload = {
+        ...base,
+        id: currentTrackId,
+        purchase_status: $("trackPurchaseStatus").value,
+        purchase_order: $("trackPurchaseOrder").value,
+        purchase_order_date: $("trackPurchaseOrderDate").value,
+        supplier: $("trackSupplier").value,
+        buyer: $("trackBuyer").value,
+        expected_date: $("trackExpectedDate").value,
+        received_date: $("trackReceivedDate").value,
+        tracking_notes: $("trackNotes").value,
+        items: currentTrackItems
+      };
+      const r = await fetch("/api/requisitions", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!r.ok) return alert(await apiError(r));
+      const saved = await r.json();
+      await load();
+      setTrackForm(saved.requisition);
+    }
+    async function importTracking(){
+      const file = $("trackImportFile").files[0]; if(!file) return alert("Selecciona un Excel .xlsx o .xlsm.");
+      if(!hasApiKey(true)) return;
+      const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
+      const r = await fetch("/api/requisition-tracking/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl), create_missing:$("trackCreateMissing").checked})});
+      const payload = await r.json().catch(() => ({}));
+      $("trackImportResult").textContent = JSON.stringify(payload, null, 2);
+      if(!r.ok) return alert(payload.detail || "No se pudo importar seguimiento.");
+      requisitions = payload.requisitions || requisitions;
+      renderTracking();
+    }
+    async function exportTracking(){
+      if(!hasApiKey(true)) return;
+      const r = await fetch("/api/requisition-tracking/export", {headers: headers()});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `MTTO_PROVIDENCIA_SEGUIMIENTO_REQ_${toIsoDate(new Date())}.xlsx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    }
+    function openTrackedRequisition(){
+      if(!currentTrackId) return alert("Selecciona una requisicion.");
+      loadReq(currentTrackId).then(() => {
+        document.querySelector('[data-tab="requisiciones"]').click();
+      }).catch(showError);
+    }
     function dieselEquipmentKey(value){
       return String(value || "").trim().toUpperCase().replace(/\([^)]*\)/g, " ").replace(/[^A-Z0-9]+/g, "");
     }
@@ -7046,6 +7755,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderBitacora();
       renderDisponibilidad();
       renderRequisiciones();
+      renderTracking();
       renderDiesel();
       renderEpp();
       renderFilters();
@@ -7080,6 +7790,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("reqDeleteItemBtn").addEventListener("click", deleteReqItem);
     $("reqPdfBtn").addEventListener("click", () => reqPdf(false).catch(showError));
     $("reqPrintBtn").addEventListener("click", () => reqPdf(true).catch(showError));
+    $("trackSearch").addEventListener("input", renderTracking);
+    $("trackStatus").addEventListener("change", renderTracking);
+    $("trackImportBtn").addEventListener("click", () => importTracking().catch(showError));
+    $("trackExportBtn").addEventListener("click", () => exportTracking().catch(showError));
+    $("trackRefreshBtn").addEventListener("click", () => load().catch(showError));
+    $("trackSaveBtn").addEventListener("click", () => saveTrack().catch(showError));
+    $("trackOpenReqBtn").addEventListener("click", openTrackedRequisition);
     $("dieselApplyPeriodBtn").addEventListener("click", applyDieselPeriod);
     $("dieselRefreshBtn").addEventListener("click", () => refreshDiesel().catch(showError));
     $("dieselFilterEquipment").addEventListener("change", renderDiesel);
