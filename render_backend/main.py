@@ -7166,12 +7166,26 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     async function deleteReq(){
       if(!currentReqId) return alert("Selecciona una requisicion.");
-      if(!hasApiKey(true)) return;
-      if(!confirm(`Se eliminara la requisicion ${$("reqFolio").value}.`)) return;
-      const r = await fetch(`/api/requisitions/${currentReqId}`, {method:"DELETE", headers:headers()});
+      await deleteReqById(currentReqId, $("reqFolio").value);
+    }
+    async function deleteReqById(rowId, folio=""){
+      if(!rowId) return alert("Selecciona una requisicion.");
+      if(!hasApiKey(true)) return false;
+      const label = folio || `ID ${rowId}`;
+      if(!confirm(`Eliminar requisicion ${label}? Esta accion no se puede deshacer.`)) return false;
+      const r = await fetch(`/api/requisitions/${rowId}`, {method:"DELETE", headers:headers()});
       if(!r.ok) return alert(await apiError(r));
-      currentReqId = null;
+      if(String(currentReqId || "") === String(rowId)){
+        currentReqId = null;
+        currentReqItems = [];
+        currentReqItemIndex = null;
+        $("reqFolio").value = "";
+      }
+      if(String(currentTrackId || "") === String(rowId)){
+        clearTrackForm();
+      }
       await load();
+      return true;
     }
     async function ensureReqForOutput(){
       if(currentReqId) return currentReqId;
@@ -7206,9 +7220,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function renderReqList(){
       $("reqItemUnit").innerHTML = ["PZA","JGO","KIT","SERV","LT","L","GAL","ML","TAMBO","TAMBOR","CUBETA","BOTE","LATA","CAJA","PAQUETE","BOLSA","MTS","M2","M3","KG","GR","TON","ROLLO"].map(unit => `<option>${esc(unit)}</option>`).join("");
       const rows = requisitions || [];
-      $("reqListTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Estatus</th><th>Partidas</th></tr></thead><tbody>` +
-        rows.map(row => `<tr data-req-id="${row.id}" style="cursor:pointer"><td>${esc(row.folio)}</td><td>${esc(row.request_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.status)}</td><td>${num(row.items_count)}</td></tr>`).join("") + `</tbody>`;
+      $("reqListTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Estatus</th><th>Partidas</th><th>Acciones</th></tr></thead><tbody>` +
+        rows.map(row => `<tr data-req-id="${row.id}" style="cursor:pointer"><td>${esc(row.folio)}</td><td>${esc(row.request_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.status)}</td><td>${num(row.items_count)}</td><td><button type="button" class="btn danger small" data-req-delete="${row.id}" data-req-folio="${esc(row.folio)}">Eliminar</button></td></tr>`).join("") + `</tbody>`;
       document.querySelectorAll("[data-req-id]").forEach(row => row.addEventListener("click", () => loadReq(row.dataset.reqId).catch(showError)));
+      document.querySelectorAll("[data-req-delete]").forEach(btn => btn.addEventListener("click", event => {
+        event.stopPropagation();
+        deleteReqById(btn.dataset.reqDelete, btn.dataset.reqFolio).catch(showError);
+      }));
     }
     function renderRequisiciones(){
       renderReqProducts();
@@ -7242,12 +7260,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const withOc = (requisitions || []).filter(row => String(row.purchase_order || "").trim()).length;
       const received = (requisitions || []).filter(row => trackingState(row).label === "Recibido").length;
       $("trackSummary").textContent = `${rows.length} visibles | ${withOc}/${total} con OC | ${received} recibido(s)`;
-      $("trackTable").innerHTML = `<thead><tr><th>Estado</th><th>Folio</th><th>Req.</th><th>Equipo</th><th>OC</th><th>Proveedor</th><th>Promesa</th><th>Actualizado</th></tr></thead><tbody>` +
+      $("trackTable").innerHTML = `<thead><tr><th>Estado</th><th>Folio</th><th>Req.</th><th>Equipo</th><th>OC</th><th>Proveedor</th><th>Promesa</th><th>Actualizado</th><th>Acciones</th></tr></thead><tbody>` +
         rows.map(row => {
           const state = trackingState(row);
-          return `<tr data-track-id="${row.id}" style="cursor:pointer"><td><span class="pill ${state.cls}">${esc(state.label)}</span></td><td>${esc(row.folio)}</td><td>${esc(row.request_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.purchase_order)}</td><td>${esc(row.supplier)}</td><td>${esc(row.expected_date || row.received_date || "")}</td><td>${esc(row.tracking_updated_at || "")}</td></tr>`;
+          return `<tr data-track-id="${row.id}" style="cursor:pointer"><td><span class="pill ${state.cls}">${esc(state.label)}</span></td><td>${esc(row.folio)}</td><td>${esc(row.request_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.purchase_order)}</td><td>${esc(row.supplier)}</td><td>${esc(row.expected_date || row.received_date || "")}</td><td>${esc(row.tracking_updated_at || "")}</td><td><button type="button" class="btn danger small" data-track-delete="${row.id}" data-track-folio="${esc(row.folio)}">Eliminar</button></td></tr>`;
         }).join("") + `</tbody>`;
       document.querySelectorAll("[data-track-id]").forEach(row => row.addEventListener("click", () => loadTrack(row.dataset.trackId).catch(showError)));
+      document.querySelectorAll("[data-track-delete]").forEach(btn => btn.addEventListener("click", event => {
+        event.stopPropagation();
+        deleteReqById(btn.dataset.trackDelete, btn.dataset.trackFolio).catch(showError);
+      }));
       if(currentTrackId && !rows.some(row => String(row.id) === String(currentTrackId))) clearTrackForm();
     }
     function clearTrackForm(){
