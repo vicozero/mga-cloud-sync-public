@@ -314,6 +314,7 @@ class HoseChange(Base):
     technician: Mapped[str] = mapped_column(String(180), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(80), default="web")
+    external_id: Mapped[str] = mapped_column(String(180), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -391,6 +392,9 @@ def ensure_cloud_schema() -> None:
         "tracking_source_file": "VARCHAR(260) DEFAULT ''",
         "tracking_updated_at": "TIMESTAMP",
     }
+    hose_columns = {
+        "external_id": "VARCHAR(180) DEFAULT ''",
+    }
     if database_url().startswith("sqlite"):
         try:
             with engine.begin() as conn:
@@ -401,6 +405,10 @@ def ensure_cloud_schema() -> None:
                 for column, definition in requisition_columns.items():
                     if column not in req_columns:
                         conn.execute(sql_text(f"ALTER TABLE mga_requisition ADD COLUMN {column} {definition}"))
+                hose_existing = {row[1] for row in conn.execute(sql_text("PRAGMA table_info(mga_hose_change)")).fetchall()}
+                for column, definition in hose_columns.items():
+                    if column not in hose_existing:
+                        conn.execute(sql_text(f"ALTER TABLE mga_hose_change ADD COLUMN {column} {definition}"))
         except Exception:
             pass
         return
@@ -410,6 +418,8 @@ def ensure_cloud_schema() -> None:
             for column, definition in requisition_columns.items():
                 pg_definition = definition.replace("VARCHAR", "VARCHAR")
                 conn.execute(sql_text(f"ALTER TABLE mga_requisition ADD COLUMN IF NOT EXISTS {column} {pg_definition}"))
+            for column, definition in hose_columns.items():
+                conn.execute(sql_text(f"ALTER TABLE mga_hose_change ADD COLUMN IF NOT EXISTS {column} {definition}"))
     except Exception:
         pass
 
@@ -1423,10 +1433,70 @@ def hose_period_bounds(start: str = "", end: str = "") -> tuple[str, str]:
     return start_iso, end_iso
 
 
+def mobile_hose_change_rows(record: dict[str, Any], source_device: str = "", user_name: str = "") -> list[dict[str, Any]]:
+    if normalize_text(record.get("kind")) != "MANGUERA":
+        return []
+    hoses = record.get("hoses") or []
+    if not isinstance(hoses, list):
+        return []
+    mobile_id = str(record.get("mobile_id") or "").strip()
+    equipment = normalize_text(record.get("equipment_code") or record.get("equipment"))
+    change_date = hose_iso_or_none(record.get("work_date")) or utc_now().date().isoformat()
+    system = normalize_text(record.get("system") or "HIDRAULICO")
+    location = str(record.get("location") or "").strip()
+    details = str(record.get("details") or record.get("observations") or "").strip()
+    supervisor = str(record.get("supervisor") or "").strip()
+    mechanic = normalize_text(record.get("mechanic") or record.get("technician") or user_name)
+    folio = str(record.get("capture_folio") or "").strip()
+    rows: list[dict[str, Any]] = []
+    for idx, item in enumerate(hoses, start=1):
+        if not isinstance(item, dict):
+            continue
+        connection_type = str(item.get("connection_type") or "").strip()
+        connection_number = str(item.get("connection_number") or "").strip()
+        length = max(parse_float(item.get("length"), 0), 0)
+        layers = str(item.get("hose_layers") or "").strip()
+        if not connection_number and length <= 0:
+            continue
+        notes = " | ".join(
+            part
+            for part in (
+                f"Conexion: {connection_type}" if connection_type else "",
+                f"Malla: {layers}" if layers else "",
+                f"Supervisor: {supervisor}" if supervisor else "",
+                f"Dispositivo: {source_device}" if source_device else "",
+                f"Folio: {folio}" if folio else "",
+                details,
+            )
+            if part
+        )
+        rows.append(
+            {
+                "change_date": change_date,
+                "equipment": equipment,
+                "system": system,
+                "part_type": "MANGUERA",
+                "diameter": connection_number,
+                "length_m": length,
+                "quantity": 1,
+                "unit_cost": 0,
+                "estimated_life_days": 30,
+                "estimated_weekly_qty": 0,
+                "failure_reason": location,
+                "technician": mechanic,
+                "notes": notes,
+                "source": "mobile",
+                "external_id": f"mobile:{mobile_id}:{idx}" if mobile_id else "",
+            }
+        )
+    return rows
+
+
 def hose_change_payload(row: HoseChange) -> dict[str, Any]:
     return {
         "id": row.id,
         "source": row.source or "web",
+        "external_id": row.external_id or "",
         "change_date": row.change_date,
         "equipment": row.equipment,
         "system": row.system,
@@ -1442,6 +1512,35 @@ def hose_change_payload(row: HoseChange) -> dict[str, Any]:
         "notes": row.notes,
         "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
     }
+
+
+def upsert_hose_change(session: Session, payload: dict[str, Any]) -> tuple[HoseChange, bool]:
+    external_id = str(payload.get("external_id") or "").strip()
+    row = None
+    if external_id:
+        row = session.scalar(select(HoseChange).where(HoseChange.external_id == external_id))
+    created = False
+    if row is None:
+        row = HoseChange(created_at=utc_now())
+        session.add(row)
+        created = True
+    row.change_date = hose_iso_or_none(payload.get("change_date")) or utc_now().date().isoformat()
+    row.equipment = normalize_text(payload.get("equipment"))
+    row.system = normalize_text(payload.get("system"))
+    row.part_type = normalize_text(payload.get("part_type") or "MANGUERA")[:80] or "MANGUERA"
+    row.diameter = normalize_text(payload.get("diameter"))[:80]
+    row.length_m = max(parse_float(payload.get("length_m"), 0), 0)
+    row.quantity = max(parse_float(payload.get("quantity"), 1), 0)
+    row.unit_cost = max(parse_float(payload.get("unit_cost"), 0), 0)
+    row.estimated_life_days = max(parse_float(payload.get("estimated_life_days"), 30), 0)
+    row.estimated_weekly_qty = max(parse_float(payload.get("estimated_weekly_qty"), 0), 0)
+    row.failure_reason = normalize_text(payload.get("failure_reason"))[:220]
+    row.technician = normalize_text(payload.get("technician"))[:180]
+    row.notes = str(payload.get("notes") or "").strip()
+    row.source = str(payload.get("source") or "web").strip()[:80]
+    row.external_id = external_id
+    row.updated_at = utc_now()
+    return row, created
 
 
 def hose_report(session: Session, start: str = "", end: str = "", equipment: str = "") -> dict[str, Any]:
@@ -4906,6 +5005,8 @@ async def save_hose_change_cloud(request: Request, _auth: str | None = Header(de
         if row is None:
             row = HoseChange(change_date=change_date, equipment=equipment, created_at=utc_now())
             session.add(row)
+        payload = {**payload, "change_date": change_date, "equipment": equipment, "source": "web"}
+        row.external_id = str(payload.get("external_id") or row.external_id or "").strip()
         row.change_date = change_date
         row.equipment = equipment
         row.system = normalize_text(payload.get("system"))
@@ -9227,6 +9328,10 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                     raise ValueError("Captura sin mobile_id.")
                 existing = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == mobile_id))
                 if existing is not None:
+                    existing_payload = json_loads(existing.payload_json)
+                    if isinstance(existing_payload, dict):
+                        for hose_payload in mobile_hose_change_rows(existing_payload, existing.source_device, existing.user_name):
+                            upsert_hose_change(session, hose_payload)
                     skipped += 1
                     results.append(
                         {
@@ -9253,6 +9358,10 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 )
                 session.add(capture)
                 session.flush()
+                hose_changes = 0
+                for hose_payload in mobile_hose_change_rows(stored_record, source_device, capture.user_name):
+                    upsert_hose_change(session, hose_payload)
+                    hose_changes += 1
                 evidence_count = 0
                 for photo in photos if isinstance(photos, list) else []:
                     if not isinstance(photo, dict):
@@ -9279,6 +9388,7 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                         "stored": True,
                         "desktop_imported": False,
                         "evidence": evidence_count,
+                        "hose_changes": hose_changes,
                     }
                 )
             except Exception as exc:
