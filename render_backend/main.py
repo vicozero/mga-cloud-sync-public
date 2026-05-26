@@ -394,7 +394,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.2")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.3")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1706,6 +1706,12 @@ def diesel_equipment_alias_map(
             if not code:
                 continue
             add_alias(code, f"{code} {description}", f"{code} ({description})")
+            if code.startswith("RET-"):
+                short_code = code.replace("RET-", "RE-", 1)
+                add_alias(code, short_code, f"{short_code} {description}", f"{short_code} ({description})")
+            elif code.startswith("RE-"):
+                long_code = code.replace("RE-", "RET-", 1)
+                add_alias(code, long_code, f"{long_code} {description}", f"{long_code} ({description})")
 
     diesel_portal = portal.get("diesel") if isinstance(portal, dict) else {}
     diesel_equipment = diesel_portal.get("equipment") if isinstance(diesel_portal, dict) else []
