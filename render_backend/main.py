@@ -6441,10 +6441,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderDieselSelectors();
       renderReqEquipmentOptions();
     }
-    function calculateKpiRows(){
-      const group = $("kpiGroup").value || "Todos los equipos";
-      const start = $("kpiStart").value;
-      const end = $("kpiEnd").value;
+    function calculateKpiRows(groupOverride=null, startOverride=null, endOverride=null){
+      const group = groupOverride || $("kpiGroup").value || "Todos los equipos";
+      const start = startOverride || $("kpiStart").value;
+      const end = endOverride || $("kpiEnd").value;
       const settings = portal.settings || {};
       const shiftHours = Number(settings.shift_hours || 9);
       const dailyHours = shiftHours * Number(settings.turns_per_day || 2);
@@ -7106,15 +7106,73 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(text.includes("DISPONIBLE")) return "cond-ok";
       return "";
     }
+    function meterText(value){
+      const number = Number(value || 0);
+      if(!number || number <= 0) return "";
+      return Number.isInteger(number) ? String(number) : `${number}`;
+    }
+    function availabilityShiftOrder(value){
+      const text = normalizedText(value).replace(/\s/g, "");
+      if(["2","T2","TURNO2","SEGUNDO","NOCHE"].includes(text)) return 2;
+      if(["1","T1","TURNO1","PRIMERO","DIA"].includes(text)) return 1;
+      return 0;
+    }
+    function putAvailabilityLookup(map, keys, value, order){
+      const hf = Number(value || 0);
+      if(!hf || hf <= 0) return;
+      keys.forEach(key => {
+        if(!key) return;
+        const current = map.get(key);
+        if(!current || order >= current.order) map.set(key, {order, hf});
+      });
+    }
+    function availabilityLastHfLookup(){
+      const map = new Map();
+      (portal.captures || []).forEach(row => {
+        const keys = [...equipmentKeys(row.equipment_code || row.code || row.equipment), ...equipmentKeys(row.equipment_description || "")];
+        const order = `${row.work_date || ""}-${String(availabilityShiftOrder(row.shift)).padStart(2, "0")}-${String(row.id || 0).padStart(10, "0")}`;
+        putAvailabilityLookup(map, keys, row.hf || row.horometer_final, order);
+      });
+      (diesel.records || []).forEach(row => {
+        const order = `${row.work_date || ""}-${String(availabilityShiftOrder(row.shift)).padStart(2, "0")}-${String(row.id || 0).padStart(10, "0")}`;
+        putAvailabilityLookup(map, equipmentKeys(row.equipment), row.horometer_final, order);
+      });
+      return map;
+    }
+    function availabilityKpiLookup(){
+      const start = $("kpiStart").value || (portal.period || {}).start || toIsoDate(new Date());
+      const end = $("kpiEnd").value || (portal.period || {}).end || start;
+      const report = calculateKpiRows("Todos los equipos", start, end);
+      const map = new Map();
+      report.rows.forEach(row => {
+        const value = {availability: row.availabilityText || pct(row.availability), utilization: row.utilizationText || pct(row.utilization)};
+        [...equipmentKeys(row.code), ...equipmentKeys(row.description)].forEach(key => {
+          if(key && !map.has(key)) map.set(key, value);
+        });
+      });
+      return map;
+    }
+    function availabilityValueForRow(row, map){
+      for(const key of [...equipmentKeys(row.eco), ...equipmentKeys(row.equipment)]){
+        if(map.has(key)) return map.get(key);
+      }
+      return null;
+    }
     function renderDisponibilidad(){
       const search = ($("dispSearch").value || "").toUpperCase();
       const status = $("dispStatus").value;
+      const hfLookup = availabilityLastHfLookup();
+      const kpiLookup = availabilityKpiLookup();
       const rows = (portal.availability || []).filter(row => {
         const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
         return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
       });
-      $("dispTable").innerHTML = `<thead><tr><th>Categoria</th><th>Equipo</th><th>No ECO</th><th>Condicion</th><th>Observaciones</th></tr></thead><tbody>` +
-        rows.map(row => `<tr><td>${esc(row.category)}</td><td>${esc(row.equipment)}</td><td>${esc(row.eco)}</td><td class="condition-cell ${conditionClass(row.condition)}">${esc(row.condition)}</td><td class="${Number(row.highlight_observation || 0) ? "highlight" : ""}">${esc(row.observations)}</td></tr>`).join("") +
+      $("dispTable").innerHTML = `<thead><tr><th>Categoria</th><th>Equipo</th><th>No ECO</th><th>Ultimo HF</th><th>% Disp</th><th>% Util</th><th>Condicion</th><th>Observaciones</th></tr></thead><tbody>` +
+        rows.map(row => {
+          const hf = availabilityValueForRow(row, hfLookup);
+          const kpi = availabilityValueForRow(row, kpiLookup) || {};
+          return `<tr><td>${esc(row.category)}</td><td>${esc(row.equipment)}</td><td>${esc(row.eco)}</td><td>${esc(meterText(hf?.hf))}</td><td>${esc(kpi.availability || "")}</td><td>${esc(kpi.utilization || "")}</td><td class="condition-cell ${conditionClass(row.condition)}">${esc(row.condition)}</td><td class="${Number(row.highlight_observation || 0) ? "highlight" : ""}">${esc(row.observations)}</td></tr>`;
+        }).join("") +
         `</tbody>`;
     }
     function reqFormData(){
