@@ -394,7 +394,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.1")
+app = FastAPI(title="MGA Cloud Sync", version="1.3.2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -4309,7 +4309,10 @@ def replace_or_add_oil_report_slide(prs: Presentation, tmp_dir: Path, portal: di
         add_full_slide_picture(target_slide, prs, oil_path)
 
 
-def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int) -> bytes:
+def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int, diesel_data: dict[str, Any] | None = None) -> bytes:
+    if isinstance(diesel_data, dict):
+        portal = dict(portal)
+        portal["diesel"] = diesel_data
     start, end = month_bounds(year, month)
     month_name = MONTH_NAMES_ES_FULL[month - 1]
     prs = Presentation(str(MONTHLY_REPORT_TEMPLATE_PATH)) if MONTHLY_REPORT_TEMPLATE_PATH.exists() else Presentation()
@@ -4704,9 +4707,13 @@ def get_monthly_report_powerpoint(
     month = month or now.month
     if year < 2000 or year > 2100:
         raise HTTPException(status_code=400, detail="Anio invalido.")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Mes invalido.")
     with SessionLocal() as session:
         portal = latest_portal_payload(session)
-    data = monthly_report_pptx_bytes(portal, year, month)
+        start, end = month_bounds(year, month)
+        diesel_data = diesel_payload(session, start, end)
+    data = monthly_report_pptx_bytes(portal, year, month, diesel_data)
     month_name = MONTH_NAMES_ES_FULL[month - 1]
     filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Mensual_{month_name}_{year}.pptx")
     return StreamingResponse(
