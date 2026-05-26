@@ -4900,22 +4900,36 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MGA Almacen de filtros</title>
   <style>
-    :root { --blue:#2454a6; --blue2:#3867c8; --navy:#172033; --teal:#009aa3; --green:#2d9f6d; --amber:#d99022; --red:#c83f4f; --muted:#687386; --line:#dbe3ee; --bg:#f5f7fb; --panel:#ffffff; --soft:#f8fafc; --shadow:0 16px 36px rgba(39,58,92,.10); }
+    :root { --blue:#2563eb; --blue2:#0ea5e9; --navy:#0f172a; --teal:#14b8a6; --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --muted:#64748b; --line:#d7e0ea; --bg:#f8fafc; --panel:#ffffff; --soft:#f8fafc; --shadow:0 18px 42px rgba(15,23,42,.10); }
     * { box-sizing:border-box; }
-    body { margin:0; font-family:Segoe UI, Arial, sans-serif; color:#1f2937; background:linear-gradient(180deg,#f8fafc 0%,#eef3f8 100%); }
-    .hero { position:relative; overflow:hidden; color:var(--navy); padding:18px 28px 22px; display:flex; justify-content:space-between; gap:22px; align-items:center; background:linear-gradient(180deg,#ffffff 0%,#f6f9fd 100%); border-bottom:1px solid var(--line); box-shadow:0 12px 30px rgba(39,58,92,.10); }
+    body { margin:0; font-family:Segoe UI, Arial, sans-serif; color:#1f2937; background:linear-gradient(180deg,#f8fafc 0%,#eef5f8 100%); }
+    .hero { position:relative; overflow:hidden; color:var(--navy); padding:18px 28px 22px; display:grid; grid-template-columns:minmax(330px,1fr) minmax(330px,.78fr) minmax(280px,.34fr); gap:22px; align-items:center; background:linear-gradient(135deg,#ffffff 0%,#f8fbff 52%,#edfdf8 100%); border-bottom:1px solid var(--line); box-shadow:0 14px 34px rgba(15,23,42,.10); }
     .hero::before { content:""; position:absolute; inset:0 0 auto; height:5px; background:linear-gradient(90deg,var(--blue2),var(--teal),var(--green),var(--amber)); }
-    .hero::after { content:""; position:absolute; right:0; top:5px; width:42%; height:100%; opacity:.34; background:repeating-linear-gradient(135deg, rgba(36,84,166,.16) 0 1px, transparent 1px 18px); pointer-events:none; }
+    .hero::after { content:""; position:absolute; right:0; top:5px; width:46%; height:100%; opacity:.38; background:linear-gradient(90deg, transparent, rgba(20,184,166,.08)), repeating-linear-gradient(135deg, rgba(37,99,235,.14) 0 1px, transparent 1px 18px); pointer-events:none; }
     .brand { position:relative; z-index:1; display:flex; align-items:center; gap:18px; min-width:0; }
-    .corner-logo { width:118px; height:78px; object-fit:contain; flex:0 0 auto; padding:8px 10px; border-radius:8px; background:white; border:1px solid var(--line); box-shadow:0 12px 24px rgba(39,58,92,.10); }
+    .corner-logo { width:118px; height:78px; object-fit:contain; flex:0 0 auto; padding:8px 10px; border-radius:8px; background:white; border:1px solid var(--line); box-shadow:0 14px 28px rgba(15,23,42,.12); }
     header h1 { margin:0; font-size:28px; line-height:1.05; letter-spacing:0; }
     header p { margin:7px 0 0; color:var(--muted); font-size:14px; }
-    .key-card { position:relative; z-index:1; min-width:280px; padding:12px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; box-shadow:inset 0 1px 0 rgba(255,255,255,.9); }
+    .hero-visual { position:relative; z-index:1; min-height:112px; display:grid; grid-template-columns:1fr 1.2fr; gap:10px; align-items:stretch; }
+    .ops-card, .ops-graph { border:1px solid rgba(215,224,234,.96); border-radius:8px; background:rgba(255,255,255,.82); box-shadow:0 12px 28px rgba(15,23,42,.08); }
+    .ops-card { display:grid; align-content:center; gap:8px; padding:12px; }
+    .ops-card span, .ops-graph span { color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; }
+    .ops-card b { color:var(--navy); font-size:26px; line-height:1; }
+    .ops-card i { display:block; height:8px; overflow:hidden; border-radius:999px; background:#e8edf5; }
+    .ops-card i::before { content:""; display:block; width:86%; height:100%; border-radius:999px; background:linear-gradient(90deg,var(--teal),var(--green)); }
+    .ops-graph { display:grid; gap:9px; padding:12px; }
+    .ops-lines { display:grid; grid-template-columns:repeat(8,1fr); align-items:end; gap:5px; min-height:54px; padding-top:4px; }
+    .ops-lines i { display:block; min-height:8px; border-radius:5px 5px 2px 2px; background:linear-gradient(180deg,var(--blue2),var(--teal)); opacity:.94; }
+    .ops-lines i:nth-child(2n) { background:linear-gradient(180deg,var(--green),var(--teal)); }
+    .ops-legend { display:flex; gap:8px; color:var(--muted); font-size:11px; }
+    .ops-legend b { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; background:var(--teal); }
+    .ops-legend span:last-child b { background:var(--amber); }
+    .key-card { position:relative; z-index:1; min-width:280px; padding:12px; border:1px solid var(--line); border-radius:8px; background:rgba(248,250,252,.88); box-shadow:inset 0 1px 0 rgba(255,255,255,.9), 0 12px 28px rgba(15,23,42,.07); }
     .key-card label { color:#334155; }
     header input { min-width:260px; padding:10px 11px; border:1px solid #cbd5e1; border-radius:6px; color:#172033; background:white; outline:none; }
     header input::placeholder { color:#94a3b8; }
     main { width:min(1480px, 100%); margin:0 auto; padding:18px; display:grid; gap:14px; }
-    .tabs { position:sticky; top:0; z-index:10; display:flex; gap:6px; flex-wrap:wrap; padding:7px; border:1px solid rgba(219,227,238,.92); border-radius:8px; background:rgba(255,255,255,.90); box-shadow:0 10px 26px rgba(39,58,92,.08); backdrop-filter:blur(12px); }
+    .tabs { position:sticky; top:0; z-index:10; display:flex; gap:6px; flex-wrap:wrap; padding:7px; border:1px solid rgba(215,224,234,.94); border-radius:8px; background:rgba(255,255,255,.90); box-shadow:0 12px 30px rgba(15,23,42,.08); backdrop-filter:blur(12px); }
     .tabs button, .btn { border:0; background:var(--blue); color:white; padding:10px 14px; border-radius:6px; font-weight:700; cursor:pointer; transition:transform .15s ease, box-shadow .15s ease, background .15s ease; }
     .tabs button:hover, .btn:hover { transform:translateY(-1px); box-shadow:0 10px 20px rgba(39,58,92,.14); }
     .tabs button { background:#eef3f8; color:#263447; border:1px solid transparent; }
@@ -4923,7 +4937,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
     .btn.danger { background:linear-gradient(135deg,#a91d2c,var(--red)); }
     .btn.small { padding:5px 8px; border-radius:5px; font-size:11px; white-space:nowrap; }
-    .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.96); border:1px solid rgba(219,227,238,.96); border-radius:8px; padding:16px; box-shadow:var(--shadow); }
+    .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.97); border:1px solid rgba(215,224,234,.96); border-radius:8px; padding:16px; box-shadow:var(--shadow); }
     .panel::before { content:""; position:absolute; inset:0 0 auto; height:3px; background:linear-gradient(90deg,var(--blue2),var(--teal)); opacity:.86; }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
@@ -4932,9 +4946,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .inline-check input { width:auto; }
     input:focus, select:focus, textarea:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(0,156,154,.14); }
     .stats { display:grid; grid-template-columns:repeat(5, 1fr); gap:10px; }
-    .stat { position:relative; overflow:hidden; background:linear-gradient(180deg,#fff,#f8fbff); border:1px solid var(--line); padding:14px 15px; border-radius:8px; box-shadow:0 10px 24px rgba(39,58,92,.07); }
+    .stat { position:relative; overflow:hidden; min-height:92px; display:grid; grid-template-columns:auto 1fr; align-items:start; gap:8px 10px; background:linear-gradient(180deg,#fff,#f8fbff); border:1px solid var(--line); padding:14px 15px; border-radius:8px; box-shadow:0 12px 28px rgba(15,23,42,.07); }
     .stat::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:linear-gradient(180deg,var(--teal),var(--green)); }
+    .stat-icon { position:relative; width:38px; height:38px; border-radius:8px; background:linear-gradient(135deg,rgba(37,99,235,.16),rgba(20,184,166,.18)); border:1px solid rgba(37,99,235,.16); }
+    .stat-icon::after { content:""; position:absolute; left:9px; right:9px; top:18px; height:9px; border-left:3px solid var(--blue); border-right:3px solid var(--teal); border-bottom:3px solid var(--green); border-radius:0 0 5px 5px; }
     .stat strong { display:block; color:var(--blue); font-size:30px; line-height:1; margin-bottom:5px; }
+    .stat span:not(.stat-icon) { color:var(--muted); font-weight:700; }
+    .stat-spark { grid-column:1 / -1; display:flex; align-items:end; gap:4px; height:24px; padding-left:5px; }
+    .stat-spark i { flex:1; min-width:3px; border-radius:4px 4px 1px 1px; background:linear-gradient(180deg,var(--blue2),var(--teal)); opacity:.82; }
     .view { display:none; }
     .view.active { display:grid; gap:14px; }
     table { width:100%; border-collapse:separate; border-spacing:0; background:white; }
@@ -4955,12 +4974,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .req-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
     .wide { grid-column:1 / -1; }
     .dashboard-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
-    .metric-card { border:1px solid var(--line); border-radius:8px; padding:13px; background:linear-gradient(180deg,#fff,#f8fbff); box-shadow:0 8px 20px rgba(39,58,92,.06); }
+    .metric-card { display:grid; grid-template-columns:minmax(0,1fr) 62px; align-items:center; gap:10px; border:1px solid var(--line); border-radius:8px; padding:13px; background:linear-gradient(180deg,#fff,#f8fbff); box-shadow:0 10px 24px rgba(15,23,42,.06); }
     .metric-card span { display:block; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }
     .metric-card strong { display:block; color:var(--blue); font-size:30px; margin-top:5px; }
     .metric-card .bar-track { height:8px; border-radius:999px; background:#e5e7eb; margin-top:10px; overflow:hidden; }
     .metric-card .bar-fill { display:block; height:100%; background:linear-gradient(90deg,var(--teal),var(--green)); }
     .metric-card.bad .bar-fill { background:var(--red); }
+    .metric-ring { position:relative; width:58px; height:58px; border-radius:50%; display:grid; place-items:center; background:conic-gradient(var(--teal) var(--ring), #e8edf5 0deg); box-shadow:inset 0 0 0 1px rgba(15,23,42,.05); }
+    .metric-ring b { display:grid; place-items:center; width:42px; height:42px; border-radius:50%; background:white; color:var(--navy); font-size:11px; box-shadow:0 2px 6px rgba(15,23,42,.08); }
+    .metric-card.bad .metric-ring { background:conic-gradient(var(--red) var(--ring), #e8edf5 0deg); }
+    .metric-body { min-width:0; }
     .kpi-format-board { display:grid; grid-template-columns:minmax(260px,.82fr) minmax(430px,1.36fr) minmax(260px,.82fr); gap:12px; align-items:stretch; }
     .kpi-side { display:grid; grid-template-columns:1fr 1fr; gap:0; align-self:stretch; border:1px solid var(--line); background:white; }
     .kpi-side .metric-card { min-height:126px; border-radius:0; border:0; border-right:1px solid var(--line); border-bottom:1px solid var(--line); box-shadow:none; background:#fff; }
@@ -5106,9 +5129,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .kpi-mini-tabs { display:grid; grid-template-columns:repeat(4, minmax(96px, 1fr)); gap:4px; flex:1; }
     .kpi-mini-tabs span, .kpi-mini-tabs button { border:1px solid #111; padding:7px 9px; background:white; color:#111; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
     .kpi-mini-tabs span.active, .kpi-mini-tabs button.active { background:var(--teal); color:#031b1b; }
-    .chart-plot { min-height:258px; display:flex; align-items:end; gap:12px; overflow:auto; padding:18px 6px 8px; background:repeating-linear-gradient(to top, transparent 0, transparent 51px, rgba(100,116,139,.25) 52px); }
+    .chart-plot { position:relative; min-height:258px; display:flex; align-items:end; gap:12px; overflow:auto; padding:26px 8px 8px; background:linear-gradient(180deg,rgba(248,250,252,.72),rgba(255,255,255,.65)), repeating-linear-gradient(to top, transparent 0, transparent 51px, rgba(100,116,139,.22) 52px); border-radius:8px; }
+    .chart-target { position:absolute; left:8px; right:8px; border-top:2px dashed rgba(245,158,11,.76); color:#92400e; font-size:11px; font-weight:800; text-align:right; pointer-events:none; }
+    .chart-target b { background:#fff7ed; border:1px solid #fed7aa; border-radius:999px; padding:2px 8px; }
     .chart-bar { min-width:54px; display:grid; align-content:end; gap:6px; text-align:center; color:#344054; font-size:11px; }
-    .chart-bar i { display:block; height:var(--h); min-height:4px; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#25c2b8,#008f8c); box-shadow:0 9px 18px rgba(0,143,140,.18); }
+    .chart-bar i { display:block; height:var(--h); min-height:4px; border-radius:7px 7px 2px 2px; background:linear-gradient(180deg,var(--green),var(--teal)); box-shadow:0 10px 20px rgba(20,184,166,.20); }
     .chart-bar.out i { background:linear-gradient(180deg,#e35d6a,#b51f32); }
     .schedule-strip { display:flex; gap:8px; min-height:92px; padding:10px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
     .schedule-cell { min-width:74px; border:1px solid #dbe3ef; border-radius:7px; background:white; padding:7px; display:grid; align-content:start; gap:6px; }
@@ -5145,6 +5170,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
       <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad, diesel, filtros y EPP</p></div>
+    </div>
+    <div class="hero-visual" aria-hidden="true">
+      <div class="ops-card"><span>Operacion</span><b>En vivo</b><i></i></div>
+      <div class="ops-graph">
+        <span>Tendencia semanal</span>
+        <div class="ops-lines"><i style="height:22px"></i><i style="height:38px"></i><i style="height:28px"></i><i style="height:46px"></i><i style="height:34px"></i><i style="height:52px"></i><i style="height:42px"></i><i style="height:58px"></i></div>
+        <div class="ops-legend"><span><b></b>KPI</span><span><b></b>Alertas</span></div>
+      </div>
     </div>
     <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
@@ -5605,7 +5638,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(tableWrap) tableWrap.classList.remove("oil-bottom-wrap");
     }
     function metricCardHtml(label, value, note, width, bad=false){
-      return `<div class="metric-card ${bad ? "bad" : ""}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${Math.max(Math.min(Number(width || 0),100),0)}%"></i></div></div>`;
+      const safeWidth = Math.max(Math.min(Number(width || 0),100),0);
+      return `<div class="metric-card ${bad ? "bad" : ""}" style="--ring:${safeWidth * 3.6}deg"><div class="metric-body"><span>${esc(label)}</span><strong>${esc(value)}</strong><small class="muted">${esc(note)}</small><div class="bar-track"><i class="bar-fill" style="width:${safeWidth}%"></i></div></div><div class="metric-ring"><b>${Math.round(safeWidth)}%</b></div></div>`;
     }
     const monthNames = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
     function periodTitle(start){
@@ -5998,7 +6032,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Partes almacen", s.inventory_parts || 0],
         ["Faltantes", s.shortage_filters || 0],
         ["Sin inventario", s.unknown_filters || 0],
-      ].map(([k,v]) => `<div class="stat"><strong>${v}</strong>${k}</div>`).join("");
+      ].map(([k,v], idx) => {
+        const seed = Math.max(Number(v || 0), 1);
+        const bars = [0,1,2,3,4].map(step => `<i style="height:${10 + ((seed + idx * 7 + step * 9) % 18)}px"></i>`).join("");
+        return `<div class="stat"><span class="stat-icon"></span><div><strong>${v}</strong><span>${esc(k)}</span></div><div class="stat-spark">${bars}</div></div>`;
+      }).join("");
     }
     function renderSelectors(){
       const current = $("equipmentSelect").value;
@@ -6503,7 +6541,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
         return `<div class="chart-bar ${outClass}" title="${esc(title)}"><span>${esc(kpiMetricText(row, metric))}</span><i style="--h:${h}px"></i><b>${esc(row.code)}</b></div>`;
       }).join("") || `<p class="muted">Sin datos KPI para el periodo.</p>`;
       const tabs = kpiMetricTabs.map(item => `<button type="button" data-kpi-metric="${esc(item.key)}" class="${item.key === metric ? "active" : ""}">${esc(item.label)}</button>`).join("");
-      return `<div class="kpi-chart-head"><b>KPI</b><div class="kpi-mini-tabs">${tabs}</div></div><div class="chart-plot">${chartBars}</div>`;
+      const targetTop = Math.max(Math.min(100 - ((targets[metric] / Math.max(axisMax, 1)) * 100), 94), 6);
+      const targetText = metric === "tmef" || metric === "tmpr" ? one(targets[metric]) : pct(targets[metric]);
+      return `<div class="kpi-chart-head"><b>KPI</b><div class="kpi-mini-tabs">${tabs}</div></div><div class="chart-plot"><span class="chart-target" style="top:${targetTop}%"><b>Meta ${esc(targetText)}</b></span>${chartBars}</div>`;
     }
     function bindKpiMetricTabs(){
       document.querySelectorAll("#kpiChart [data-kpi-metric]").forEach(button => {
