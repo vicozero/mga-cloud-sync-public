@@ -296,6 +296,28 @@ class CloudRequisitionItem(Base):
     requisition: Mapped[CloudRequisition] = relationship(back_populates="items")
 
 
+class HoseChange(Base):
+    __tablename__ = "mga_hose_change"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    change_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    equipment: Mapped[str] = mapped_column(String(120), default="", index=True)
+    system: Mapped[str] = mapped_column(String(120), default="")
+    part_type: Mapped[str] = mapped_column(String(80), default="MANGUERA", index=True)
+    diameter: Mapped[str] = mapped_column(String(80), default="")
+    length_m: Mapped[float] = mapped_column(Float, default=0)
+    quantity: Mapped[float] = mapped_column(Float, default=1)
+    unit_cost: Mapped[float] = mapped_column(Float, default=0)
+    estimated_life_days: Mapped[float] = mapped_column(Float, default=30)
+    estimated_weekly_qty: Mapped[float] = mapped_column(Float, default=0)
+    failure_reason: Mapped[str] = mapped_column(String(220), default="")
+    technician: Mapped[str] = mapped_column(String(180), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(80), default="web")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class DieselRecord(Base):
     __tablename__ = "mga_diesel_record"
 
@@ -1372,6 +1394,130 @@ def unmark_diesel_day_deleted(session: Session, work_date: str) -> None:
         return
     for deleted in session.scalars(select(DieselDeletedDay).where(DieselDeletedDay.work_date == work_date)).all():
         session.delete(deleted)
+
+
+def hose_iso_or_none(value: Any) -> str:
+    try:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return datetime.fromisoformat(text[:10]).date().isoformat()
+    except Exception:
+        return ""
+
+
+def hose_period_bounds(start: str = "", end: str = "") -> tuple[str, str]:
+    start_iso = hose_iso_or_none(start)
+    end_iso = hose_iso_or_none(end)
+    if not start_iso or not end_iso:
+        today = utc_now().date()
+        start_date = today.replace(day=1)
+        if start_date.month == 12:
+            end_date = date(start_date.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(start_date.year, start_date.month + 1, 1) - timedelta(days=1)
+        start_iso = start_iso or start_date.isoformat()
+        end_iso = end_iso or end_date.isoformat()
+    if end_iso < start_iso:
+        start_iso, end_iso = end_iso, start_iso
+    return start_iso, end_iso
+
+
+def hose_change_payload(row: HoseChange) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "source": row.source or "web",
+        "change_date": row.change_date,
+        "equipment": row.equipment,
+        "system": row.system,
+        "part_type": row.part_type,
+        "diameter": row.diameter,
+        "length_m": row.length_m,
+        "quantity": row.quantity,
+        "unit_cost": row.unit_cost,
+        "estimated_life_days": row.estimated_life_days,
+        "estimated_weekly_qty": row.estimated_weekly_qty,
+        "failure_reason": row.failure_reason,
+        "technician": row.technician,
+        "notes": row.notes,
+        "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
+    }
+
+
+def hose_report(session: Session, start: str = "", end: str = "", equipment: str = "") -> dict[str, Any]:
+    start_iso, end_iso = hose_period_bounds(start, end)
+    query = select(HoseChange).where(HoseChange.change_date >= start_iso, HoseChange.change_date <= end_iso)
+    selected_equipment = normalize_text(equipment)
+    if selected_equipment and selected_equipment not in {"TODOS", "TODOS LOS EQUIPOS"}:
+        query = query.where(HoseChange.equipment == selected_equipment)
+    rows = session.scalars(query.order_by(HoseChange.change_date.desc(), HoseChange.id.desc())).all()
+    start_date = datetime.fromisoformat(start_iso).date()
+    end_date = datetime.fromisoformat(end_iso).date()
+    period_days = max((end_date - start_date).days + 1, 1)
+    records: list[dict[str, Any]] = []
+    summary: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        payload = hose_change_payload(row)
+        qty = max(parse_float(payload.get("quantity"), 0), 0)
+        unit_cost = max(parse_float(payload.get("unit_cost"), 0), 0)
+        life_days = max(parse_float(payload.get("estimated_life_days"), 0), 0)
+        weekly = max(parse_float(payload.get("estimated_weekly_qty"), 0), 0)
+        if weekly <= 0 and life_days > 0:
+            weekly = qty * 7 / life_days
+        estimated_qty = max(weekly * period_days / 7, 0)
+        total_cost = qty * unit_cost
+        payload["estimated_qty_period"] = estimated_qty
+        payload["total_cost"] = total_cost
+        records.append(payload)
+        key = (payload.get("equipment") or "SIN EQUIPO", payload.get("part_type") or "MANGUERA")
+        bucket = summary.setdefault(
+            key,
+            {
+                "equipment": key[0],
+                "part_type": key[1],
+                "systems": set(),
+                "changes": 0,
+                "quantity": 0.0,
+                "estimated_qty": 0.0,
+                "variance": 0.0,
+                "total_cost": 0.0,
+            },
+        )
+        bucket["changes"] += 1
+        bucket["quantity"] += qty
+        bucket["estimated_qty"] += estimated_qty
+        bucket["total_cost"] += total_cost
+        if payload.get("system"):
+            bucket["systems"].add(payload["system"])
+    summary_rows = []
+    for bucket in summary.values():
+        quantity = bucket["quantity"]
+        estimated_qty = bucket["estimated_qty"]
+        summary_rows.append(
+            {
+                **bucket,
+                "systems": ", ".join(sorted(bucket["systems"])),
+                "variance": quantity - estimated_qty,
+            }
+        )
+    summary_rows.sort(key=lambda row: (-row["quantity"], row["equipment"], row["part_type"]))
+    real_qty = sum(row["quantity"] for row in summary_rows)
+    estimated_qty = sum(row["estimated_qty"] for row in summary_rows)
+    return {
+        "start": start_iso,
+        "end": end_iso,
+        "period_days": period_days,
+        "records": records,
+        "summary": summary_rows,
+        "totals": {
+            "changes": len(records),
+            "real_qty": real_qty,
+            "estimated_qty": estimated_qty,
+            "variance": real_qty - estimated_qty,
+            "total_cost": sum(row["total_cost"] for row in summary_rows),
+            "critical_equipment": summary_rows[0]["equipment"] if summary_rows else "S/D",
+        },
+    }
 
 
 def diesel_record_payload(row: DieselRecord) -> dict[str, Any]:
@@ -4732,6 +4878,72 @@ def get_monthly_report_powerpoint(
     )
 
 
+@app.get("/api/hose-changes")
+def get_hose_changes(
+    response: Response,
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    equipment: str = Query(default=""),
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    with SessionLocal() as session:
+        return hose_report(session, start, end, equipment)
+
+
+@app.post("/api/hose-changes")
+async def save_hose_change_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Cambio de manguera invalido.")
+    change_date = hose_iso_or_none(payload.get("change_date")) or utc_now().date().isoformat()
+    equipment = normalize_text(payload.get("equipment"))
+    if not equipment:
+        raise HTTPException(status_code=400, detail="Equipo requerido.")
+    record_id = int(parse_float(payload.get("id"), 0) or 0)
+    with SessionLocal() as session:
+        row = session.get(HoseChange, record_id) if record_id else None
+        if row is None:
+            row = HoseChange(change_date=change_date, equipment=equipment, created_at=utc_now())
+            session.add(row)
+        row.change_date = change_date
+        row.equipment = equipment
+        row.system = normalize_text(payload.get("system"))
+        row.part_type = normalize_text(payload.get("part_type") or "MANGUERA")[:80] or "MANGUERA"
+        row.diameter = normalize_text(payload.get("diameter"))[:80]
+        row.length_m = max(parse_float(payload.get("length_m"), 0), 0)
+        row.quantity = max(parse_float(payload.get("quantity"), 1), 0)
+        row.unit_cost = max(parse_float(payload.get("unit_cost"), 0), 0)
+        row.estimated_life_days = max(parse_float(payload.get("estimated_life_days"), 30), 0)
+        row.estimated_weekly_qty = max(parse_float(payload.get("estimated_weekly_qty"), 0), 0)
+        row.failure_reason = normalize_text(payload.get("failure_reason"))[:220]
+        row.technician = normalize_text(payload.get("technician"))[:180]
+        row.notes = str(payload.get("notes") or "").strip()
+        row.source = "web"
+        row.updated_at = utc_now()
+        session.commit()
+        session.refresh(row)
+        return {"ok": True, "record": hose_change_payload(row), "hoses": hose_report(session, change_date, change_date)}
+
+
+@app.post("/api/hose-changes/delete")
+async def delete_hose_change_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Cambio de manguera invalido.")
+    record_id = int(parse_float(payload.get("id"), 0) or 0)
+    if not record_id:
+        raise HTTPException(status_code=400, detail="Selecciona un cambio para eliminar.")
+    with SessionLocal() as session:
+        row = session.get(HoseChange, record_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Cambio no encontrado.")
+        session.delete(row)
+        session.commit()
+        return {"ok": True}
+
+
 @app.get("/api/diesel")
 def get_diesel(
     response: Response,
@@ -5203,6 +5415,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="disponibilidad">Disponibilidad</button>
       <button data-tab="requisiciones">Requisiciones</button>
       <button data-tab="seguimientoReq">Seguimiento req.</button>
+      <button data-tab="mangueras">Mangueras</button>
       <button data-tab="diesel">Diesel</button>
       <button data-tab="epp">EPP almacen</button>
       <button data-tab="equipos">Filtros por equipo</button>
@@ -5369,6 +5582,51 @@ WAREHOUSE_HTML = r"""<!doctype html>
           </div>
           <div class="table-wrap" style="max-height:260px; margin-top:10px;"><table id="trackItemsTable"></table></div>
         </div>
+      </div>
+    </section>
+    <section id="mangueras" class="view">
+      <div class="panel toolbar">
+        <label>Periodo<select id="hosePeriod"><option>Mes</option><option>Semana</option><option>Rango</option></select></label>
+        <label>Fecha base<input id="hoseBase" type="date"></label>
+        <label>Desde<input id="hoseStart" type="date"></label>
+        <label>Hasta<input id="hoseEnd" type="date"></label>
+        <label>Equipo<select id="hoseFilterEquipment"></select></label>
+        <button class="btn secondary" id="hoseApplyPeriodBtn">Aplicar periodo</button>
+        <button class="btn" id="hoseRefreshBtn">Actualizar</button>
+      </div>
+      <div class="stats" id="hoseStats"></div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Captura de mangueras y conexiones</h3><span class="muted" id="hoseEditStatus"></span></div>
+          <div class="movement-grid">
+            <label>Fecha<input id="hoseDate" type="date"></label>
+            <label>Equipo<select id="hoseEquipment"></select></label>
+            <label>Sistema<select id="hoseSystem"><option>HIDRAULICO</option><option>AIRE</option><option>AGUA</option><option>DIESEL</option><option>LUBRICACION</option><option>FRENOS</option><option>OTRO</option></select></label>
+            <label>Tipo<select id="hoseType"><option>MANGUERA</option><option>CONEXION</option><option>ADAPTADOR</option><option>ABRAZADERA</option><option>OTRO</option></select></label>
+            <label>Diametro<input id="hoseDiameter" placeholder="1/2, 3/4, #8"></label>
+            <label>Longitud m<input id="hoseLength" type="number" step="0.01" value="0"></label>
+            <label>Cantidad<input id="hoseQty" type="number" step="0.01" value="1"></label>
+            <label>Costo unitario<input id="hoseUnitCost" type="number" step="0.01" value="0"></label>
+            <label>Vida est. dias<input id="hoseLifeDays" type="number" step="1" value="30"></label>
+            <label>Consumo aprox/sem<input id="hoseEstimatedWeekly" type="number" step="0.01" value="0"></label>
+            <label>Causa<input id="hoseReason"></label>
+            <label>Tecnico<input id="hoseTech"></label>
+            <label class="wide">Notas<textarea id="hoseNotes" rows="2"></textarea></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn secondary" id="hoseNewBtn">Nuevo</button>
+            <button class="btn" id="hoseSaveBtn">Guardar cambio</button>
+            <button class="btn danger" id="hoseDeleteBtn">Eliminar cambio</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Resumen de consumo</h3><span class="muted" id="hosePeriodLabel"></span></div>
+          <div class="table-wrap" style="max-height:520px;"><table id="hoseSummaryTable"></table></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Historial de cambios</h3><span class="muted">Selecciona una fila para editar</span></div>
+        <div class="table-wrap" style="max-height:460px;"><table id="hoseRecordsTable"></table></div>
       </div>
     </section>
     <section id="diesel" class="view">
@@ -5590,6 +5848,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
+    let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
     let diesel = { equipment: [], records: [], days: [], rows: [], totals: {}, start: "", end: "", meta_lh: 25 };
     let epp = { items: [], movements: [], deliveries: [], workers: [], summary: {} };
     let currentEppWorkerId = null;
@@ -5598,6 +5857,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentReqItems = [];
     let currentTrackId = null;
     let currentTrackItems = [];
+    let currentHoseId = null;
+    let currentHoseRecord = null;
     let currentDieselId = null;
     let currentDieselRecord = null;
     let selectedKpiMetric = "availability";
@@ -6013,11 +6274,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     }
     async function load(){
-      const [r, p, prod, req, dieselPayload, eppPayload] = await Promise.all([
+      const [r, p, prod, req, hosePayload, dieselPayload, eppPayload] = await Promise.all([
         fetch("/api/filter-inventory", {headers: headers(), cache:"no-store"}),
         fetch("/api/portal", {headers: headers(), cache:"no-store"}),
         fetch("/api/products?limit=25000", {headers: headers(), cache:"no-store"}),
         fetch("/api/requisitions", {headers: headers(), cache:"no-store"}),
+        fetch("/api/hose-changes", {headers: headers(), cache:"no-store"}),
         fetch("/api/diesel", {headers: headers(), cache:"no-store"}),
         fetch("/api/epp", {headers: headers(), cache:"no-store"})
       ]);
@@ -6025,12 +6287,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!p.ok) throw new Error(await apiError(p));
       if(!prod.ok) throw new Error(await apiError(prod));
       if(!req.ok) throw new Error(await apiError(req));
+      if(!hosePayload.ok) throw new Error(await apiError(hosePayload));
       if(!dieselPayload.ok) throw new Error(await apiError(dieselPayload));
       if(!eppPayload.ok) throw new Error(await apiError(eppPayload));
       data = await r.json();
       portal = await p.json();
       products = (await prod.json()).products || [];
       const reqPayload = await req.json();
+      hoses = await hosePayload.json();
       diesel = await dieselPayload.json();
       epp = await eppPayload.json();
       requisitions = reqPayload.requisitions || [];
@@ -7472,6 +7736,147 @@ WAREHOUSE_HTML = r"""<!doctype html>
         document.querySelector('[data-tab="requisiciones"]').click();
       }).catch(showError);
     }
+    function hoseEquipmentOptions(){
+      const set = new Set();
+      portalEquipment().forEach(eq => { if(eq.code || eq.equipment_code) set.add(String(eq.code || eq.equipment_code).trim().toUpperCase()); });
+      (hoses.records || []).forEach(row => { if(row.equipment) set.add(String(row.equipment).trim().toUpperCase()); });
+      return [...set].filter(Boolean).sort();
+    }
+    function renderHoseSelectors(){
+      const codes = hoseEquipmentOptions();
+      const currentFilter = $("hoseFilterEquipment").value || "Todos";
+      $("hoseFilterEquipment").innerHTML = `<option>Todos</option>` + codes.map(code => `<option>${esc(code)}</option>`).join("");
+      $("hoseFilterEquipment").value = codes.includes(currentFilter) || currentFilter === "Todos" ? currentFilter : "Todos";
+      const currentEquipment = $("hoseEquipment").value || "";
+      $("hoseEquipment").innerHTML = `<option value=""></option>` + codes.map(code => `<option>${esc(code)}</option>`).join("");
+      if(codes.includes(currentEquipment)) $("hoseEquipment").value = currentEquipment;
+    }
+    function filteredHoseRecords(){
+      const selected = $("hoseFilterEquipment").value || "Todos";
+      if(selected === "Todos") return hoses.records || [];
+      return (hoses.records || []).filter(row => String(row.equipment || "").toUpperCase() === String(selected).toUpperCase());
+    }
+    function renderHoses(){
+      $("hoseBase").value = $("hoseBase").value || toIsoDate(new Date());
+      $("hoseStart").value = hoses.start || $("hoseStart").value || toIsoDate(new Date());
+      $("hoseEnd").value = hoses.end || $("hoseEnd").value || $("hoseStart").value;
+      $("hoseDate").value = $("hoseDate").value || toIsoDate(new Date());
+      renderHoseSelectors();
+      const totals = hoses.totals || {};
+      $("hosePeriodLabel").textContent = `${hoses.start || $("hoseStart").value} a ${hoses.end || $("hoseEnd").value} | ${hoses.period_days || 0} dias`;
+      $("hoseStats").innerHTML = [
+        ["Cambios", totals.changes || 0],
+        ["Consumo real", `${one(totals.real_qty)} pzas`],
+        ["Consumo aprox.", `${one(totals.estimated_qty)} pzas`],
+        ["Variacion", `${Number(totals.variance || 0) >= 0 ? "+" : ""}${one(totals.variance)} pzas`],
+        ["Costo estimado", `$${Number(totals.total_cost || 0).toLocaleString("es-MX", {maximumFractionDigits:0})}`],
+        ["Equipo critico", totals.critical_equipment || "S/D"],
+      ].map(([k,v]) => `<div class="stat"><strong>${esc(v)}</strong>${esc(k)}</div>`).join("");
+      $("hoseSummaryTable").innerHTML = `<thead><tr><th>Equipo</th><th>Tipo</th><th>Sistemas</th><th>Cambios</th><th>Real</th><th>Aprox.</th><th>Var.</th><th>Costo</th></tr></thead><tbody>` +
+        (hoses.summary || []).map(row => `<tr><td>${esc(row.equipment)}</td><td>${esc(row.part_type)}</td><td>${esc(row.systems)}</td><td>${num(row.changes)}</td><td>${one(row.quantity)}</td><td>${one(row.estimated_qty)}</td><td>${Number(row.variance || 0) >= 0 ? "+" : ""}${one(row.variance)}</td><td>$${Number(row.total_cost || 0).toLocaleString("es-MX", {maximumFractionDigits:0})}</td></tr>`).join("") +
+        `</tbody>`;
+      const records = filteredHoseRecords();
+      $("hoseRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Sistema</th><th>Tipo</th><th>Diam.</th><th>Largo</th><th>Cant.</th><th>Costo</th><th>Causa</th><th>Tecnico</th><th>Accion</th></tr></thead><tbody>` +
+        records.map((row, idx) => `<tr data-hose-index="${idx}" style="cursor:pointer"><td>${esc(row.change_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.system)}</td><td>${esc(row.part_type)}</td><td>${esc(row.diameter)}</td><td>${one(row.length_m)}</td><td>${one(row.quantity)}</td><td>$${Number(row.unit_cost || 0).toLocaleString("es-MX", {maximumFractionDigits:0})}</td><td>${esc(row.failure_reason)}</td><td>${esc(row.technician)}</td><td><button type="button" class="btn danger small" data-hose-delete="${idx}">Eliminar</button></td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("[data-hose-index]").forEach(tr => tr.addEventListener("click", () => editHoseRecord(Number(tr.dataset.hoseIndex))));
+      document.querySelectorAll("[data-hose-delete]").forEach(button => button.addEventListener("click", event => {
+        event.stopPropagation();
+        deleteHoseRecordAt(Number(button.dataset.hoseDelete)).catch(showError);
+      }));
+    }
+    function clearHoseRecord(){
+      currentHoseId = null;
+      currentHoseRecord = null;
+      $("hoseEditStatus").textContent = "Nuevo cambio";
+      $("hoseDate").value = toIsoDate(new Date());
+      $("hoseEquipment").value = "";
+      $("hoseSystem").value = "HIDRAULICO";
+      $("hoseType").value = "MANGUERA";
+      ["hoseDiameter","hoseReason","hoseTech","hoseNotes"].forEach(id => $(id).value = "");
+      $("hoseLength").value = "0";
+      $("hoseQty").value = "1";
+      $("hoseUnitCost").value = "0";
+      $("hoseLifeDays").value = "30";
+      $("hoseEstimatedWeekly").value = "0";
+    }
+    function editHoseRecord(index){
+      const row = filteredHoseRecords()[index];
+      if(!row) return;
+      currentHoseId = Number(row.id || 0) || null;
+      currentHoseRecord = row;
+      $("hoseEditStatus").textContent = currentHoseId ? `Editando cambio #${currentHoseId}` : "Editando cambio";
+      $("hoseDate").value = row.change_date || "";
+      $("hoseEquipment").value = row.equipment || "";
+      $("hoseSystem").value = row.system || "HIDRAULICO";
+      $("hoseType").value = row.part_type || "MANGUERA";
+      $("hoseDiameter").value = row.diameter || "";
+      $("hoseLength").value = row.length_m || 0;
+      $("hoseQty").value = row.quantity || 1;
+      $("hoseUnitCost").value = row.unit_cost || 0;
+      $("hoseLifeDays").value = row.estimated_life_days || 30;
+      $("hoseEstimatedWeekly").value = row.estimated_weekly_qty || 0;
+      $("hoseReason").value = row.failure_reason || "";
+      $("hoseTech").value = row.technician || "";
+      $("hoseNotes").value = row.notes || "";
+    }
+    function hosePayload(){
+      return {
+        id: currentHoseId,
+        change_date: $("hoseDate").value,
+        equipment: $("hoseEquipment").value,
+        system: $("hoseSystem").value,
+        part_type: $("hoseType").value,
+        diameter: $("hoseDiameter").value,
+        length_m: $("hoseLength").value,
+        quantity: $("hoseQty").value,
+        unit_cost: $("hoseUnitCost").value,
+        estimated_life_days: $("hoseLifeDays").value,
+        estimated_weekly_qty: $("hoseEstimatedWeekly").value,
+        failure_reason: $("hoseReason").value,
+        technician: $("hoseTech").value,
+        notes: $("hoseNotes").value,
+      };
+    }
+    async function refreshHoses(){
+      const params = new URLSearchParams({start:$("hoseStart").value, end:$("hoseEnd").value, equipment:$("hoseFilterEquipment").value || ""});
+      const r = await fetch(`/api/hose-changes?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok) return alert(await apiError(r));
+      hoses = await r.json();
+      renderHoses();
+    }
+    function applyHosePeriod(){
+      const [start, end] = periodRange($("hosePeriod").value, $("hoseBase").value || $("hoseStart").value);
+      $("hoseStart").value = start;
+      $("hoseEnd").value = end;
+      refreshHoses().catch(showError);
+    }
+    async function saveHoseRecord(){
+      if(!hasApiKey(true)) return;
+      const r = await fetch("/api/hose-changes", {method:"POST", headers:headers(true), body:JSON.stringify(hosePayload())});
+      if(!r.ok) return alert(await apiError(r));
+      clearHoseRecord();
+      await refreshHoses();
+    }
+    async function deleteHoseRecordAt(index){
+      const row = filteredHoseRecords()[index];
+      if(!row) return alert("Selecciona un cambio para eliminar.");
+      if(!hasApiKey(true)) return;
+      if(!confirm(`Se eliminara el cambio de ${row.part_type || "MANGUERA"} en ${row.equipment || ""}.`)) return;
+      const r = await fetch("/api/hose-changes/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id:row.id})});
+      if(!r.ok) return alert(await apiError(r));
+      clearHoseRecord();
+      await refreshHoses();
+    }
+    async function deleteHoseRecord(){
+      if(!currentHoseRecord) return alert("Selecciona un cambio para eliminar.");
+      if(!hasApiKey(true)) return;
+      if(!confirm("Se eliminara el cambio de manguera/conexion seleccionado.")) return;
+      const r = await fetch("/api/hose-changes/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id:currentHoseRecord.id})});
+      if(!r.ok) return alert(await apiError(r));
+      clearHoseRecord();
+      await refreshHoses();
+    }
     function dieselEquipmentKey(value){
       return String(value || "").trim().toUpperCase().replace(/\([^)]*\)/g, " ").replace(/[^A-Z0-9]+/g, "");
     }
@@ -7893,6 +8298,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderDisponibilidad();
       renderRequisiciones();
       renderTracking();
+      renderHoses();
       renderDiesel();
       renderEpp();
       renderFilters();
@@ -7934,6 +8340,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("trackRefreshBtn").addEventListener("click", () => load().catch(showError));
     $("trackSaveBtn").addEventListener("click", () => saveTrack().catch(showError));
     $("trackOpenReqBtn").addEventListener("click", openTrackedRequisition);
+    $("hoseApplyPeriodBtn").addEventListener("click", applyHosePeriod);
+    $("hoseRefreshBtn").addEventListener("click", () => refreshHoses().catch(showError));
+    $("hoseFilterEquipment").addEventListener("change", () => refreshHoses().catch(showError));
+    $("hoseNewBtn").addEventListener("click", clearHoseRecord);
+    $("hoseSaveBtn").addEventListener("click", () => saveHoseRecord().catch(showError));
+    $("hoseDeleteBtn").addEventListener("click", () => deleteHoseRecord().catch(showError));
     $("dieselApplyPeriodBtn").addEventListener("click", applyDieselPeriod);
     $("dieselRefreshBtn").addEventListener("click", () => refreshDiesel().catch(showError));
     $("dieselFilterEquipment").addEventListener("change", renderDiesel);
