@@ -5707,7 +5707,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Diametro<input id="hoseDiameter" placeholder="1/2, 3/4, #8"></label>
             <label>Longitud m<input id="hoseLength" type="number" step="0.01" value="0"></label>
             <label>Cantidad<input id="hoseQty" type="number" step="0.01" value="1"></label>
-            <label>Costo unitario<input id="hoseUnitCost" type="number" step="0.01" value="0"></label>
             <label>Vida est. dias<input id="hoseLifeDays" type="number" step="1" value="30"></label>
             <label>Consumo aprox/sem<input id="hoseEstimatedWeekly" type="number" step="0.01" value="0"></label>
             <label>Causa<input id="hoseReason"></label>
@@ -7870,15 +7869,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Consumo real", `${one(totals.real_qty)} pzas`],
         ["Consumo aprox.", `${one(totals.estimated_qty)} pzas`],
         ["Variacion", `${Number(totals.variance || 0) >= 0 ? "+" : ""}${one(totals.variance)} pzas`],
-        ["Costo estimado", `$${Number(totals.total_cost || 0).toLocaleString("es-MX", {maximumFractionDigits:0})}`],
         ["Equipo critico", totals.critical_equipment || "S/D"],
       ].map(([k,v]) => `<div class="stat"><strong>${esc(v)}</strong>${esc(k)}</div>`).join("");
-      $("hoseSummaryTable").innerHTML = `<thead><tr><th>Equipo</th><th>Tipo</th><th>Sistemas</th><th>Cambios</th><th>Real</th><th>Aprox.</th><th>Var.</th><th>Costo</th></tr></thead><tbody>` +
-        (hoses.summary || []).map(row => `<tr><td>${esc(row.equipment)}</td><td>${esc(row.part_type)}</td><td>${esc(row.systems)}</td><td>${num(row.changes)}</td><td>${one(row.quantity)}</td><td>${one(row.estimated_qty)}</td><td>${Number(row.variance || 0) >= 0 ? "+" : ""}${one(row.variance)}</td><td>$${Number(row.total_cost || 0).toLocaleString("es-MX", {maximumFractionDigits:0})}</td></tr>`).join("") +
+      $("hoseSummaryTable").innerHTML = `<thead><tr><th>Equipo</th><th>Tipo</th><th>Sistemas</th><th>Cambios</th><th>Real</th><th>Aprox.</th><th>Var.</th></tr></thead><tbody>` +
+        (hoses.summary || []).map(row => `<tr><td>${esc(row.equipment)}</td><td>${esc(row.part_type)}</td><td>${esc(row.systems)}</td><td>${num(row.changes)}</td><td>${one(row.quantity)}</td><td>${one(row.estimated_qty)}</td><td>${Number(row.variance || 0) >= 0 ? "+" : ""}${one(row.variance)}</td></tr>`).join("") +
         `</tbody>`;
       const records = filteredHoseRecords();
-      $("hoseRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Sistema</th><th>Tipo</th><th>Diam.</th><th>Largo</th><th>Cant.</th><th>Costo</th><th>Causa</th><th>Tecnico</th><th>Accion</th></tr></thead><tbody>` +
-        records.map((row, idx) => `<tr data-hose-index="${idx}" style="cursor:pointer"><td>${esc(row.change_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.system)}</td><td>${esc(row.part_type)}</td><td>${esc(row.diameter)}</td><td>${one(row.length_m)}</td><td>${one(row.quantity)}</td><td>$${Number(row.unit_cost || 0).toLocaleString("es-MX", {maximumFractionDigits:0})}</td><td>${esc(row.failure_reason)}</td><td>${esc(row.technician)}</td><td><button type="button" class="btn danger small" data-hose-delete="${idx}">Eliminar</button></td></tr>`).join("") +
+      $("hoseRecordsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Sistema</th><th>Tipo</th><th>Diam.</th><th>Largo</th><th>Cant.</th><th>Causa</th><th>Tecnico</th><th>Accion</th></tr></thead><tbody>` +
+        records.map((row, idx) => `<tr data-hose-index="${idx}" style="cursor:pointer"><td>${esc(row.change_date)}</td><td>${esc(row.equipment)}</td><td>${esc(row.system)}</td><td>${esc(row.part_type)}</td><td>${esc(row.diameter)}</td><td>${one(row.length_m)}</td><td>${one(row.quantity)}</td><td>${esc(row.failure_reason)}</td><td>${esc(row.technician)}</td><td><button type="button" class="btn danger small" data-hose-delete="${idx}">Eliminar</button></td></tr>`).join("") +
         `</tbody>`;
       document.querySelectorAll("[data-hose-index]").forEach(tr => tr.addEventListener("click", () => editHoseRecord(Number(tr.dataset.hoseIndex))));
       document.querySelectorAll("[data-hose-delete]").forEach(button => button.addEventListener("click", event => {
@@ -7897,7 +7895,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       ["hoseDiameter","hoseReason","hoseTech","hoseNotes"].forEach(id => $(id).value = "");
       $("hoseLength").value = "0";
       $("hoseQty").value = "1";
-      $("hoseUnitCost").value = "0";
       $("hoseLifeDays").value = "30";
       $("hoseEstimatedWeekly").value = "0";
     }
@@ -7914,7 +7911,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("hoseDiameter").value = row.diameter || "";
       $("hoseLength").value = row.length_m || 0;
       $("hoseQty").value = row.quantity || 1;
-      $("hoseUnitCost").value = row.unit_cost || 0;
       $("hoseLifeDays").value = row.estimated_life_days || 30;
       $("hoseEstimatedWeekly").value = row.estimated_weekly_qty || 0;
       $("hoseReason").value = row.failure_reason || "";
@@ -7931,7 +7927,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         diameter: $("hoseDiameter").value,
         length_m: $("hoseLength").value,
         quantity: $("hoseQty").value,
-        unit_cost: $("hoseUnitCost").value,
+        unit_cost: 0,
         estimated_life_days: $("hoseLifeDays").value,
         estimated_weekly_qty: $("hoseEstimatedWeekly").value,
         failure_reason: $("hoseReason").value,
