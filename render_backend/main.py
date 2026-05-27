@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
@@ -4603,6 +4603,11 @@ def health() -> dict[str, Any]:
         "database": database_status(),
         "generated_at": utc_now().isoformat(timespec="seconds"),
     }
+
+
+@app.get("/", include_in_schema=False)
+def home() -> RedirectResponse:
+    return RedirectResponse(url="/almacen-filtros", status_code=307)
 
 
 @app.get("/favicon.ico")
