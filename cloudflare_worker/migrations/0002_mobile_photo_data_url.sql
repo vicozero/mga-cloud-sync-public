@@ -1,0 +1,1 @@
+ALTER TABLE mobile_photo ADD COLUMN data_url TEXT NOT NULL DEFAULT '';
