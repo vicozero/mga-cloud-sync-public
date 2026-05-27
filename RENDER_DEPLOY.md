@@ -12,19 +12,20 @@ Esta es la arquitectura ideal para que el APK no dependa de la IP de la computad
 
 - `render_backend/main.py`: API cloud FastAPI.
 - `requirements-cloud.txt`: dependencias del servicio cloud.
-- `render.yaml`: Blueprint para crear el servicio. `DATABASE_URL` queda como secreto manual para poder reutilizar una base gratuita existente durante pruebas.
+- `render.yaml`: Blueprint para crear el servicio web y una base PostgreSQL de Render, conectada por `DATABASE_URL`.
 - `mobile_app/cloud_config.json`: URL de nube que se empaca dentro del APK.
 
 ## Desplegar en Render
 
-Opcion recomendada: usar el `render.yaml` y configurar `DATABASE_URL` manualmente.
+Opcion recomendada: usar el `render.yaml`.
 
 1. Sube este proyecto a un repositorio GitHub privado.
 2. En Render, crea un Blueprint y selecciona el repositorio.
 3. Render detectara `render.yaml` y creara/configurara:
    - Web service `mga-cloud-sync`.
-   - Variable `DATABASE_URL` como secreto pendiente de captura manual.
-   - Proteccion por `MGA_API_KEY`.
+   - Base PostgreSQL `mga-cloud-sync-db`.
+   - Variable `DATABASE_URL` conectada automaticamente a PostgreSQL.
+   - Proteccion por `MGA_API_KEY` generada automaticamente.
 4. Al terminar, abre:
    - `https://TU-SERVICIO.onrender.com/health`
    - Debe responder `service: mga-cloud-sync`.
@@ -35,6 +36,8 @@ Opcion recomendada: usar el `render.yaml` y configurar `DATABASE_URL` manualment
    - Abre `https://TU-SERVICIO.onrender.com/almacen-filtros`.
    - Captura la misma API key configurada en Render.
    - El almacenista puede importar Excel, exportar Excel, revisar filtros por equipo y registrar entradas/salidas en el concentrado.
+
+Nota: el plan gratuito de Render es suficiente para pruebas. La base PostgreSQL gratis expira 30 dias despues de crearla; para uso diario con datos permanentes, cambia la base a un plan pagado antes de que expire.
 
 Opcion manual si no usas Blueprint:
 
@@ -48,7 +51,7 @@ Opcion manual si no usas Blueprint:
 
 Nota importante: si `DATABASE_URL` no esta configurado, el backend usa `cloud_sync.db` dentro del servicio, que es temporal en Render y puede perderse en reinicios o redeploys. Para uso diario, usa PostgreSQL de Render o un disco persistente.
 
-Para la prueba gratuita actual, `mga-cloud-sync` puede reutilizar una base PostgreSQL gratuita existente. La informacion de MGA queda separada por tablas con prefijo `mga_`: `mga_mobile_capture`, `mga_mobile_photo`, `mga_catalog_snapshot`, `mga_filter_inventory_item` y `mga_filter_inventory_movement`.
+Si ya tienes una base PostgreSQL gratuita activa en tu workspace y Render no permite crear otra, cambia `DATABASE_URL` manualmente para reutilizar esa base. La informacion de MGA queda separada por tablas con prefijo `mga_`: `mga_mobile_capture`, `mga_mobile_photo`, `mga_catalog_snapshot`, `mga_filter_inventory_item` y `mga_filter_inventory_movement`.
 
 Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$PORT`. Referencias oficiales:
 
@@ -62,7 +65,7 @@ Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$P
 2. Entra a `Red`.
 3. Captura:
    - `URL cloud Render`: `https://TU-SERVICIO.onrender.com`
-   - `API key cloud`: valor de `MGA_API_KEY` en Render.
+   - `API key cloud`: valor generado de `MGA_API_KEY` en Render.
 4. Guarda.
 5. En el boton `Nube`, usa:
    - `Publicar equipos`: sube el catalogo para que el APK tenga equipos actualizados.
