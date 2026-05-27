@@ -9363,6 +9363,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
         if "epp" not in payload and isinstance(previous_payload.get("epp"), dict):
             payload["epp"] = previous_payload["epp"]
+        if "service_history" not in payload and isinstance(previous_payload.get("service_history"), list):
+            payload["service_history"] = previous_payload["service_history"]
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
@@ -9374,6 +9376,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "equipment": len(equipment),
         "captures": len(captures),
         "preventives": len(preventives),
+        "service_history": len(payload.get("service_history") or []) if isinstance(payload.get("service_history"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
     }
 
