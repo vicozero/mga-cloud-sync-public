@@ -5589,6 +5589,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="panel toolbar">
         <label>Equipo<select id="srvEquipment"></select></label>
         <label>Servicio<select id="srvInterval"><option value="">Todos</option><option>250H</option><option>500H</option><option>750H</option><option>1000H</option></select></label>
+        <label>Tipo<select id="srvType"><option value="">Todos</option><option>Programado</option><option>No programado</option></select></label>
         <label>Desde<input id="srvStart" type="date"></label>
         <label>Hasta<input id="srvEnd" type="date"></label>
         <label>Buscar<input id="srvSearch" placeholder="Componente, OT, notas"></label>
@@ -7500,16 +7501,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function filteredServiceHistory(){
       const selected = $("srvEquipment").value;
       const interval = $("srvInterval").value;
+      const type = $("srvType").value;
       const start = $("srvStart").value;
       const end = $("srvEnd").value;
       const search = ($("srvSearch").value || "").toUpperCase();
       const rows = (Array.isArray(portal.service_history) ? portal.service_history : []).filter(row => {
         const service = String(row.service_interval || row.service_name || "").toUpperCase();
+        const serviceType = String(row.service_type || "Programado").toUpperCase();
         const eqOk = !selected || row.equipment_code === selected;
         const intervalOk = !interval || service === interval.toUpperCase() || service.includes(interval.toUpperCase());
+        const typeOk = !type || serviceType === type.toUpperCase();
         const dateOk = !start || !end || inRange(row.completed_date, start, end);
-        const text = [row.equipment_code,row.equipment_description,row.component,row.service_name,row.service_interval,row.order_number,row.notes,row.status].join(" ").toUpperCase();
-        return eqOk && intervalOk && dateOk && (!search || text.includes(search));
+        const text = [row.equipment_code,row.equipment_description,row.component,row.service_type,row.service_name,row.service_interval,row.order_number,row.notes,row.status].join(" ").toUpperCase();
+        return eqOk && intervalOk && typeOk && dateOk && (!search || text.includes(search));
       }).sort((a,b) => String(b.completed_date || "").localeCompare(String(a.completed_date || "")) || String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")));
       return {start, end, rows};
     }
@@ -7522,9 +7526,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
         acc[key] = (acc[key] || 0) + 1;
         return acc;
       }, {});
+      const programmed = result.rows.filter(row => String(row.service_type || "Programado").toUpperCase() !== "NO PROGRAMADO").length;
+      const unplanned = result.rows.filter(row => String(row.service_type || "").toUpperCase() === "NO PROGRAMADO").length;
       const late = result.rows.filter(row => String(row.status || "").toUpperCase() === "TARDIO").length;
       $("srvStats").innerHTML = [
         `<div class="stat"><strong>${result.rows.length}</strong>Realizados</div>`,
+        `<div class="stat"><strong>${programmed}</strong>Programados</div>`,
+        `<div class="stat"><strong>${unplanned}</strong>No programados</div>`,
         `<div class="stat"><strong>${byInterval["250H"] || 0}</strong>250H</div>`,
         `<div class="stat"><strong>${byInterval["500H"] || 0}</strong>500H</div>`,
         `<div class="stat"><strong>${byInterval["750H"] || 0}</strong>750H</div>`,
@@ -7535,12 +7543,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const number = Number(value || 0);
         return number > 0 ? one(number) : "";
       };
-      $("srvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Servicio</th><th>Programado</th><th>Realizado</th><th>Fecha prog.</th><th>Estado</th><th>OT</th><th>Filtros usados</th><th>Detalle</th></tr></thead><tbody>` +
+      $("srvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Tipo</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Servicio</th><th>Programado</th><th>Realizado</th><th>Fecha prog.</th><th>Estado</th><th>OT</th><th>Filtros usados</th><th>Detalle</th></tr></thead><tbody>` +
         result.rows.map(row => {
           const status = String(row.status || "");
           const cls = status === "A TIEMPO" ? "ok" : (status === "TARDIO" ? "bad" : "warn");
           const service = row.service_interval || row.service_name || "";
-          return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
+          return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.service_type || "Programado")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
         }).join("") +
         `</tbody>`;
     }
@@ -8498,7 +8506,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
-    ["srvEquipment","srvInterval","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
+    ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
     $("srvSearch").addEventListener("input", renderServiceHistory);
     $("renderSrvBtn").addEventListener("click", renderServiceHistory);
     ["bitEquipment","bitStart","bitEnd"].forEach(id => $(id).addEventListener("change", renderBitacora));
