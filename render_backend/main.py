@@ -1272,6 +1272,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         },
         "equipment": equipment,
         "preventives": [],
+        "service_history": [],
         "captures": captures,
         "availability": [],
         "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado", "KPI Aceites", "KPI Llantas"],
@@ -5517,6 +5518,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button class="active" data-tab="dashboard">Dashboard KPI</button>
       <button data-tab="mensual">Reporte mensual</button>
       <button data-tab="preventivos">PR Preventivos</button>
+      <button data-tab="servicios">Servicios realizados</button>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
       <button data-tab="requisiciones">Requisiciones</button>
@@ -5582,6 +5584,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="schedule-strip" id="prCalendar"></div>
       </div>
       <div class="table-wrap"><table id="prTable"></table></div>
+    </section>
+    <section id="servicios" class="view">
+      <div class="panel toolbar">
+        <label>Equipo<select id="srvEquipment"></select></label>
+        <label>Servicio<select id="srvInterval"><option value="">Todos</option><option>250H</option><option>500H</option><option>750H</option><option>1000H</option></select></label>
+        <label>Desde<input id="srvStart" type="date"></label>
+        <label>Hasta<input id="srvEnd" type="date"></label>
+        <label>Buscar<input id="srvSearch" placeholder="Componente, OT, notas"></label>
+        <button class="btn" id="renderSrvBtn">Consultar</button>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3 id="srvTitle">Servicios realizados</h3><span class="muted" id="srvCount"></span></div>
+        <div class="stats" id="srvStats"></div>
+      </div>
+      <div class="table-wrap"><table id="srvTable"></table></div>
     </section>
     <section id="bitacora" class="view">
       <div class="panel toolbar">
@@ -5950,7 +5967,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
     let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
@@ -6005,6 +6022,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function one(v){ return `${Number(v || 0).toFixed(1)}`; }
     function pct(v){ return `${one(v)}%`; }
     function statusClass(s){ return s === "Disponible" ? "ok" : (s === "Faltante" ? "bad" : "warn"); }
+    function shortText(v, limit=130){
+      const text = String(v || "").replace(/\s+/g, " ").trim();
+      return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
+    }
     function setDashboardMode(mode){
       const area = $("kpiPrintArea");
       area.classList.toggle("kpi-format-mode", mode === "format");
@@ -6803,6 +6824,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("kpiStart").value) $("kpiStart").value = period.start || today;
       if(!$("kpiEnd").value) $("kpiEnd").value = period.end || today;
       if(!$("prBase").value) $("prBase").value = period.start || today;
+      if(!$("srvStart").value) $("srvStart").value = period.capture_start || period.start || today;
+      if(!$("srvEnd").value) $("srvEnd").value = period.capture_end || period.end || today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
       if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
       if(!$("dieselStart").value) $("dieselStart").value = diesel.start || period.start || today;
@@ -6819,6 +6842,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("kpiGroup").value = previousGroup && groups.some(g => g.value === previousGroup) ? previousGroup : groups[0]?.value || "";
       const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
       setOptions("prEquipment", equipmentOptions, "Todos");
+      setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
       renderDieselSelectors();
       renderReqEquipmentOptions();
@@ -7465,6 +7489,53 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
       $("prTable").innerHTML = `<thead><tr><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
         result.rows.map(row => `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(row.projected_date || "")}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function filteredServiceHistory(){
+      const selected = $("srvEquipment").value;
+      const interval = $("srvInterval").value;
+      const start = $("srvStart").value;
+      const end = $("srvEnd").value;
+      const search = ($("srvSearch").value || "").toUpperCase();
+      const rows = (Array.isArray(portal.service_history) ? portal.service_history : []).filter(row => {
+        const service = String(row.service_interval || row.service_name || "").toUpperCase();
+        const eqOk = !selected || row.equipment_code === selected;
+        const intervalOk = !interval || service === interval.toUpperCase() || service.includes(interval.toUpperCase());
+        const dateOk = !start || !end || inRange(row.completed_date, start, end);
+        const text = [row.equipment_code,row.equipment_description,row.component,row.service_name,row.service_interval,row.order_number,row.notes,row.status].join(" ").toUpperCase();
+        return eqOk && intervalOk && dateOk && (!search || text.includes(search));
+      }).sort((a,b) => String(b.completed_date || "").localeCompare(String(a.completed_date || "")) || String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")));
+      return {start, end, rows};
+    }
+    function renderServiceHistory(){
+      const result = filteredServiceHistory();
+      $("srvTitle").textContent = `Servicios realizados | ${result.start || ""} a ${result.end || ""}`;
+      $("srvCount").textContent = `${result.rows.length} servicio(s)`;
+      const byInterval = result.rows.reduce((acc, row) => {
+        const key = String(row.service_interval || row.service_name || "S/D").toUpperCase();
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+      const late = result.rows.filter(row => String(row.status || "").toUpperCase() === "TARDIO").length;
+      $("srvStats").innerHTML = [
+        `<div class="stat"><strong>${result.rows.length}</strong>Realizados</div>`,
+        `<div class="stat"><strong>${byInterval["250H"] || 0}</strong>250H</div>`,
+        `<div class="stat"><strong>${byInterval["500H"] || 0}</strong>500H</div>`,
+        `<div class="stat"><strong>${byInterval["750H"] || 0}</strong>750H</div>`,
+        `<div class="stat"><strong>${byInterval["1000H"] || 0}</strong>1000H</div>`,
+        `<div class="stat"><strong>${late}</strong>Tardios</div>`,
+      ].join("");
+      const meter = (value) => {
+        const number = Number(value || 0);
+        return number > 0 ? one(number) : "";
+      };
+      $("srvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Servicio</th><th>Programado</th><th>Realizado</th><th>Fecha prog.</th><th>Estado</th><th>OT</th><th>Detalle</th></tr></thead><tbody>` +
+        result.rows.map(row => {
+          const status = String(row.status || "");
+          const cls = status === "A TIEMPO" ? "ok" : (status === "TARDIO" ? "bad" : "warn");
+          const service = row.service_interval || row.service_name || "";
+          return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
+        }).join("") +
         `</tbody>`;
     }
     function renderBitacora(){
@@ -8396,6 +8467,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderPortalSelectors();
       renderDashboard();
       renderPreventives();
+      renderServiceHistory();
       renderBitacora();
       renderDisponibilidad();
       renderRequisiciones();
@@ -8420,6 +8492,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
+    ["srvEquipment","srvInterval","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
+    $("srvSearch").addEventListener("input", renderServiceHistory);
+    $("renderSrvBtn").addEventListener("click", renderServiceHistory);
     ["bitEquipment","bitStart","bitEnd"].forEach(id => $(id).addEventListener("change", renderBitacora));
     $("bitSearch").addEventListener("input", renderBitacora);
     $("renderBitBtn").addEventListener("click", renderBitacora);
