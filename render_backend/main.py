@@ -6026,6 +6026,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = String(v || "").replace(/\s+/g, " ").trim();
       return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
     }
+    function serviceFiltersText(row){
+      if(row.filters_text) return String(row.filters_text);
+      const notes = String(row.notes || "");
+      const match = notes.match(/Filtros descontados:\s*([^\n]+)/i);
+      return match ? match[1].trim() : "";
+    }
     function setDashboardMode(mode){
       const area = $("kpiPrintArea");
       area.classList.toggle("kpi-format-mode", mode === "format");
@@ -7529,12 +7535,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const number = Number(value || 0);
         return number > 0 ? one(number) : "";
       };
-      $("srvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Servicio</th><th>Programado</th><th>Realizado</th><th>Fecha prog.</th><th>Estado</th><th>OT</th><th>Detalle</th></tr></thead><tbody>` +
+      $("srvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Servicio</th><th>Programado</th><th>Realizado</th><th>Fecha prog.</th><th>Estado</th><th>OT</th><th>Filtros usados</th><th>Detalle</th></tr></thead><tbody>` +
         result.rows.map(row => {
           const status = String(row.status || "");
           const cls = status === "A TIEMPO" ? "ok" : (status === "TARDIO" ? "bad" : "warn");
           const service = row.service_interval || row.service_name || "";
-          return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
+          return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
         }).join("") +
         `</tbody>`;
     }
