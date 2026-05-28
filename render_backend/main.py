@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
@@ -1445,6 +1445,10 @@ def mobile_hose_change_rows(record: dict[str, Any], source_device: str = "", use
     change_date = hose_iso_or_none(record.get("work_date")) or utc_now().date().isoformat()
     system = normalize_text(record.get("system") or "HIDRAULICO")
     location = str(record.get("location") or "").strip()
+    work_type = str(record.get("work_type") or "").strip()
+    failure_reason = str(record.get("failure_reason") or "").strip()
+    meter = max(parse_float(record.get("meter"), 0), 0)
+    downtime_hours = max(parse_float(record.get("downtime_hours"), 0), 0)
     details = str(record.get("details") or record.get("observations") or "").strip()
     supervisor = str(record.get("supervisor") or "").strip()
     mechanic = normalize_text(record.get("mechanic") or record.get("technician") or user_name)
@@ -1464,6 +1468,10 @@ def mobile_hose_change_rows(record: dict[str, Any], source_device: str = "", use
             for part in (
                 f"Conexion: {connection_type}" if connection_type else "",
                 f"Malla: {layers}" if layers else "",
+                f"Tipo: {work_type}" if work_type else "",
+                f"Motivo: {failure_reason}" if failure_reason else "",
+                f"Horometro consulta: {meter:g}" if meter > 0 else "",
+                f"Horas paro: {downtime_hours:g}" if downtime_hours > 0 else "",
                 f"Supervisor: {supervisor}" if supervisor else "",
                 f"Dispositivo: {source_device}" if source_device else "",
                 f"Folio: {folio}" if folio else "",
@@ -1483,7 +1491,7 @@ def mobile_hose_change_rows(record: dict[str, Any], source_device: str = "", use
                 "unit_cost": 0,
                 "estimated_life_days": 30,
                 "estimated_weekly_qty": 0,
-                "failure_reason": location,
+                "failure_reason": " - ".join(part for part in (failure_reason, location) if part),
                 "technician": mechanic,
                 "notes": notes,
                 "source": "mobile",
@@ -3120,17 +3128,21 @@ def group_matches_py(eq: dict[str, Any], group: str) -> bool:
     return True
 
 
-def monthly_kpi_metric(period: float, worked: float, mp: float, mc: float, stops: float) -> dict[str, float]:
+def monthly_kpi_metric(period: float, worked: float, mp: float, mc: float, stops: float, mission_hours: float = 12) -> dict[str, float]:
     available = max(period - mp - mc, 0)
     availability = max(min((available / period) * 100, 100), 0) if period > 0 else 0
     utilization = max(min((worked / available) * 100, 100), 0) if available > 0 else 0
     stop_count = max(stops, 0)
+    tmef = worked / stop_count if stop_count else worked
+    tmpr = mc / stop_count if stop_count else 0
+    reliability = max(min(math.exp(-(mission_hours / tmef)) * 100, 100), 0) if tmef and mission_hours else (100 if worked else 0)
     return {
         "available": available,
         "availability": availability,
         "utilization": utilization,
-        "tmef": worked / stop_count if stop_count else worked,
-        "tmpr": mc / stop_count if stop_count else 0,
+        "tmef": tmef,
+        "tmpr": tmpr,
+        "reliability": reliability,
     }
 
 
@@ -3202,7 +3214,7 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         elif row["capture_status"]:
             row["status"] = row["capture_status"]
         out = row["worked"] <= 0 and (row["unavailable_count"] > 0 or kpi_unavailable_status(row["status"]))
-        metric_values = {"available": 0, "availability": 0, "utilization": 0, "tmef": 0, "tmpr": 0} if out else monthly_kpi_metric(row["period"], row["worked"], row["mp"], row["mc"], row["stops"])
+        metric_values = {"available": 0, "availability": 0, "utilization": 0, "tmef": 0, "tmpr": 0, "reliability": 0} if out else monthly_kpi_metric(row["period"], row["worked"], row["mp"], row["mc"], row["stops"], shift_hours)
         row.update(metric_values)
         row["out"] = out
         row["availability_text"] = "FUERA" if out else f"{row['availability']:.1f}%"
@@ -3221,7 +3233,7 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
     totals["utilization"] = (totals["worked"] / totals["available"] * 100) if totals["available"] else 0
     totals["tmef"] = (totals["worked"] / totals["stops"]) if totals["stops"] else totals["worked"]
     totals["tmpr"] = (totals["mc"] / totals["stops"]) if totals["stops"] else 0
-    totals["reliability"] = totals["availability"]
+    totals["reliability"] = monthly_kpi_metric(totals["period"], totals["worked"], totals["mp"], totals["mc"], totals["stops"], shift_hours)["reliability"]
     return {
         "group": group,
         "start": start,
@@ -3440,7 +3452,7 @@ def ppt_format_pct(value: Any) -> str:
 
 def ppt_add_bar_chart(slide, x: float, y: float, w: float, h: float, rows: list[dict[str, Any]], metric: str = "availability", target: float = 85) -> None:
     ppt_rect(slide, x, y, w, h, "ffffff", PPT_LINE)
-    metric_label = {"availability": "% Disponibilidad", "utilization": "% Utilizacion", "tmef": "TMEF", "tmpr": "TMPR"}.get(metric, "% Disponibilidad")
+    metric_label = {"availability": "% Disponibilidad", "utilization": "% Utilizacion", "tmef": "Confiabilidad (MTBF)", "tmpr": "TMPR"}.get(metric, "% Disponibilidad")
     ppt_text(slide, x + 0.12, y + 0.09, w - 0.24, 0.2, metric_label, 10, True, PPT_TEXT)
     display = rows[:8]
     values = [parse_float(row.get(metric), 0) for row in display]
@@ -3485,7 +3497,7 @@ def monthly_machine_slide(slide, prs: Presentation, portal: dict[str, Any], grou
     cards = [
         ("% Disponibilidad", ppt_format_pct(totals["availability"]), f"Meta {ppt_format_pct(target_availability)}", ppt_metric_progress(totals["availability"], target_availability), totals["availability"] < target_availability),
         ("% Utilizacion", ppt_format_pct(totals["utilization"]), f"Meta {ppt_format_pct(target_utilization)}", ppt_metric_progress(totals["utilization"], target_utilization), totals["utilization"] < target_utilization),
-        ("TMEF", f"{ppt_format_number(totals['tmef'])} h", f"Meta {ppt_format_number(target_tmef)} h", ppt_metric_progress(totals["tmef"], target_tmef), totals["tmef"] < target_tmef),
+        ("Confiabilidad (MTBF)", f"{ppt_format_number(totals['tmef'])} h", f"Meta {ppt_format_number(target_tmef)} h", ppt_metric_progress(totals["tmef"], target_tmef), totals["tmef"] < target_tmef),
         ("TMPR", f"{ppt_format_number(totals['tmpr'])} h", f"Meta {ppt_format_number(target_tmpr)} h", ppt_metric_progress(totals["tmpr"], target_tmpr, True), totals["tmpr"] > target_tmpr),
     ]
     for idx, (label, value, note, progress, bad) in enumerate(cards):
@@ -3523,7 +3535,7 @@ def monthly_machine_slide(slide, prs: Presentation, portal: dict[str, Any], grou
         "",
     ])
     ppt_text(slide, 0.35, 4.18, sw - 0.7, 0.18, "REPORTE MENSUAL DE INDICADORES", 10, True, PPT_TEXT, PP_ALIGN.CENTER)
-    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "TMEF", "TMPR", "Estatus"]
+    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "Confiab. MTBF", "MTTR", "Estatus"]
     weights = [0.55, 1.9, 0.85, 0.7, 0.7, 0.75, 0.7, 0.7, 0.7, 0.62, 0.62, 1.0]
     ppt_add_table(slide, 0.32, 4.45, sw - 0.64, 2.55, headers, display_rows, weights, 5.4, {1})
 
@@ -3807,7 +3819,7 @@ def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start
     pil_monthly_metric_card(draw, (0, y2 + 28, card_w, y2 + 28 + card_h), f"{totals['utilization']:.1f} %", "#d36b73", f"Meta {target_utilization:.1f}%", value_font, small_font, totals["utilization"] / 100)
     pil_monthly_metric_card(draw, (card_w + gap, y2 + 28, side_w, y2 + 28 + card_h), f"{target_utilization:.1f} %", "#d36b73", f"{totals['utilization'] - target_utilization:+.1f}%", value_font, small_font, target_utilization / 100)
 
-    pil_center(draw, (right_x + side_w / 2, y_top + 11), "TMEF", section_font, "#7a7d82")
+    pil_center(draw, (right_x + side_w / 2, y_top + 11), "Confiabilidad", section_font, "#7a7d82")
     pil_monthly_metric_card(draw, (right_x, y_top + 28, right_x + card_w, y_top + 28 + card_h), f"{totals['tmef']:.1f} hrs", MGA_TEAL, f"Meta {target_tmef:.1f} h", value_font, small_font, min(totals["tmef"] / max(target_tmef, 1), 1))
     pil_monthly_metric_card(draw, (right_x + card_w + gap, y_top + 28, w, y_top + 28 + card_h), f"{target_tmef:.1f} hrs", "#c00000", f"{totals['tmef'] - target_tmef:+.1f} h", value_font, small_font, 0.36)
 
@@ -3821,7 +3833,7 @@ def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start
     chart_h = int(h * 0.75)
     draw.rectangle((chart_x, chart_y, chart_x + chart_w, chart_y + chart_h), fill="white")
     draw.text((chart_x + 5, chart_y + 5), "KPI", font=small_font, fill="#333333")
-    labels = ["% Disponibilidad", "% Utilizacion", "TMEF", "TMPR"]
+    labels = ["% Disponibilidad", "% Utilizacion", "Confiabilidad", "TMPR"]
     tab_y = chart_y + 24
     tab_w = (chart_w - 20) // 4
     for idx, label in enumerate(labels):
@@ -3885,7 +3897,7 @@ def create_monthly_kpi_table_image(portal: dict[str, Any], group: str, start: st
     pil_center(draw, (int(w * 0.73), int(h * 0.145)), str(report["end_day"]), title_font, "#111111")
 
     table_top = int(h * 0.22)
-    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "TMEF", "TMPR", "Confiabilidad", "Estatus"]
+    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "Confiab. MTBF", "MTTR", "Conf. %", "Estatus"]
     weights = [0.55, 1.95, 0.8, 0.75, 0.75, 0.75, 0.8, 0.75, 0.75, 0.75, 0.75, 0.95, 1.25]
     total_weight = sum(weights)
     widths = [int(w * weight / total_weight) for weight in weights]
@@ -4604,11 +4616,6 @@ def health() -> dict[str, Any]:
         "database": database_status(),
         "generated_at": utc_now().isoformat(timespec="seconds"),
     }
-
-
-@app.get("/", include_in_schema=False)
-def home() -> RedirectResponse:
-    return RedirectResponse(url="/almacen-filtros", status_code=307)
 
 
 @app.get("/favicon.ico")
@@ -6284,15 +6291,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
           </div>
           <div class="kpi-chart-panel"><div class="kpi-tabs">${tabs}</div><div class="kpi-bars">${bars}</div><div style="text-align:center;margin-top:8px;font-weight:700;color:#52627a">${esc(metricLabel)}</div></div>
           <div class="kpi-card-grid">
-            <div class="kpi-card ${report.totals.tmef < targets.tmef ? "bad" : ""}"><h3>TMEF</h3><strong>${one(report.totals.tmef)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmef, targets.tmef)}%"></i></div><small>Meta ${one(targets.tmef)} h</small></div>
-            <div class="kpi-card"><h3>Meta</h3><strong>${one(targets.tmef)} hrs</strong><div class="bar"><i style="width:100%"></i></div><small>${one(report.totals.tmef - targets.tmef)} h</small></div>
+            <div class="kpi-card ${report.totals.tmef < targets.tmef ? "bad" : ""}"><h3>Confiabilidad</h3><strong>${one(report.totals.tmef)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmef, targets.tmef)}%"></i></div><small>MTBF meta ${one(targets.tmef)} h</small></div>
+            <div class="kpi-card"><h3>Meta MTBF</h3><strong>${one(targets.tmef)} hrs</strong><div class="bar"><i style="width:100%"></i></div><small>${one(report.totals.tmef - targets.tmef)} h</small></div>
             <div class="kpi-card ${report.totals.tmpr > targets.tmpr ? "bad" : ""}"><h3>TMPR</h3><strong>${one(report.totals.tmpr)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmpr, targets.tmpr, true)}%"></i></div><small>Meta ${one(targets.tmpr)} h</small></div>
             <div class="kpi-card"><h3>Meta</h3><strong>${one(targets.tmpr)} hrs</strong><div class="bar"><i style="width:100%"></i></div><small>${one(targets.tmpr - report.totals.tmpr)} h</small></div>
           </div>
         </div>
         <div class="kpi-report-name">REPORTE SEMANAL DE INDICADORES</div>
         <div class="kpi-days"><span>Dia Inicial:<b>${Number(String(report.start).slice(-2))}</b></span><span>Dia Final:<b>${Number(String(report.end).slice(-2))}</b></span></div>
-        <div class="kpi-table-wrap"><table class="kpi-exact-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs Periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs Trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>${tableRows}<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody></table></div>
+        <div class="kpi-table-wrap"><table class="kpi-exact-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs Periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs Trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>Confiab. MTBF</th><th>MTTR</th><th>Estatus</th></tr></thead><tbody>${tableRows}<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody></table></div>
       </section>`;
     }
     function exactOilHtml(){
@@ -6775,17 +6782,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(key.includes("REZAGADO")) return code.startsWith("ST") || text.includes("SCOOP") || text.includes("CATERPILLAR") || text.includes("EPROC") || text.includes("R1300") || text.includes("R1600") || text.includes("REZAG");
       return true;
     }
-    function metric(period, worked, mp, mc, stops){
+    function metric(period, worked, mp, mc, stops, missionHours=12){
       const available = Math.max(Number(period || 0) - Number(mp || 0) - Number(mc || 0), 0);
       const availability = period > 0 ? Math.max(Math.min((available / period) * 100, 100), 0) : 0;
       const utilization = available > 0 ? Math.max(Math.min((Number(worked || 0) / available) * 100, 100), 0) : 0;
       const stopCount = Math.max(Number(stops || 0), 0);
+      const tmef = stopCount ? (Number(worked || 0) / stopCount) : Number(worked || 0);
+      const tmpr = stopCount ? (Number(mc || 0) / stopCount) : 0;
+      const reliability = tmef && missionHours ? Math.max(Math.min(Math.exp(-(Number(missionHours || 0) / tmef)) * 100, 100), 0) : (Number(worked || 0) > 0 ? 100 : 0);
       return {
         available,
         availability,
         utilization,
-        tmef: stopCount ? (Number(worked || 0) / stopCount) : Number(worked || 0),
-        tmpr: stopCount ? (Number(mc || 0) / stopCount) : 0,
+        tmef,
+        tmpr,
+        reliability,
       };
     }
     function setOptions(selectId, options, allLabel="Todos"){
@@ -6900,7 +6911,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         if(row.availabilityStatus) row.status = row.availabilityStatus;
         else if(row.captureStatus) row.status = row.captureStatus;
         const out = row.worked <= 0 && (row.unavailableCount > 0 || unavailable(row.status));
-        const m = out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops);
+        const m = out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops, shiftHours);
         return {...row, ...m, out, availabilityText: out ? "FUERA" : pct(m.availability), utilizationText: out ? "FUERA" : pct(m.utilization)};
       });
       const totals = rows.reduce((acc, row) => {
@@ -6911,12 +6922,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       totals.utilization = totals.available ? (totals.worked / totals.available) * 100 : 0;
       totals.tmef = totals.stops ? totals.worked / totals.stops : totals.worked;
       totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
+      totals.reliability = metric(totals.period, totals.worked, totals.mp, totals.mc, totals.stops, shiftHours).reliability;
       return {group, start, end, rows, totals};
     }
     const kpiMetricTabs = [
       {key:"availability", label:"% Disponibilidad"},
       {key:"utilization", label:"% Utilizacion"},
-      {key:"tmef", label:"TMEF"},
+      {key:"tmef", label:"Confiabilidad"},
       {key:"tmpr", label:"TMPR"},
     ];
     function kpiMetricValue(row, metric){
@@ -7453,14 +7465,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         metricCardHtml("Meta", pct(metaUtilization), `${one(report.totals.utilization - metaUtilization)}%`, metaUtilization, report.totals.utilization < metaUtilization),
       ].join("");
       $("kpiSideCards").innerHTML = [
-        metricCardHtml("TMEF", `${one(report.totals.tmef)} h`, `Meta ${one(metaTmef)} h`, Math.min((report.totals.tmef / Math.max(metaTmef, 1)) * 100, 100), report.totals.tmef < metaTmef),
-        metricCardHtml("Meta", `${one(metaTmef)} h`, `${one(report.totals.tmef - metaTmef)} h`, 100, false),
+        metricCardHtml("Confiabilidad (MTBF)", `${one(report.totals.tmef)} h`, `Meta ${one(metaTmef)} h`, Math.min((report.totals.tmef / Math.max(metaTmef, 1)) * 100, 100), report.totals.tmef < metaTmef),
+        metricCardHtml("Meta MTBF", `${one(metaTmef)} h`, `${one(report.totals.tmef - metaTmef)} h`, 100, false),
         metricCardHtml("TMPR", `${one(report.totals.tmpr)} h`, `Meta ${one(metaTmpr)} h`, Math.min((report.totals.tmpr / Math.max(metaTmpr, 1)) * 100, 100), report.totals.tmpr > metaTmpr),
         metricCardHtml("Meta", `${one(metaTmpr)} h`, `${one(metaTmpr - report.totals.tmpr)} h`, 100, report.totals.tmpr > metaTmpr),
       ].join("");
       $("kpiChart").innerHTML = kpiMetricChartHtml(report, settings);
       bindKpiMetricTabs();
-      $("kpiTable").innerHTML = `<thead><tr><th># Eco</th><th>Equipo</th><th>Hrs periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>` +
+      $("kpiTable").innerHTML = `<thead><tr><th># Eco</th><th>Equipo</th><th>Hrs periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>Confiab. MTBF</th><th>MTTR</th><th>Estatus</th></tr></thead><tbody>` +
         report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td>${esc(row.availabilityText)}</td><td>${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("") +
         `<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody>`;
     }
