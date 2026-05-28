@@ -1266,6 +1266,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
             "turns_per_day": 2,
             "meta_availability": 85,
             "meta_utilization": 75,
+            "meta_reliability": 80,
             "meta_tmef": 8,
             "meta_tmpr": 4,
             "meta_diesel_lh": 25,
@@ -3452,11 +3453,11 @@ def ppt_format_pct(value: Any) -> str:
 
 def ppt_add_bar_chart(slide, x: float, y: float, w: float, h: float, rows: list[dict[str, Any]], metric: str = "availability", target: float = 85) -> None:
     ppt_rect(slide, x, y, w, h, "ffffff", PPT_LINE)
-    metric_label = {"availability": "% Disponibilidad", "utilization": "% Utilizacion", "tmef": "Confiabilidad (MTBF)", "tmpr": "TMPR"}.get(metric, "% Disponibilidad")
+    metric_label = {"availability": "% Disponibilidad", "utilization": "% Utilizacion", "reliability": "Confiabilidad", "tmef": "TMEF", "tmpr": "TMPR"}.get(metric, "% Disponibilidad")
     ppt_text(slide, x + 0.12, y + 0.09, w - 0.24, 0.2, metric_label, 10, True, PPT_TEXT)
     display = rows[:8]
     values = [parse_float(row.get(metric), 0) for row in display]
-    axis_max = 120 if metric in {"availability", "utilization"} else max([target, *values, 1]) * 1.18
+    axis_max = 120 if metric in {"availability", "utilization", "reliability"} else max([target, *values, 1]) * 1.18
     plot_x, plot_y = x + 0.35, y + 0.5
     plot_w, plot_h = w - 0.65, h - 0.9
     for idx in range(6):
@@ -3469,14 +3470,14 @@ def ppt_add_bar_chart(slide, x: float, y: float, w: float, h: float, rows: list[
     bar_w = max((plot_w - gap * (len(display) + 1)) / len(display), 0.24)
     for idx, row in enumerate(display):
         value = parse_float(row.get(metric), 0)
-        label = "FUERA" if row.get("out") and metric in {"availability", "utilization"} else ppt_format_number(value)
+        label = "FUERA" if row.get("out") and metric in {"availability", "utilization", "reliability"} else ppt_format_number(value)
         bh = max(min(value / max(axis_max, 1), 1) * plot_h, 0.04)
         bx = plot_x + gap + idx * (bar_w + gap)
         by = plot_y + plot_h - bh
         ppt_rect(slide, bx, by, bar_w, bh, PPT_TEAL, None)
         ppt_text(slide, bx - 0.05, by - 0.22, bar_w + 0.1, 0.15, label, 6.3, False, PPT_TEXT, PP_ALIGN.CENTER)
         ppt_text(slide, bx - 0.08, plot_y + plot_h + 0.07, bar_w + 0.16, 0.16, row.get("code") or "-", 6.2, True, PPT_TEXT, PP_ALIGN.CENTER)
-    if metric in {"availability", "utilization"}:
+    if metric in {"availability", "utilization", "reliability"}:
         target_y = plot_y + plot_h - min(target / 120, 1) * plot_h
         ppt_rect(slide, plot_x, target_y, plot_w, 0.012, PPT_RED, None)
 
@@ -3487,21 +3488,23 @@ def monthly_machine_slide(slide, prs: Presentation, portal: dict[str, Any], grou
     settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
     target_availability = parse_float(settings.get("meta_availability"), 85) or 85
     target_utilization = parse_float(settings.get("meta_utilization"), 75) or 75
+    target_reliability = parse_float(settings.get("meta_reliability"), 80) or 80
     target_tmef = parse_float(settings.get("meta_tmef"), 8) or 8
     target_tmpr = parse_float(settings.get("meta_tmpr"), 4) or 4
     totals = report["totals"]
     sw, _ = ppt_slide_size(prs)
     ppt_add_header(slide, prs, group, f"{month_name} {year} | {start} a {end}")
-    card_w = (sw - 0.7 - 0.24 * 3) / 4
+    card_w = (sw - 0.7 - 0.18 * 4) / 5
     card_y = 0.82
     cards = [
         ("% Disponibilidad", ppt_format_pct(totals["availability"]), f"Meta {ppt_format_pct(target_availability)}", ppt_metric_progress(totals["availability"], target_availability), totals["availability"] < target_availability),
         ("% Utilizacion", ppt_format_pct(totals["utilization"]), f"Meta {ppt_format_pct(target_utilization)}", ppt_metric_progress(totals["utilization"], target_utilization), totals["utilization"] < target_utilization),
-        ("Confiabilidad (MTBF)", f"{ppt_format_number(totals['tmef'])} h", f"Meta {ppt_format_number(target_tmef)} h", ppt_metric_progress(totals["tmef"], target_tmef), totals["tmef"] < target_tmef),
+        ("Confiabilidad", ppt_format_pct(totals["reliability"]), f"Meta {ppt_format_pct(target_reliability)}", ppt_metric_progress(totals["reliability"], target_reliability), totals["reliability"] < target_reliability),
+        ("TMEF", f"{ppt_format_number(totals['tmef'])} h", f"Meta {ppt_format_number(target_tmef)} h", ppt_metric_progress(totals["tmef"], target_tmef), totals["tmef"] < target_tmef),
         ("TMPR", f"{ppt_format_number(totals['tmpr'])} h", f"Meta {ppt_format_number(target_tmpr)} h", ppt_metric_progress(totals["tmpr"], target_tmpr, True), totals["tmpr"] > target_tmpr),
     ]
     for idx, (label, value, note, progress, bad) in enumerate(cards):
-        ppt_metric_card(slide, 0.35 + idx * (card_w + 0.24), card_y, card_w, 0.78, label, value, note, progress, bad)
+        ppt_metric_card(slide, 0.35 + idx * (card_w + 0.18), card_y, card_w, 0.78, label, value, note, progress, bad)
     ppt_add_bar_chart(slide, 0.35, 1.82, sw - 0.7, 2.18, report["rows"], "availability", target_availability)
     display_rows = [
         [
@@ -3514,6 +3517,7 @@ def monthly_machine_slide(slide, prs: Presentation, portal: dict[str, Any], grou
             ppt_format_number(row.get("stops"), 0),
             row.get("availability_text"),
             row.get("utilization_text"),
+            ppt_format_pct(row.get("reliability")),
             ppt_format_number(row.get("tmef")),
             ppt_format_number(row.get("tmpr")),
             "FUERA" if row.get("out") else row.get("status"),
@@ -3530,13 +3534,14 @@ def monthly_machine_slide(slide, prs: Presentation, portal: dict[str, Any], grou
         ppt_format_number(totals["stops"], 0),
         ppt_format_pct(totals["availability"]),
         ppt_format_pct(totals["utilization"]),
+        ppt_format_pct(totals["reliability"]),
         ppt_format_number(totals["tmef"]),
         ppt_format_number(totals["tmpr"]),
         "",
     ])
     ppt_text(slide, 0.35, 4.18, sw - 0.7, 0.18, "REPORTE MENSUAL DE INDICADORES", 10, True, PPT_TEXT, PP_ALIGN.CENTER)
-    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "Confiab. MTBF", "MTTR", "Estatus"]
-    weights = [0.55, 1.9, 0.85, 0.7, 0.7, 0.75, 0.7, 0.7, 0.7, 0.62, 0.62, 1.0]
+    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "Confiabilidad", "TMEF", "TMPR", "Estatus"]
+    weights = [0.5, 1.65, 0.76, 0.62, 0.62, 0.68, 0.62, 0.62, 0.62, 0.82, 0.58, 0.58, 0.9]
     ppt_add_table(slide, 0.32, 4.45, sw - 0.64, 2.55, headers, display_rows, weights, 5.4, {1})
 
 
@@ -3786,6 +3791,7 @@ def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start
     settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
     target_availability = parse_float(settings.get("meta_availability"), 85) or 85
     target_utilization = parse_float(settings.get("meta_utilization"), 75) or 75
+    target_reliability = parse_float(settings.get("meta_reliability"), 80) or 80
     target_tmef = parse_float(settings.get("meta_tmef"), 8) or 8
     target_tmpr = parse_float(settings.get("meta_tmpr"), 4) or 4
     w, h = size
@@ -3819,13 +3825,21 @@ def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start
     pil_monthly_metric_card(draw, (0, y2 + 28, card_w, y2 + 28 + card_h), f"{totals['utilization']:.1f} %", "#d36b73", f"Meta {target_utilization:.1f}%", value_font, small_font, totals["utilization"] / 100)
     pil_monthly_metric_card(draw, (card_w + gap, y2 + 28, side_w, y2 + 28 + card_h), f"{target_utilization:.1f} %", "#d36b73", f"{totals['utilization'] - target_utilization:+.1f}%", value_font, small_font, target_utilization / 100)
 
+    right_card_h = int(h * 0.155)
+    right_gap_y = int(h * 0.205)
     pil_center(draw, (right_x + side_w / 2, y_top + 11), "Confiabilidad", section_font, "#7a7d82")
-    pil_monthly_metric_card(draw, (right_x, y_top + 28, right_x + card_w, y_top + 28 + card_h), f"{totals['tmef']:.1f} hrs", MGA_TEAL, f"Meta {target_tmef:.1f} h", value_font, small_font, min(totals["tmef"] / max(target_tmef, 1), 1))
-    pil_monthly_metric_card(draw, (right_x + card_w + gap, y_top + 28, w, y_top + 28 + card_h), f"{target_tmef:.1f} hrs", "#c00000", f"{totals['tmef'] - target_tmef:+.1f} h", value_font, small_font, 0.36)
+    pil_monthly_metric_card(draw, (right_x, y_top + 28, right_x + card_w, y_top + 28 + right_card_h), f"{totals['reliability']:.1f} %", MGA_TEAL, f"Meta {target_reliability:.1f}%", value_font, small_font, totals["reliability"] / 100)
+    pil_monthly_metric_card(draw, (right_x + card_w + gap, y_top + 28, w, y_top + 28 + right_card_h), f"{target_reliability:.1f} %", MGA_TEAL, f"{totals['reliability'] - target_reliability:+.1f}%", value_font, small_font, target_reliability / 100)
 
-    pil_center(draw, (right_x + side_w / 2, y2 + 11), "TMPR", section_font, "#7a7d82")
-    pil_monthly_metric_card(draw, (right_x, y2 + 28, right_x + card_w, y2 + 28 + card_h), f"{totals['tmpr']:.1f} hrs", "#d36b73", f"Meta {target_tmpr:.1f} h", value_font, small_font, min(totals["tmpr"] / max(target_tmpr, 1), 1))
-    pil_monthly_metric_card(draw, (right_x + card_w + gap, y2 + 28, w, y2 + 28 + card_h), f"{target_tmpr:.1f} hrs", "#d36b73", f"{target_tmpr - totals['tmpr']:+.1f} h", value_font, small_font, 0.38)
+    y_tmef = y_top + right_gap_y
+    pil_center(draw, (right_x + side_w / 2, y_tmef + 11), "TMEF", section_font, "#7a7d82")
+    pil_monthly_metric_card(draw, (right_x, y_tmef + 28, right_x + card_w, y_tmef + 28 + right_card_h), f"{totals['tmef']:.1f} hrs", MGA_TEAL, f"Meta {target_tmef:.1f} h", value_font, small_font, min(totals["tmef"] / max(target_tmef, 1), 1))
+    pil_monthly_metric_card(draw, (right_x + card_w + gap, y_tmef + 28, w, y_tmef + 28 + right_card_h), f"{target_tmef:.1f} hrs", "#c00000", f"{totals['tmef'] - target_tmef:+.1f} h", value_font, small_font, 0.36)
+
+    y_tmpr = y_top + right_gap_y * 2
+    pil_center(draw, (right_x + side_w / 2, y_tmpr + 11), "TMPR", section_font, "#7a7d82")
+    pil_monthly_metric_card(draw, (right_x, y_tmpr + 28, right_x + card_w, y_tmpr + 28 + right_card_h), f"{totals['tmpr']:.1f} hrs", "#d36b73", f"Meta {target_tmpr:.1f} h", value_font, small_font, min(totals["tmpr"] / max(target_tmpr, 1), 1))
+    pil_monthly_metric_card(draw, (right_x + card_w + gap, y_tmpr + 28, w, y_tmpr + 28 + right_card_h), f"{target_tmpr:.1f} hrs", "#d36b73", f"{target_tmpr - totals['tmpr']:+.1f} h", value_font, small_font, 0.38)
 
     chart_x = center_x
     chart_y = int(h * 0.12)
@@ -3833,12 +3847,12 @@ def create_monthly_kpi_dashboard_image(portal: dict[str, Any], group: str, start
     chart_h = int(h * 0.75)
     draw.rectangle((chart_x, chart_y, chart_x + chart_w, chart_y + chart_h), fill="white")
     draw.text((chart_x + 5, chart_y + 5), "KPI", font=small_font, fill="#333333")
-    labels = ["% Disponibilidad", "% Utilizacion", "Confiabilidad", "TMPR"]
+    labels = ["% Disponibilidad", "% Utilizacion", "Confiabilidad", "TMEF", "TMPR"]
     tab_y = chart_y + 24
-    tab_w = (chart_w - 20) // 4
+    tab_w = (chart_w - 20) // 5
     for idx, label in enumerate(labels):
         tx = chart_x + 5 + idx * (tab_w + 4)
-        fill = MGA_TEAL if idx in (0, 2, 3) else "white"
+        fill = MGA_TEAL if idx == 0 else "white"
         draw.rounded_rectangle((tx, tab_y, tx + tab_w, tab_y + 24), radius=3, fill=fill, outline="#222222", width=1)
         draw.text((tx + 7, tab_y + 6), label, font=tab_font, fill="#111111")
     plot_x = chart_x + int(chart_w * 0.08)
@@ -3897,8 +3911,8 @@ def create_monthly_kpi_table_image(portal: dict[str, Any], group: str, start: st
     pil_center(draw, (int(w * 0.73), int(h * 0.145)), str(report["end_day"]), title_font, "#111111")
 
     table_top = int(h * 0.22)
-    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "Confiab. MTBF", "MTTR", "Conf. %", "Estatus"]
-    weights = [0.55, 1.95, 0.8, 0.75, 0.75, 0.75, 0.8, 0.75, 0.75, 0.75, 0.75, 0.95, 1.25]
+    headers = ["# Eco", "Equipo", "Hrs Periodo", "Hrs MP", "Hrs MC", "Hrs Trab", "# Paradas", "% Disp", "% Util", "Confiabilidad", "TMEF", "TMPR", "Estatus"]
+    weights = [0.55, 1.95, 0.8, 0.75, 0.75, 0.75, 0.8, 0.75, 0.75, 0.95, 0.75, 0.75, 1.25]
     total_weight = sum(weights)
     widths = [int(w * weight / total_weight) for weight in weights]
     widths[-1] += w - sum(widths)
@@ -3944,20 +3958,20 @@ def create_monthly_kpi_table_image(portal: dict[str, Any], group: str, start: st
             f"{row.stops}",
             kpi_availability_text_py(row),
             kpi_utilization_text_py(row),
+            f"{row.reliability:.0f}%",
             f"{row.tmef:.1f}",
             f"{row.tmpr:.1f}",
-            f"{row.reliability:.0f}%",
             row.status,
         ]
         x = 0
         for cidx, (value, col_w) in enumerate(zip(values, widths)):
-            cell_fill = "#ffd966" if is_total and cidx == 11 and "rezagado" not in group.lower() else fill
+            cell_fill = fill
             text_fill = "#666666"
             if value == "FUERA":
                 text_fill = "#c76870"
-            elif cidx == 7:
+            elif cidx in (7, 9):
                 text_fill = MGA_TEAL
-            elif cidx in (8, 10) and (is_total or row.utilization < 50):
+            elif cidx in (8, 11) and (is_total or row.utilization < 50):
                 text_fill = "#c76870"
             elif cidx == 12 and value:
                 text_fill = "#c76870" if kpi_unavailable_status(value) else MGA_TEAL
@@ -4056,12 +4070,10 @@ def create_monthly_diesel_image(portal: dict[str, Any], path: Path, size: tuple[
     w, h = size
     img = Image.new("RGB", size, "#f4f7fb")
     draw = ImageDraw.Draw(img)
-    title_font = pil_font(max(24, int(w * 0.022)), True)
     subtitle_font = pil_font(max(13, int(w * 0.011)), True)
     card_label_font = pil_font(max(13, int(w * 0.010)), True)
     card_value_font = pil_font(max(26, int(w * 0.024)), True)
     small_font = pil_font(max(10, int(w * 0.008)))
-    axis_font = pil_font(max(10, int(w * 0.008)), True)
     table_font = pil_font(max(10, int(w * 0.008)))
     table_bold = pil_font(max(10, int(w * 0.008)), True)
 
@@ -6266,6 +6278,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const targets = {
         availability:Number(settings.meta_availability || 85),
         utilization:Number(settings.meta_utilization || 75),
+        reliability:Number(settings.meta_reliability || 80),
         tmef:Number(settings.meta_tmef || 8),
         tmpr:Number(settings.meta_tmpr || 4),
       };
@@ -6279,7 +6292,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const height = Math.max(Math.min(value / Math.max(axisMax, 1), 1) * 210, 4);
         return `<div class="kpi-bar ${row.out ? "out" : ""}"><em>${esc(kpiMetricText(row, metric))}</em><i style="--h:${height}px"></i><b>${esc(row.code || "-")}</b></div>`;
       }).join("") || `<p>Sin datos KPI.</p>`;
-      const tableRows = report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td class="${row.availability < targets.availability ? "badtext" : "oktext"}">${esc(row.availabilityText)}</td><td class="${row.utilization < targets.utilization ? "badtext" : "oktext"}">${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("");
+      const tableRows = report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td class="${row.availability < targets.availability ? "badtext" : "oktext"}">${esc(row.availabilityText)}</td><td class="${row.utilization < targets.utilization ? "badtext" : "oktext"}">${esc(row.utilizationText)}</td><td class="${row.reliability < targets.reliability ? "badtext" : "oktext"}">${pct(row.reliability)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("");
       return `<section class="kpi-sheet">
         <div class="kpi-title-row"><div class="kpi-logo">MGA</div>${esc(report.group)}</div>
         <div class="kpi-board">
@@ -6291,15 +6304,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
           </div>
           <div class="kpi-chart-panel"><div class="kpi-tabs">${tabs}</div><div class="kpi-bars">${bars}</div><div style="text-align:center;margin-top:8px;font-weight:700;color:#52627a">${esc(metricLabel)}</div></div>
           <div class="kpi-card-grid">
-            <div class="kpi-card ${report.totals.tmef < targets.tmef ? "bad" : ""}"><h3>Confiabilidad</h3><strong>${one(report.totals.tmef)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmef, targets.tmef)}%"></i></div><small>MTBF meta ${one(targets.tmef)} h</small></div>
-            <div class="kpi-card"><h3>Meta MTBF</h3><strong>${one(targets.tmef)} hrs</strong><div class="bar"><i style="width:100%"></i></div><small>${one(report.totals.tmef - targets.tmef)} h</small></div>
+            <div class="kpi-card ${report.totals.reliability < targets.reliability ? "bad" : ""}"><h3>Confiabilidad</h3><strong>${pct(report.totals.reliability)}</strong><div class="bar"><i style="width:${metricProgress(report.totals.reliability, targets.reliability)}%"></i></div><small>Meta ${pct(targets.reliability)}</small></div>
+            <div class="kpi-card ${report.totals.tmef < targets.tmef ? "bad" : ""}"><h3>TMEF</h3><strong>${one(report.totals.tmef)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmef, targets.tmef)}%"></i></div><small>Meta ${one(targets.tmef)} h</small></div>
             <div class="kpi-card ${report.totals.tmpr > targets.tmpr ? "bad" : ""}"><h3>TMPR</h3><strong>${one(report.totals.tmpr)} hrs</strong><div class="bar"><i style="width:${metricProgress(report.totals.tmpr, targets.tmpr, true)}%"></i></div><small>Meta ${one(targets.tmpr)} h</small></div>
-            <div class="kpi-card"><h3>Meta</h3><strong>${one(targets.tmpr)} hrs</strong><div class="bar"><i style="width:100%"></i></div><small>${one(targets.tmpr - report.totals.tmpr)} h</small></div>
+            <div class="kpi-card"><h3>Meta Conf.</h3><strong>${pct(targets.reliability)}</strong><div class="bar"><i style="width:${targets.reliability}%"></i></div><small>${one(report.totals.reliability - targets.reliability)}%</small></div>
           </div>
         </div>
         <div class="kpi-report-name">REPORTE SEMANAL DE INDICADORES</div>
         <div class="kpi-days"><span>Dia Inicial:<b>${Number(String(report.start).slice(-2))}</b></span><span>Dia Final:<b>${Number(String(report.end).slice(-2))}</b></span></div>
-        <div class="kpi-table-wrap"><table class="kpi-exact-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs Periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs Trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>Confiab. MTBF</th><th>MTTR</th><th>Estatus</th></tr></thead><tbody>${tableRows}<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody></table></div>
+        <div class="kpi-table-wrap"><table class="kpi-exact-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs Periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs Trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>Confiabilidad</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>${tableRows}<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${pct(report.totals.reliability)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody></table></div>
       </section>`;
     }
     function exactOilHtml(){
@@ -6928,21 +6941,24 @@ WAREHOUSE_HTML = r"""<!doctype html>
     const kpiMetricTabs = [
       {key:"availability", label:"% Disponibilidad"},
       {key:"utilization", label:"% Utilizacion"},
-      {key:"tmef", label:"Confiabilidad"},
+      {key:"reliability", label:"Confiabilidad"},
+      {key:"tmef", label:"TMEF"},
       {key:"tmpr", label:"TMPR"},
     ];
     function kpiMetricValue(row, metric){
       if(metric === "utilization") return Number(row.utilization || 0);
+      if(metric === "reliability") return Number(row.reliability || 0);
       if(metric === "tmef") return Number(row.tmef || 0);
       if(metric === "tmpr") return Number(row.tmpr || 0);
       return Number(row.availability || 0);
     }
     function kpiMetricText(row, metric){
-      if((metric === "availability" || metric === "utilization") && row.out) return "FUERA";
-      return one(kpiMetricValue(row, metric));
+      if((metric === "availability" || metric === "utilization" || metric === "reliability") && row.out) return "FUERA";
+      const value = kpiMetricValue(row, metric);
+      return (metric === "availability" || metric === "utilization" || metric === "reliability") ? pct(value) : one(value);
     }
     function kpiMetricAxisMax(metric, rows, target){
-      if(metric === "availability" || metric === "utilization") return 120;
+      if(metric === "availability" || metric === "utilization" || metric === "reliability") return 120;
       const peak = Math.max(Number(target || 0), ...rows.map(row => kpiMetricValue(row, metric)), 1);
       if(peak <= 5) return 5;
       if(peak <= 10) return 10;
@@ -6954,6 +6970,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const targets = {
         availability: Number(settings.meta_availability || 85),
         utilization: Number(settings.meta_utilization || 75),
+        reliability: Number(settings.meta_reliability || 80),
         tmef: Number(settings.meta_tmef || 8),
         tmpr: Number(settings.meta_tmpr || 4),
       };
@@ -6961,7 +6978,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const chartBars = report.rows.map(row => {
         const value = kpiMetricValue(row, metric);
         const h = Math.max(Math.min(value / Math.max(axisMax, 1), 1) * 210, 4);
-        const outClass = row.out && (metric === "availability" || metric === "utilization") ? "out" : "";
+        const outClass = row.out && (metric === "availability" || metric === "utilization" || metric === "reliability") ? "out" : "";
         const title = `${row.code} ${kpiMetricTabs.find(item => item.key === metric)?.label || ""}: ${kpiMetricText(row, metric)}`;
         return `<div class="chart-bar ${outClass}" title="${esc(title)}"><span>${esc(kpiMetricText(row, metric))}</span><i style="--h:${h}px"></i><b>${esc(row.code)}</b></div>`;
       }).join("") || `<p class="muted">Sin datos KPI para el periodo.</p>`;
@@ -7456,6 +7473,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("kpiTitle").textContent = `${report.group} | ${report.start} a ${report.end}`;
       const metaAvailability = Number(settings.meta_availability || 85);
       const metaUtilization = Number(settings.meta_utilization || 75);
+      const metaReliability = Number(settings.meta_reliability || 80);
       const metaTmef = Number(settings.meta_tmef || 8);
       const metaTmpr = Number(settings.meta_tmpr || 4);
       $("kpiCards").innerHTML = [
@@ -7465,16 +7483,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
         metricCardHtml("Meta", pct(metaUtilization), `${one(report.totals.utilization - metaUtilization)}%`, metaUtilization, report.totals.utilization < metaUtilization),
       ].join("");
       $("kpiSideCards").innerHTML = [
-        metricCardHtml("Confiabilidad (MTBF)", `${one(report.totals.tmef)} h`, `Meta ${one(metaTmef)} h`, Math.min((report.totals.tmef / Math.max(metaTmef, 1)) * 100, 100), report.totals.tmef < metaTmef),
-        metricCardHtml("Meta MTBF", `${one(metaTmef)} h`, `${one(report.totals.tmef - metaTmef)} h`, 100, false),
+        metricCardHtml("Confiabilidad", pct(report.totals.reliability), `Meta ${pct(metaReliability)}`, report.totals.reliability, report.totals.reliability < metaReliability),
+        metricCardHtml("TMEF", `${one(report.totals.tmef)} h`, `Meta ${one(metaTmef)} h`, Math.min((report.totals.tmef / Math.max(metaTmef, 1)) * 100, 100), report.totals.tmef < metaTmef),
         metricCardHtml("TMPR", `${one(report.totals.tmpr)} h`, `Meta ${one(metaTmpr)} h`, Math.min((report.totals.tmpr / Math.max(metaTmpr, 1)) * 100, 100), report.totals.tmpr > metaTmpr),
-        metricCardHtml("Meta", `${one(metaTmpr)} h`, `${one(metaTmpr - report.totals.tmpr)} h`, 100, report.totals.tmpr > metaTmpr),
+        metricCardHtml("Meta Conf.", pct(metaReliability), `${one(report.totals.reliability - metaReliability)}%`, metaReliability, report.totals.reliability < metaReliability),
       ].join("");
       $("kpiChart").innerHTML = kpiMetricChartHtml(report, settings);
       bindKpiMetricTabs();
-      $("kpiTable").innerHTML = `<thead><tr><th># Eco</th><th>Equipo</th><th>Hrs periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>Confiab. MTBF</th><th>MTTR</th><th>Estatus</th></tr></thead><tbody>` +
-        report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td>${esc(row.availabilityText)}</td><td>${esc(row.utilizationText)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("") +
-        `<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody>`;
+      $("kpiTable").innerHTML = `<thead><tr><th># Eco</th><th>Equipo</th><th>Hrs periodo</th><th>Hrs MP</th><th>Hrs MC</th><th>Hrs trab</th><th># Paradas</th><th>% Disp</th><th>% Util</th><th>Confiabilidad</th><th>TMEF</th><th>TMPR</th><th>Estatus</th></tr></thead><tbody>` +
+        report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td>${esc(row.availabilityText)}</td><td>${esc(row.utilizationText)}</td><td>${pct(row.reliability)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("") +
+        `<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${pct(report.totals.reliability)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody>`;
     }
     function filteredPreventives(){
       const [start, end] = periodRange($("prPeriod").value, $("prBase").value);
