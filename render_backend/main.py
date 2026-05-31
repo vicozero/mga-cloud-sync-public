@@ -100,6 +100,21 @@ class MobilePhoto(Base):
     capture: Mapped[MobileCapture] = relationship(back_populates="photos")
 
 
+class CaptureDeletion(Base):
+    __tablename__ = "mga_capture_deletion"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mobile_id: Mapped[str] = mapped_column(String(140), default="", index=True)
+    source_device: Mapped[str] = mapped_column(Text, default="")
+    user_name: Mapped[str] = mapped_column(String(160), default="")
+    equipment_code: Mapped[str] = mapped_column(String(120), default="", index=True)
+    component_name: Mapped[str] = mapped_column(String(160), default="")
+    work_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    shift: Mapped[str] = mapped_column(String(80), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class CatalogSnapshot(Base):
     __tablename__ = "mga_catalog_snapshot"
 
@@ -1300,6 +1315,19 @@ def remove_capture_rows_from_portal_payload(payload: dict[str, Any], delete_key:
     if removed:
         payload["captures"] = kept
     return removed
+
+
+def capture_deletion_payload(row: CaptureDeletion) -> dict[str, Any]:
+    payload = json_loads(row.payload_json)
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("mobile_id", row.mobile_id)
+    payload.setdefault("work_date", row.work_date)
+    payload.setdefault("shift", row.shift)
+    payload.setdefault("equipment_code", row.equipment_code)
+    payload.setdefault("component_name", row.component_name)
+    payload.setdefault("component", row.component_name)
+    return payload
 
 
 def mobile_capture_portal_rows(session: Session, limit: int = 1000) -> list[dict[str, Any]]:
@@ -8085,10 +8113,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const result = await response.json();
       if(!result.ok) throw new Error(`No se pudo guardar la captura. Errores: ${result.errors || 0}`);
       const wasEditing = !!currentCaptureRecord;
+      upsertLocalCapture(record, result);
       currentCaptureRecord = null;
-      await load();
       $("capSaveBtn").textContent = "Guardar captura";
       $("capStatus").textContent = wasEditing || result.updated ? "Captura actualizada." : "Captura guardada.";
+      renderDashboard();
+      renderBitacora();
+      renderCaptureRecent();
     }
     function editDailyCapture(index){
       const row = currentCaptureRows[index];
@@ -8136,6 +8167,52 @@ WAREHOUSE_HTML = r"""<!doctype html>
         component: row?.component || row?.component_name || "",
       };
     }
+    function captureRowsSame(a, b){
+      if(!a || !b) return false;
+      const aMobile = String(a.mobile_id || "").trim();
+      const bMobile = String(b.mobile_id || "").trim();
+      if(aMobile && bMobile && aMobile === bMobile) return true;
+      const aId = Number(a.id || 0);
+      const bId = Number(b.id || 0);
+      if(aId && bId && aId === bId && captureRowKey(a) === captureRowKey(b)) return true;
+      return captureRowKey(a) === captureRowKey(b);
+    }
+    function removeLocalCapture(row){
+      portal.captures = (portal.captures || []).filter(item => !captureRowsSame(item, row));
+    }
+    function upsertLocalCapture(record, result){
+      const first = Array.isArray(result?.results) ? result.results[0] || {} : {};
+      const saved = {
+        id: first.capture_id || currentCaptureRecord?.id || Date.now(),
+        mobile_id: record.mobile_id,
+        source: "web",
+        received_at: new Date().toISOString(),
+        work_date: record.work_date,
+        shift: record.shift,
+        equipment_code: record.equipment_code,
+        equipment_description: "",
+        component: record.component_name || record.component || "",
+        hi: record.hi,
+        hf: record.hf,
+        worked_hours: record.worked_hours,
+        mp_hours: record.mp_hours,
+        mc_hours: record.mc_hours,
+        standby_hours: record.standby_hours,
+        stops: record.stops,
+        oil_liters: record.oil_liters,
+        oil_motor_15w40: record.oil_motor_15w40,
+        oil_hco_iso68: record.oil_hco_iso68,
+        oil_trans_sae30: record.oil_trans_sae30,
+        fault: record.fault,
+        wear: record.wear,
+        status: record.status,
+        observations: record.observations,
+        evidence_count: 0,
+      };
+      if(currentCaptureRecord) removeLocalCapture(currentCaptureRecord);
+      removeLocalCapture(saved);
+      portal.captures = [saved, ...(portal.captures || [])];
+    }
     async function deleteDailyCapture(index){
       const row = currentCaptureRows[index];
       if(!row) return;
@@ -8154,8 +8231,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         currentCaptureRecord = null;
         $("capSaveBtn").textContent = "Guardar captura";
       }
-      await load();
+      removeLocalCapture(row);
       $("capStatus").textContent = result.deleted_mobile || result.deleted_portal ? "Captura eliminada." : "No se encontro la captura para eliminar.";
+      renderDashboard();
+      renderBitacora();
+      renderCaptureRecent();
     }
     function renderCaptureRecent(){
       const selected = $("capEquipment").value;
@@ -10214,10 +10294,57 @@ async def delete_portal_capture(request: Request, _auth: str | None = Header(def
                 if removed_snapshot:
                     snapshot.updated_at = utc_now()
                     snapshot.payload_json = json_dumps(snapshot_payload)
+        deletion_payload = {
+            "id": capture_id,
+            "mobile_id": mobile_id,
+            "work_date": payload.get("work_date") or delete_key[0],
+            "shift": payload.get("shift") or delete_key[1],
+            "equipment_code": payload.get("equipment_code") or payload.get("equipment") or delete_key[2],
+            "component_name": payload.get("component_name") or payload.get("component") or delete_key[3],
+            "component": payload.get("component") or payload.get("component_name") or delete_key[3],
+            "source": "portal-web",
+            "deleted_at": utc_now().isoformat(timespec="seconds"),
+        }
+        deletion = CaptureDeletion(
+            mobile_id=mobile_id,
+            source_device="portal-web",
+            user_name=str(payload.get("user_name") or "Portal web"),
+            equipment_code=str(deletion_payload["equipment_code"] or ""),
+            component_name=str(deletion_payload["component_name"] or ""),
+            work_date=str(deletion_payload["work_date"] or ""),
+            shift=str(deletion_payload["shift"] or ""),
+            payload_json=json_dumps(deletion_payload),
+        )
+        session.add(deletion)
         session.commit()
+        deletion_id = deletion.id
         counts = capture_counts(session)
 
-    return {"ok": True, "deleted_mobile": deleted_mobile, "deleted_portal": removed_snapshot, "captures": counts}
+    return {"ok": True, "deleted_mobile": deleted_mobile, "deleted_portal": removed_snapshot, "deletion_id": deletion_id, "captures": counts}
+
+
+@app.get("/api/desktop/deletions")
+def desktop_deletions(
+    limit: int = Query(default=1000, ge=1, le=5000),
+    order: str = Query(default="asc"),
+    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
+) -> dict[str, Any]:
+    require_api_key(_auth)
+    with SessionLocal() as session:
+        sort_order = CaptureDeletion.id.desc() if str(order or "").lower().startswith("desc") else CaptureDeletion.id.asc()
+        rows = session.scalars(select(CaptureDeletion).order_by(sort_order).limit(limit)).all()
+        deletions = [
+            {
+                "id": row.id,
+                "mobile_id": row.mobile_id,
+                "source_device": row.source_device,
+                "user_name": row.user_name,
+                "deleted_at": row.deleted_at.isoformat(timespec="seconds") if row.deleted_at else "",
+                "payload": capture_deletion_payload(row),
+            }
+            for row in rows
+        ]
+    return {"ok": True, "deletions": deletions, "count": len(deletions)}
 
 
 @app.get("/api/desktop/pending")
