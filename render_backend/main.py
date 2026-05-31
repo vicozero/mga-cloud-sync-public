@@ -1221,39 +1221,110 @@ def latest_catalog_payload(session: Session) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"ok": True, "source": "cloud", "equipment": []}
 
 
+def mobile_capture_portal_row(row: MobileCapture) -> dict[str, Any]:
+    payload = json_loads(row.payload_json)
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "id": row.id,
+        "mobile_id": row.mobile_id,
+        "source": row.source_device or str(payload.get("source") or ""),
+        "received_at": row.received_at.isoformat(timespec="seconds") if row.received_at else "",
+        "work_date": row.work_date or str(payload.get("work_date") or ""),
+        "shift": str(payload.get("shift") or payload.get("turno") or "General"),
+        "equipment_code": row.equipment_code or str(payload.get("equipment_code") or payload.get("equipment") or ""),
+        "equipment_description": "",
+        "component": row.component_name or str(payload.get("component_name") or payload.get("component") or ""),
+        "hi": parse_float(payload.get("hi"), 0),
+        "hf": parse_float(payload.get("hf"), 0),
+        "worked_hours": parse_float(payload.get("worked_hours"), 0),
+        "mp_hours": parse_float(payload.get("mp_hours"), 0),
+        "mc_hours": parse_float(payload.get("mc_hours"), 0),
+        "standby_hours": parse_float(payload.get("standby_hours"), 0),
+        "stops": int(parse_float(payload.get("stops"), 0)),
+        "oil_liters": parse_float(payload.get("oil_liters"), 0),
+        "oil_motor_15w40": parse_float(payload.get("oil_motor_15w40"), 0),
+        "oil_hco_iso68": parse_float(payload.get("oil_hco_iso68"), 0),
+        "oil_trans_sae30": parse_float(payload.get("oil_trans_sae30"), 0),
+        "oil_sae50": parse_float(payload.get("oil_sae50"), 0),
+        "oil_85w140": parse_float(payload.get("oil_85w140"), 0),
+        "almo_liters": parse_float(payload.get("almo_liters"), 0),
+        "coolant_liters": parse_float(payload.get("coolant_liters"), 0),
+        "fault": str(payload.get("fault") or ""),
+        "wear": str(payload.get("wear") or ""),
+        "status": str(payload.get("status") or "Disponible"),
+        "observations": str(payload.get("observations") or payload.get("details") or ""),
+        "evidence_count": len(row.photos or []),
+    }
+
+
+def capture_merge_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("work_date") or "").strip(),
+        str(row.get("shift") or "").strip().upper(),
+        str(row.get("equipment_code") or row.get("equipment") or "").strip().upper(),
+        str(row.get("component") or row.get("component_name") or "").strip().upper(),
+    )
+
+
+def mobile_capture_portal_rows(session: Session, limit: int = 1000) -> list[dict[str, Any]]:
+    rows = session.scalars(select(MobileCapture).order_by(MobileCapture.work_date.desc(), MobileCapture.id.desc()).limit(limit)).all()
+    return [mobile_capture_portal_row(row) for row in rows]
+
+
+def parse_iso_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def merge_mobile_captures_into_portal(session: Session, portal: dict[str, Any]) -> dict[str, Any]:
+    captures = portal.get("captures")
+    if not isinstance(captures, list):
+        captures = []
+    merged = [row for row in captures if isinstance(row, dict)]
+    index_by_key = {capture_merge_key(row): idx for idx, row in enumerate(merged) if any(capture_merge_key(row))}
+    portal_updated = parse_iso_datetime(portal.get("updated_at"))
+
+    equipment_rows = portal.get("equipment") if isinstance(portal.get("equipment"), list) else []
+    descriptions = {
+        str(e.get("code") or e.get("equipment_code") or "").strip().upper(): str(e.get("description") or e.get("family") or "")
+        for e in equipment_rows
+        if isinstance(e, dict)
+    }
+    for row in mobile_capture_portal_rows(session):
+        key = capture_merge_key(row)
+        if not any(key):
+            continue
+        code = str(row.get("equipment_code") or "").strip().upper()
+        if code and descriptions.get(code):
+            row["equipment_description"] = descriptions[code]
+        existing_index = index_by_key.get(key)
+        received_at = parse_iso_datetime(row.get("received_at"))
+        if existing_index is None:
+            merged.append(row)
+            index_by_key[key] = len(merged) - 1
+        elif portal_updated and received_at and received_at > portal_updated:
+            merged[existing_index] = row
+
+    merged.sort(key=lambda row: (str(row.get("work_date") or ""), int(parse_float(row.get("id"), 0))), reverse=True)
+    portal["captures"] = merged
+    return portal
+
+
 def portal_fallback_payload(session: Session) -> dict[str, Any]:
     catalog = latest_catalog_payload(session)
     equipment = catalog.get("equipment") if isinstance(catalog, dict) else []
     if not isinstance(equipment, list):
         equipment = []
-    captures: list[dict[str, Any]] = []
-    for row in session.scalars(select(MobileCapture).order_by(MobileCapture.work_date.desc(), MobileCapture.id.desc()).limit(1000)).all():
-        payload = json_loads(row.payload_json)
-        if not isinstance(payload, dict):
-            payload = {}
-        captures.append(
-            {
-                "id": row.id,
-                "work_date": row.work_date or str(payload.get("work_date") or ""),
-                "shift": str(payload.get("shift") or payload.get("turno") or "General"),
-                "equipment_code": row.equipment_code or str(payload.get("equipment_code") or payload.get("equipment") or ""),
-                "equipment_description": "",
-                "component": row.component_name or str(payload.get("component_name") or payload.get("component") or ""),
-                "hi": parse_float(payload.get("hi"), 0),
-                "hf": parse_float(payload.get("hf"), 0),
-                "worked_hours": parse_float(payload.get("worked_hours"), 0),
-                "mp_hours": parse_float(payload.get("mp_hours"), 0),
-                "mc_hours": parse_float(payload.get("mc_hours"), 0),
-                "standby_hours": parse_float(payload.get("standby_hours"), 0),
-                "stops": int(parse_float(payload.get("stops"), 0)),
-                "oil_liters": parse_float(payload.get("oil_liters"), 0),
-                "fault": str(payload.get("fault") or ""),
-                "wear": str(payload.get("wear") or ""),
-                "status": str(payload.get("status") or "Disponible"),
-                "observations": str(payload.get("observations") or payload.get("details") or ""),
-                "evidence_count": len(row.photos or []),
-            }
-        )
+    captures = mobile_capture_portal_rows(session)
     now = utc_now()
     start = now.replace(day=1).date().isoformat()
     return {
@@ -1295,7 +1366,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("ok", True)
     payload.setdefault("source", "cloud-portal")
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
-    return payload
+    return merge_mobile_captures_into_portal(session, payload)
 
 
 def diesel_iso_or_none(value: Any) -> str | None:
@@ -5675,6 +5746,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="servicios">Servicios realizados</button>
       <button data-tab="bitacora">Bitacora</button>
+      <button data-tab="captura">Captura diaria</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
       <button data-tab="requisiciones">Requisiciones</button>
       <button data-tab="seguimientoReq">Seguimiento req.</button>
@@ -5773,6 +5845,43 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <button class="btn" id="renderBitBtn">Actualizar</button>
       </div>
       <div class="table-wrap"><table id="bitTable"></table></div>
+    </section>
+    <section id="captura" class="view">
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Captura diaria</h3><span class="muted" id="capStatus"></span></div>
+          <div class="movement-grid">
+            <label>Fecha<input id="capDate" type="date"></label>
+            <label>Turno<select id="capShift"><option>Turno 1</option><option>Turno 2</option><option>General</option></select></label>
+            <label>Equipo<select id="capEquipment"></select></label>
+            <label>Componente<select id="capComponent"></select></label>
+            <label>Horometro inicial<input id="capHi" type="number" step="0.1" min="0" value="0"></label>
+            <label>Horometro final<input id="capHf" type="number" step="0.1" min="0" value="0"></label>
+            <label>Hrs trabajadas<input id="capWorked" type="number" step="0.1" min="0" value="0"></label>
+            <label>Hrs MP<input id="capMp" type="number" step="0.1" min="0" value="0"></label>
+            <label>Hrs MC<input id="capMc" type="number" step="0.1" min="0" value="0"></label>
+            <label>Stand By<input id="capStandby" type="number" step="0.1" min="0" value="0"></label>
+            <label># Paradas<input id="capStops" type="number" step="1" min="0" value="0"></label>
+            <label>Estatus<select id="capCaptureStatus"><option>Disponible</option><option>No Disponible</option><option>Stand By</option><option>Operativa</option></select></label>
+            <label>Aceite total L<input id="capOil" type="number" step="0.1" min="0" value="0"></label>
+            <label>15W40 L<input id="capOil15w40" type="number" step="0.1" min="0" value="0"></label>
+            <label>HCO ISO 68 L<input id="capOilHco68" type="number" step="0.1" min="0" value="0"></label>
+            <label>SAE 30 L<input id="capOilSae30" type="number" step="0.1" min="0" value="0"></label>
+            <label class="wide">Falla<input id="capFault" placeholder="Falla detectada"></label>
+            <label class="wide">Desgaste<input id="capWear" placeholder="Desgaste observado"></label>
+            <label class="wide">Observaciones<textarea id="capObservations" rows="3" placeholder="Detalle de la captura"></textarea></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn secondary" id="capNewBtn">Nueva captura</button>
+            <button class="btn" id="capSaveBtn">Guardar captura</button>
+            <button class="btn secondary" id="capRefreshBtn">Actualizar bitacora</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Ultimas capturas</h3><span class="muted" id="capRecentCount"></span></div>
+          <div class="table-wrap" style="max-height:620px;"><table id="capRecentTable"></table></div>
+        </div>
+      </div>
     </section>
     <section id="disponibilidad" class="view">
       <div class="panel toolbar">
@@ -7021,6 +7130,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
+      if(!$("capDate").value) $("capDate").value = today;
+      setOptions("capEquipment", equipmentOptions, "Selecciona");
+      if(!$("capEquipment").value && equipmentOptions.length) $("capEquipment").value = equipmentOptions[0].value;
+      renderCaptureComponents();
       renderDieselSelectors();
       renderReqEquipmentOptions();
     }
@@ -7741,6 +7854,131 @@ WAREHOUSE_HTML = r"""<!doctype html>
       });
       $("bitTable").innerHTML = `<thead><tr><th>Fecha</th><th>Turno</th><th>Equipo</th><th>Componente</th><th>HI</th><th>HF</th><th>Hrs Trab</th><th>MP</th><th>MC</th><th>Stand By</th><th>Paradas</th><th>Aceite L</th><th>Estatus</th><th>Falla / observaciones</th><th>Fotos</th></tr></thead><tbody>` +
         rows.map(row => `<tr><td>${esc(row.work_date)}</td><td>${esc(row.shift)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${one(row.hi)}</td><td>${one(row.hf)}</td><td>${one(row.worked_hours)}</td><td>${one(row.mp_hours)}</td><td>${one(row.mc_hours)}</td><td>${one(row.standby_hours)}</td><td>${num(row.stops)}</td><td>${one(row.oil_liters)}</td><td>${esc(row.status)}</td><td>${esc([row.fault,row.observations].filter(Boolean).join(" | "))}</td><td>${num(row.evidence_count)}</td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function sameCaptureEquipment(rowCode, selected){
+      if(!selected) return true;
+      const selectedKeys = equipmentKeys(selected);
+      return equipmentKeys(rowCode).some(key => selectedKeys.includes(key));
+    }
+    function defaultCaptureComponents(code){
+      const normalized = String(code || "").toUpperCase();
+      if(normalized.startsWith("JL") || normalized.startsWith("JA")) return ["ELECT", "DIESEL", "COMPRESOR", "PER"];
+      if(normalized.startsWith("ST") || normalized.startsWith("RET")) return ["DIESEL"];
+      return ["MOTOR", "DIESEL", "ELECT"];
+    }
+    function componentsForCaptureEquipment(code){
+      const values = [];
+      const add = value => {
+        const clean = String(value || "").trim().toUpperCase();
+        if(clean && !values.includes(clean)) values.push(clean);
+      };
+      const eq = portalEquipment().find(item => sameCaptureEquipment(item.code || item.equipment_code, code));
+      if(eq && Array.isArray(eq.components)) eq.components.forEach(component => add(component.name || component.component || component));
+      (portal.captures || []).forEach(row => {
+        if(sameCaptureEquipment(row.equipment_code || row.equipment, code)) add(row.component || row.component_name);
+      });
+      defaultCaptureComponents(code).forEach(add);
+      return values;
+    }
+    function renderCaptureComponents(){
+      const select = $("capComponent");
+      const previous = select.value;
+      const options = componentsForCaptureEquipment($("capEquipment").value);
+      select.innerHTML = options.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join("");
+      if(options.includes(previous)) select.value = previous;
+      else if(options.length) select.value = options[0];
+    }
+    function resetCaptureForm(){
+      if(!$("capDate").value) $("capDate").value = toIsoDate(new Date());
+      $("capShift").value = "Turno 1";
+      ["capHi","capHf","capWorked","capMp","capMc","capStandby","capStops","capOil","capOil15w40","capOilHco68","capOilSae30"].forEach(id => { $(id).value = "0"; });
+      ["capFault","capWear","capObservations"].forEach(id => { $(id).value = ""; });
+      $("capCaptureStatus").value = "Disponible";
+      $("capStatus").textContent = "";
+      renderCaptureComponents();
+      renderCaptureRecent();
+    }
+    function captureNumber(id){
+      const value = Number($(id).value || 0);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    }
+    function updateCaptureWorkedHours(){
+      const hi = Number($("capHi").value || 0);
+      const hf = Number($("capHf").value || 0);
+      if(Number.isFinite(hi) && Number.isFinite(hf) && hf >= hi){
+        $("capWorked").value = one(hf - hi).replace(/\.0$/, "");
+      }
+    }
+    function captureMobileId(record){
+      return ["web", record.work_date, record.shift, record.equipment_code, record.component_name]
+        .map(value => normalizedText(value).replace(/[^A-Z0-9]/g, ""))
+        .join(":");
+    }
+    function capturePayload(){
+      const workDate = $("capDate").value;
+      const equipment = $("capEquipment").value;
+      const component = $("capComponent").value;
+      if(!workDate) throw new Error("Selecciona la fecha de captura.");
+      if(!equipment) throw new Error("Selecciona el equipo.");
+      if(!component) throw new Error("Selecciona el componente.");
+      const oilMotor = captureNumber("capOil15w40");
+      const oilHco = captureNumber("capOilHco68");
+      const oilSae = captureNumber("capOilSae30");
+      const record = {
+        work_date: workDate,
+        shift: $("capShift").value || "General",
+        equipment_code: equipment,
+        equipment: equipment,
+        component_name: component,
+        component: component,
+        hi: captureNumber("capHi"),
+        hf: captureNumber("capHf"),
+        worked_hours: captureNumber("capWorked"),
+        mp_hours: captureNumber("capMp"),
+        mc_hours: captureNumber("capMc"),
+        standby_hours: captureNumber("capStandby"),
+        stops: Math.round(captureNumber("capStops")),
+        oil_liters: captureNumber("capOil") || oilMotor + oilHco + oilSae,
+        oil_motor_15w40: oilMotor,
+        oil_hco_iso68: oilHco,
+        oil_trans_sae30: oilSae,
+        fault: $("capFault").value.trim(),
+        wear: $("capWear").value.trim(),
+        status: $("capCaptureStatus").value || "Disponible",
+        observations: $("capObservations").value.trim(),
+        captured_at: new Date().toISOString(),
+        user_name: "Portal web",
+        source: "web",
+        photos: [],
+      };
+      record.mobile_id = captureMobileId(record);
+      return record;
+    }
+    async function saveDailyCapture(){
+      if(!hasApiKey(true)) return;
+      const record = capturePayload();
+      $("capStatus").textContent = "Guardando...";
+      const response = await fetch("/api/sync", {
+        method: "POST",
+        headers: headers(true),
+        body: JSON.stringify({device: "portal-web", user: "Portal web", records: [record]}),
+      });
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(!result.ok) throw new Error(`No se pudo guardar la captura. Errores: ${result.errors || 0}`);
+      await load();
+      $("capStatus").textContent = result.updated ? "Captura actualizada." : "Captura guardada.";
+    }
+    function renderCaptureRecent(){
+      const selected = $("capEquipment").value;
+      const rows = [...(portal.captures || [])]
+        .filter(row => sameCaptureEquipment(row.equipment_code || row.equipment, selected))
+        .sort((a,b) => `${b.work_date || ""}-${String(b.id || 0).padStart(10,"0")}`.localeCompare(`${a.work_date || ""}-${String(a.id || 0).padStart(10,"0")}`))
+        .slice(0, 25);
+      $("capRecentCount").textContent = `${rows.length} registros`;
+      $("capRecentTable").innerHTML = `<thead><tr><th>Fecha</th><th>Turno</th><th>Equipo</th><th>Comp.</th><th>HI</th><th>HF</th><th>Hrs</th><th>MP</th><th>MC</th><th>Paradas</th><th>Estatus</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td>${esc(row.work_date)}</td><td>${esc(row.shift)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${one(row.hi)}</td><td>${one(row.hf)}</td><td>${one(row.worked_hours)}</td><td>${one(row.mp_hours)}</td><td>${one(row.mc_hours)}</td><td>${num(row.stops)}</td><td>${esc(row.status)}</td></tr>`).join("") +
         `</tbody>`;
     }
     function conditionClass(condition){
@@ -8686,6 +8924,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderPreventives();
       renderServiceHistory();
       renderBitacora();
+      renderCaptureRecent();
       renderDisponibilidad();
       renderRequisiciones();
       renderTracking();
@@ -8718,6 +8957,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["bitEquipment","bitStart","bitEnd"].forEach(id => $(id).addEventListener("change", renderBitacora));
     $("bitSearch").addEventListener("input", renderBitacora);
     $("renderBitBtn").addEventListener("click", renderBitacora);
+    $("capEquipment").addEventListener("change", () => { renderCaptureComponents(); renderCaptureRecent(); });
+    ["capHi","capHf"].forEach(id => $(id).addEventListener("input", updateCaptureWorkedHours));
+    $("capNewBtn").addEventListener("click", resetCaptureForm);
+    $("capSaveBtn").addEventListener("click", () => saveDailyCapture().catch(showError));
+    $("capRefreshBtn").addEventListener("click", () => load().catch(showError));
     $("dispSearch").addEventListener("input", renderDisponibilidad);
     $("dispStatus").addEventListener("change", renderDisponibilidad);
     $("renderDispBtn").addEventListener("click", renderDisponibilidad);
