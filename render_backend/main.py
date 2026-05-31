@@ -1267,6 +1267,41 @@ def capture_merge_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
+def capture_delete_key(payload: dict[str, Any]) -> tuple[str, str, str, str]:
+    return capture_merge_key(
+        {
+            "work_date": payload.get("work_date"),
+            "shift": payload.get("shift"),
+            "equipment_code": payload.get("equipment_code") or payload.get("equipment"),
+            "component": payload.get("component") or payload.get("component_name"),
+        }
+    )
+
+
+def remove_capture_rows_from_portal_payload(payload: dict[str, Any], delete_key: tuple[str, str, str, str], mobile_id: str, capture_id: int) -> int:
+    captures = payload.get("captures")
+    if not isinstance(captures, list):
+        return 0
+    kept: list[Any] = []
+    removed = 0
+    for row in captures:
+        if not isinstance(row, dict):
+            kept.append(row)
+            continue
+        row_mobile_id = str(row.get("mobile_id") or "").strip()
+        row_id = int(parse_float(row.get("id"), 0) or 0)
+        mobile_match = bool(mobile_id and row_mobile_id == mobile_id)
+        id_match = bool(capture_id and row_id == capture_id)
+        key_match = bool(any(delete_key) and capture_merge_key(row) == delete_key)
+        if mobile_match or id_match or key_match:
+            removed += 1
+            continue
+        kept.append(row)
+    if removed:
+        payload["captures"] = kept
+    return removed
+
+
 def mobile_capture_portal_rows(session: Session, limit: int = 1000) -> list[dict[str, Any]]:
     rows = session.scalars(select(MobileCapture).order_by(MobileCapture.work_date.desc(), MobileCapture.id.desc()).limit(limit)).all()
     return [mobile_capture_portal_row(row) for row in rows]
@@ -8083,6 +8118,45 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("capStatus").textContent = `Editando ${row.work_date || ""} ${row.equipment_code || ""} ${row.component || ""}`;
       renderCaptureRecent();
     }
+    function captureRowKey(row){
+      return [
+        row?.work_date || "",
+        normalizedText(row?.shift || ""),
+        normalizedText(row?.equipment_code || row?.equipment || ""),
+        normalizedText(row?.component || row?.component_name || ""),
+      ].join("|");
+    }
+    function captureDeletePayload(row){
+      return {
+        id: row?.id || "",
+        mobile_id: row?.mobile_id || "",
+        work_date: row?.work_date || "",
+        shift: row?.shift || "",
+        equipment_code: row?.equipment_code || row?.equipment || "",
+        component: row?.component || row?.component_name || "",
+      };
+    }
+    async function deleteDailyCapture(index){
+      const row = currentCaptureRows[index];
+      if(!row) return;
+      if(!hasApiKey(true)) return;
+      const label = `${row.work_date || ""} ${row.shift || ""} ${row.equipment_code || ""} ${row.component || ""}`.trim();
+      if(!confirm(`Se eliminara la captura ${label}.`)) return;
+      $("capStatus").textContent = "Eliminando...";
+      const response = await fetch("/api/portal/captures/delete", {
+        method: "POST",
+        headers: headers(true),
+        body: JSON.stringify(captureDeletePayload(row)),
+      });
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(currentCaptureRecord && captureRowKey(currentCaptureRecord) === captureRowKey(row)){
+        currentCaptureRecord = null;
+        $("capSaveBtn").textContent = "Guardar captura";
+      }
+      await load();
+      $("capStatus").textContent = result.deleted_mobile || result.deleted_portal ? "Captura eliminada." : "No se encontro la captura para eliminar.";
+    }
     function renderCaptureRecent(){
       const selected = $("capEquipment").value;
       const rows = sortedCaptureRows((portal.captures || [])
@@ -8091,9 +8165,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       currentCaptureRows = rows;
       $("capRecentCount").textContent = `${rows.length} registros`;
       $("capRecentTable").innerHTML = `<thead><tr><th>Fecha</th><th>Turno</th><th>Equipo</th><th>Comp.</th><th>HI</th><th>HF</th><th>Hrs</th><th>MP</th><th>MC</th><th>Paradas</th><th>Estatus</th><th>Accion</th></tr></thead><tbody>` +
-        rows.map((row, idx) => `<tr class="${currentCaptureRecord === row ? "warn" : ""}"><td>${esc(row.work_date)}</td><td>${esc(row.shift)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${one(row.hi)}</td><td>${one(row.hf)}</td><td>${one(row.worked_hours)}</td><td>${one(row.mp_hours)}</td><td>${one(row.mc_hours)}</td><td>${num(row.stops)}</td><td>${esc(row.status)}</td><td><button type="button" class="btn secondary small" data-cap-edit="${idx}">Editar</button></td></tr>`).join("") +
+        rows.map((row, idx) => `<tr class="${currentCaptureRecord === row ? "warn" : ""}"><td>${esc(row.work_date)}</td><td>${esc(row.shift)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${one(row.hi)}</td><td>${one(row.hf)}</td><td>${one(row.worked_hours)}</td><td>${one(row.mp_hours)}</td><td>${one(row.mc_hours)}</td><td>${num(row.stops)}</td><td>${esc(row.status)}</td><td><button type="button" class="btn secondary small" data-cap-edit="${idx}">Editar</button> <button type="button" class="btn danger small" data-cap-delete="${idx}">Eliminar</button></td></tr>`).join("") +
         `</tbody>`;
       document.querySelectorAll("[data-cap-edit]").forEach(button => button.addEventListener("click", () => editDailyCapture(Number(button.dataset.capEdit))));
+      document.querySelectorAll("[data-cap-delete]").forEach(button => button.addEventListener("click", () => deleteDailyCapture(Number(button.dataset.capDelete)).catch(showError)));
     }
     function conditionClass(condition){
       const text = String(condition || "").toUpperCase();
@@ -10087,6 +10162,62 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
         "captures": counts,
         "results": results,
     }
+
+
+@app.post("/api/portal/captures/delete")
+async def delete_portal_capture(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Solicitud invalida.")
+    mobile_id = str(payload.get("mobile_id") or "").strip()
+    capture_id = int(parse_float(payload.get("id"), 0) or 0)
+    delete_key = capture_delete_key(payload)
+    if not mobile_id and not capture_id and not any(delete_key):
+        raise HTTPException(status_code=400, detail="No se recibio identificador de captura.")
+
+    with SessionLocal() as session:
+        mobile_rows: list[MobileCapture] = []
+        if mobile_id:
+            row = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == mobile_id))
+            if row is not None:
+                mobile_rows.append(row)
+        if any(delete_key):
+            candidates = session.scalars(
+                select(MobileCapture)
+                .where(MobileCapture.work_date == delete_key[0])
+                .where(MobileCapture.equipment_code == delete_key[2])
+            ).all()
+            existing_ids = {row.id for row in mobile_rows}
+            for row in candidates:
+                if row.id in existing_ids:
+                    continue
+                if capture_merge_key(mobile_capture_portal_row(row)) == delete_key:
+                    mobile_rows.append(row)
+                    existing_ids.add(row.id)
+        if capture_id and not mobile_rows:
+            row = session.scalar(select(MobileCapture).where(MobileCapture.id == capture_id))
+            if row is not None:
+                mobile_rows.append(row)
+
+        deleted_mobile = 0
+        for row in mobile_rows:
+            session.delete(row)
+            deleted_mobile += 1
+
+        removed_snapshot = 0
+        snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+        if snapshot is not None:
+            snapshot_payload = json_loads(snapshot.payload_json)
+            if isinstance(snapshot_payload, dict):
+                removed_snapshot = remove_capture_rows_from_portal_payload(snapshot_payload, delete_key, mobile_id, capture_id)
+                if removed_snapshot:
+                    snapshot.updated_at = utc_now()
+                    snapshot.payload_json = json_dumps(snapshot_payload)
+        session.commit()
+        counts = capture_counts(session)
+
+    return {"ok": True, "deleted_mobile": deleted_mobile, "deleted_portal": removed_snapshot, "captures": counts}
 
 
 @app.get("/api/desktop/pending")
