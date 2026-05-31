@@ -9590,6 +9590,7 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
     user_name = str(payload.get("user") or "")
     results: list[dict[str, Any]] = []
     created = 0
+    updated = 0
     skipped = 0
     errors = 0
     with SessionLocal() as session:
@@ -9600,27 +9601,45 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 mobile_id = str(record.get("mobile_id") or "").strip()
                 if not mobile_id:
                     raise ValueError("Captura sin mobile_id.")
+                photos = record.get("photos") or []
+                stored_record = dict(record)
+                stored_record["photos"] = []
                 existing = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == mobile_id))
                 if existing is not None:
                     existing_payload = json_loads(existing.payload_json)
+                    changed = json.dumps(existing_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) != json.dumps(
+                        stored_record,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
                     if isinstance(existing_payload, dict):
                         for hose_payload in mobile_hose_change_rows(existing_payload, existing.source_device, existing.user_name):
                             upsert_hose_change(session, hose_payload)
-                    skipped += 1
+                    if changed:
+                        existing.source_device = source_device
+                        existing.user_name = str(record.get("user_name") or user_name)
+                        existing.equipment_code = str(record.get("equipment_code") or "")
+                        existing.component_name = str(record.get("component_name") or "")
+                        existing.work_date = str(record.get("work_date") or "")
+                        existing.payload_json = json_dumps(stored_record)
+                        existing.received_at = utc_now()
+                        existing.desktop_imported_at = None
+                        updated += 1
+                    else:
+                        skipped += 1
                     results.append(
                         {
                             "mobile_id": mobile_id,
                             "capture_id": existing.id,
                             "created": False,
+                            "updated": changed,
                             "stored": True,
                             "desktop_imported": existing.desktop_imported_at is not None,
                         }
                     )
                     continue
 
-                photos = record.get("photos") or []
-                stored_record = dict(record)
-                stored_record["photos"] = []
                 capture = MobileCapture(
                     mobile_id=mobile_id,
                     source_device=source_device,
@@ -9675,9 +9694,10 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
     return {
         "ok": errors == 0,
         "created": created,
+        "updated": updated,
         "skipped": skipped,
         "errors": errors,
-        "stored": created + skipped,
+        "stored": created + updated + skipped,
         "captures": counts,
         "results": results,
     }
@@ -9687,11 +9707,13 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
 def desktop_pending(
     limit: int = Query(default=200, ge=1, le=1000),
     include_imported: bool = Query(default=False),
+    order: str = Query(default="asc"),
     _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
 ) -> dict[str, Any]:
     require_api_key(_auth)
     with SessionLocal() as session:
-        query = select(MobileCapture).order_by(MobileCapture.id.asc()).limit(limit)
+        sort_order = MobileCapture.id.desc() if str(order or "").lower().startswith("desc") else MobileCapture.id.asc()
+        query = select(MobileCapture).order_by(sort_order).limit(limit)
         if not include_imported:
             query = query.where(MobileCapture.desktop_imported_at.is_(None))
         rows = session.scalars(query).all()
