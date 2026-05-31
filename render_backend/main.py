@@ -3045,6 +3045,29 @@ def month_bounds(year: int, month: int) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
+def parse_report_date(value: str, field_name: str) -> date:
+    text = str(value or "").strip()[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Fecha invalida en {field_name}.") from exc
+
+
+def week_bounds(base: date) -> tuple[date, date]:
+    start = base - timedelta(days=base.weekday())
+    return start, start + timedelta(days=6)
+
+
+def weekly_period_label(start: date, end: date) -> str:
+    start_month = MONTH_NAMES_ES_FULL[start.month - 1]
+    end_month = MONTH_NAMES_ES_FULL[end.month - 1]
+    if start.year == end.year and start.month == end.month:
+        return f"Semana del {start.day:02d} al {end.day:02d} de {start_month} {start.year}"
+    if start.year == end.year:
+        return f"Semana del {start.day:02d} de {start_month} al {end.day:02d} de {end_month} {start.year}"
+    return f"Semana del {start.day:02d} de {start_month} {start.year} al {end.day:02d} de {end_month} {end.year}"
+
+
 def normalized_ascii(value: Any) -> str:
     text = normalize_text(value)
     return "".join(ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn")
@@ -3685,6 +3708,32 @@ def update_monthly_ppt_text(prs: Presentation, month_name: str, year: int) -> No
                         text,
                         flags=re.IGNORECASE,
                     )
+                    for source in MONTH_NAMES_ES_FULL:
+                        text = text.replace(source.upper(), month_name.upper()).replace(source, month_name)
+                    run.text = text
+
+def update_weekly_ppt_text(prs: Presentation, label: str, month_name: str, year: int) -> None:
+    month_pattern = r"[A-Za-zÃÃ‰ÃÃ“ÃšÃœÃ‘Ã¡Ã©Ã­Ã³ÃºÃ¼Ã±]+"
+    for slide in prs.slides:
+        for shape in iter_pptx_shapes(slide.shapes):
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    text = run.text
+                    text = re.sub(
+                        rf"Reporte Mensual\s+{month_pattern}(?:\s+\d{{4}})?",
+                        f"Reporte Semanal {label}",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    text = re.sub(
+                        rf"Mes de\s+{month_pattern}(?:\s+\d{{4}})?",
+                        label,
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    text = re.sub(r"Reporte\s+Mensual", "Reporte Semanal", text, flags=re.IGNORECASE)
                     for source in MONTH_NAMES_ES_FULL:
                         text = text.replace(source.upper(), month_name.upper()).replace(source, month_name)
                     run.text = text
@@ -4585,16 +4634,25 @@ def replace_or_add_oil_report_slide(prs: Presentation, tmp_dir: Path, portal: di
         add_full_slide_picture(target_slide, prs, oil_path)
 
 
-def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int, diesel_data: dict[str, Any] | None = None) -> bytes:
+def period_report_pptx_bytes(
+    portal: dict[str, Any],
+    start: str,
+    end: str,
+    month_name: str,
+    year: int,
+    diesel_data: dict[str, Any] | None = None,
+    weekly_label: str = "",
+) -> bytes:
     if isinstance(diesel_data, dict):
         portal = dict(portal)
         portal["diesel"] = diesel_data
-    start, end = month_bounds(year, month)
-    month_name = MONTH_NAMES_ES_FULL[month - 1]
     prs = Presentation(str(MONTHLY_REPORT_TEMPLATE_PATH)) if MONTHLY_REPORT_TEMPLATE_PATH.exists() else Presentation()
     if len(prs.slides) == 0:
         prs.slides.add_slide(ppt_blank_layout(prs))
-    update_monthly_ppt_text(prs, month_name, year)
+    if weekly_label:
+        update_weekly_ppt_text(prs, weekly_label, month_name, year)
+    else:
+        update_monthly_ppt_text(prs, month_name, year)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         if len(prs.slides) >= 3:
@@ -4617,6 +4675,25 @@ def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int, die
     stream = BytesIO()
     prs.save(stream)
     return stream.getvalue()
+
+
+def monthly_report_pptx_bytes(portal: dict[str, Any], year: int, month: int, diesel_data: dict[str, Any] | None = None) -> bytes:
+    start, end = month_bounds(year, month)
+    month_name = MONTH_NAMES_ES_FULL[month - 1]
+    return period_report_pptx_bytes(portal, start, end, month_name, year, diesel_data)
+
+
+def weekly_report_pptx_bytes(portal: dict[str, Any], start: date, end: date, diesel_data: dict[str, Any] | None = None) -> bytes:
+    month_name = MONTH_NAMES_ES_FULL[start.month - 1]
+    return period_report_pptx_bytes(
+        portal,
+        start.isoformat(),
+        end.isoformat(),
+        month_name,
+        start.year,
+        diesel_data,
+        weekly_period_label(start, end),
+    )
 
 
 @app.get("/health")
@@ -4992,6 +5069,41 @@ def get_monthly_report_powerpoint(
     data = monthly_report_pptx_bytes(portal, year, month, diesel_data)
     month_name = MONTH_NAMES_ES_FULL[month - 1]
     filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Mensual_{month_name}_{year}.pptx")
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )
+
+
+@app.get("/api/weekly-report/powerpoint")
+def get_weekly_report_powerpoint(
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    base: str = Query(default=""),
+) -> StreamingResponse:
+    if start and end:
+        start_date = parse_report_date(start, "start")
+        end_date = parse_report_date(end, "end")
+    else:
+        base_date = parse_report_date(base, "base") if base else utc_now().date()
+        start_date, end_date = week_bounds(base_date)
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="La fecha final no puede ser menor que la fecha inicial.")
+    if (end_date - start_date).days > 13:
+        raise HTTPException(status_code=400, detail="El reporte semanal permite maximo 14 dias.")
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+        diesel_data = diesel_payload(session, start_date.isoformat(), end_date.isoformat())
+    data = weekly_report_pptx_bytes(portal, start_date, end_date, diesel_data)
+    filename = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        f"Reporte_Semanal_{start_date.isoformat()}_{end_date.isoformat()}.pptx",
+    )
     return StreamingResponse(
         BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -5535,7 +5647,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <main>
     <nav class="tabs">
       <button class="active" data-tab="dashboard">Dashboard KPI</button>
-      <button data-tab="mensual">Reporte mensual</button>
+      <button data-tab="mensual">Reporte mensual/semanal</button>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="servicios">Servicios realizados</button>
       <button data-tab="bitacora">Bitacora</button>
@@ -5579,8 +5691,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Ano<input id="monthlyYear" type="number" min="2000" max="2100"></label>
         <button class="btn" id="monthlyPptBtn">Descargar PowerPoint</button>
       </div>
+      <div class="panel toolbar">
+        <label>Fecha base semana<input id="weeklyBase" type="date"></label>
+        <label>Desde<input id="weeklyStart" type="date"></label>
+        <label>Hasta<input id="weeklyEnd" type="date"></label>
+        <button class="btn secondary" id="weeklyApplyBtn">Aplicar semana</button>
+        <button class="btn" id="weeklyPptBtn">Descargar semanal</button>
+      </div>
       <div class="panel">
-        <div class="subtle-title"><h3>Reporte mensual PowerPoint</h3><span class="muted" id="monthlyStatus"></span></div>
+        <div class="subtle-title"><h3>Reporte mensual y semanal PowerPoint</h3><span class="muted" id="monthlyStatus"></span></div>
         <div class="stats">
           <div class="stat"><strong>Barrenacion</strong>KPI mensual</div>
           <div class="stat"><strong>Rezagado</strong>KPI mensual</div>
@@ -5588,6 +5707,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="stat"><strong>Diesel</strong>Consumo</div>
           <div class="stat"><strong>Aceites</strong>KPI mensual</div>
         </div>
+        <p class="muted" id="weeklyStatus"></p>
       </div>
     </section>
     <section id="preventivos" class="view">
@@ -6852,6 +6972,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
         $("monthlyYear").value = String(period.year || (new Date()).getFullYear());
         monthlyPeriodInitialized = true;
       }
+      if(!$("weeklyBase").value) $("weeklyBase").value = period.end || period.start || today;
+      if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
       if(!$("kpiStart").value) $("kpiStart").value = period.start || today;
       if(!$("kpiEnd").value) $("kpiEnd").value = period.end || today;
       if(!$("prBase").value) $("prBase").value = period.start || today;
@@ -8505,6 +8627,32 @@ WAREHOUSE_HTML = r"""<!doctype html>
       URL.revokeObjectURL(a.href);
       $("monthlyStatus").textContent = "PowerPoint generado";
     }
+    function applyWeeklyPeriod(updateStatus=true){
+      const base = $("weeklyBase").value || $("weeklyStart").value || toIsoDate(new Date());
+      const [start, end] = periodRange("Semana", base);
+      $("weeklyStart").value = start;
+      $("weeklyEnd").value = end;
+      if(updateStatus) $("weeklyStatus").textContent = `Semana ${start} a ${end}`;
+    }
+    async function downloadWeeklyPowerPoint(){
+      if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
+      const start = $("weeklyStart").value;
+      const end = $("weeklyEnd").value;
+      $("weeklyStatus").textContent = "Generando reporte semanal...";
+      const params = new URLSearchParams({start, end});
+      const r = await fetch(`/api/weekly-report/powerpoint?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok){
+        $("weeklyStatus").textContent = "";
+        return alert(await apiError(r));
+      }
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Reporte_Semanal_${start}_${end}.pptx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      $("weeklyStatus").textContent = "PowerPoint semanal generado";
+    }
     function renderAll(){
       renderStats();
       renderSelectors();
@@ -8533,6 +8681,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("printKpiBtn").addEventListener("click", printExactKpi);
     $("kpiImageBtn").addEventListener("click", () => downloadKpiImage().catch(showError));
     $("monthlyPptBtn").addEventListener("click", () => downloadMonthlyPowerPoint().catch(showError));
+    $("weeklyBase").addEventListener("change", () => applyWeeklyPeriod(true));
+    $("weeklyApplyBtn").addEventListener("click", () => applyWeeklyPeriod(true));
+    $("weeklyPptBtn").addEventListener("click", () => downloadWeeklyPowerPoint().catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
