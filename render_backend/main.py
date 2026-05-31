@@ -3152,6 +3152,22 @@ def group_matches_py(eq: dict[str, Any], group: str) -> bool:
     return True
 
 
+def kpi_required_component_py(code: Any) -> str:
+    code_text = normalized_ascii(code)
+    if code_text.startswith(("JL", "JA")):
+        return "ELECT"
+    if code_text.startswith(("ST", "RET")):
+        return "DIESEL"
+    return ""
+
+
+def kpi_capture_component_matches_py(equipment_code: Any, component_name: Any) -> bool:
+    required = kpi_required_component_py(equipment_code)
+    if not required:
+        return True
+    return required in normalized_ascii(component_name)
+
+
 def monthly_kpi_metric(period: float, worked: float, mp: float, mc: float, stops: float, mission_hours: float = 12) -> dict[str, float]:
     available = max(period - mp - mc, 0)
     availability = max(min((available / period) * 100, 100), 0) if period > 0 else 0
@@ -3208,6 +3224,8 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
             continue
         code = str(capture.get("equipment_code") or capture.get("code") or "").strip()
         if code not in grouped:
+            continue
+        if not kpi_capture_component_matches_py(code, capture.get("component") or capture.get("component_name")):
             continue
         row = grouped[code]
         mp = parse_float(capture.get("mp_hours"), 0)
