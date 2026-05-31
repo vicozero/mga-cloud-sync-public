@@ -5855,7 +5855,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Turno<select id="capShift"><option>Turno 1</option><option>Turno 2</option><option>General</option></select></label>
             <label>Equipo<select id="capEquipment"></select></label>
             <label>Componente<select id="capComponent"></select></label>
-            <label>Horometro inicial<input id="capHi" type="number" step="0.1" min="0" value="0"></label>
+            <label>Horometro inicial<input id="capHi" type="number" step="0.1" min="0" value="0"><span class="muted" id="capHiHint"></span></label>
             <label>Horometro final<input id="capHf" type="number" step="0.1" min="0" value="0"></label>
             <label>Hrs trabajadas<input id="capWorked" type="number" step="0.1" min="0" value="0"></label>
             <label>Hrs MP<input id="capMp" type="number" step="0.1" min="0" value="0"></label>
@@ -6256,6 +6256,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentHoseRecord = null;
     let currentDieselId = null;
     let currentDieselRecord = null;
+    let currentCaptureRecord = null;
+    let currentCaptureRows = [];
     let selectedKpiMetric = "availability";
     let monthlyPeriodInitialized = false;
     const AUTO_REFRESH_MS = 15000;
@@ -7888,15 +7890,88 @@ WAREHOUSE_HTML = r"""<!doctype html>
       select.innerHTML = options.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join("");
       if(options.includes(previous)) select.value = previous;
       else if(options.length) select.value = options[0];
+      applyPreviousHi(false);
+    }
+    function captureShiftOrder(value){
+      const text = normalizedText(value).replace(/\s/g, "");
+      if(["2","T2","TURNO2","SEGUNDO","NOCHE"].includes(text)) return 2;
+      if(["1","T1","TURNO1","PRIMERO","DIA"].includes(text)) return 1;
+      return 0;
+    }
+    function sortedCaptureRows(rows){
+      return [...rows].sort((a,b) => {
+        const aKey = `${a.work_date || ""}-${String(captureShiftOrder(a.shift)).padStart(2,"0")}-${String(a.id || 0).padStart(10,"0")}`;
+        const bKey = `${b.work_date || ""}-${String(captureShiftOrder(b.shift)).padStart(2,"0")}-${String(b.id || 0).padStart(10,"0")}`;
+        return bKey.localeCompare(aKey);
+      });
+    }
+    function sameCaptureComponent(rowComponent, selected){
+      if(!selected) return true;
+      return normalizedText(rowComponent) === normalizedText(selected);
+    }
+    function previousCaptureForHi(){
+      const equipment = $("capEquipment").value;
+      const component = $("capComponent").value;
+      const workDate = $("capDate").value;
+      if(!equipment || !component || !workDate) return null;
+      const previousRows = (portal.captures || []).filter(row =>
+        sameCaptureEquipment(row.equipment_code || row.equipment, equipment) &&
+        String(row.work_date || "") < workDate &&
+        Number(row.hf || 0) > 0
+      );
+      const exactComponent = previousRows.filter(row => sameCaptureComponent(row.component || row.component_name, component));
+      return sortedCaptureRows(exactComponent)[0] || sortedCaptureRows(previousRows)[0] || null;
+    }
+    function formatCaptureNumber(value){
+      const number = Number(value || 0);
+      return Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, "");
+    }
+    function applyPreviousHi(force=false){
+      if(currentCaptureRecord && !force) return;
+      const currentHi = String($("capHi").value || "").trim();
+      if(!force && currentHi && Number(currentHi) > 0) return;
+      const previous = previousCaptureForHi();
+      if(previous){
+        $("capHi").value = formatCaptureNumber(previous.hf);
+        $("capHiHint").textContent = `HI automatico: HF ${formatCaptureNumber(previous.hf)} del ${previous.work_date || ""}`;
+      } else {
+        $("capHiHint").textContent = "Sin HF anterior para este equipo/componente.";
+        if(force && (!currentHi || Number(currentHi) <= 0)) $("capHi").value = "0";
+      }
+      updateCaptureWorkedHours();
+    }
+    function normalizeCaptureShiftValue(value){
+      const text = normalizedText(value);
+      if(text.includes("2")) return "Turno 2";
+      if(text.includes("GENERAL")) return "General";
+      return "Turno 1";
+    }
+    function normalizeCaptureStatusValue(value){
+      const text = normalizedText(value);
+      if(text.includes("STAND")) return "Stand By";
+      if(text.includes("NO DISP") || text.includes("FUERA")) return "No Disponible";
+      if(text.includes("OPERATIVA")) return "Operativa";
+      return "Disponible";
+    }
+    function setCaptureComponent(value){
+      const clean = String(value || "").trim().toUpperCase();
+      renderCaptureComponents();
+      if(clean && ![...$("capComponent").options].some(option => option.value === clean)){
+        $("capComponent").insertAdjacentHTML("beforeend", `<option value="${esc(clean)}">${esc(clean)}</option>`);
+      }
+      if(clean) $("capComponent").value = clean;
     }
     function resetCaptureForm(){
+      currentCaptureRecord = null;
       if(!$("capDate").value) $("capDate").value = toIsoDate(new Date());
       $("capShift").value = "Turno 1";
       ["capHi","capHf","capWorked","capMp","capMc","capStandby","capStops","capOil","capOil15w40","capOilHco68","capOilSae30"].forEach(id => { $(id).value = "0"; });
       ["capFault","capWear","capObservations"].forEach(id => { $(id).value = ""; });
       $("capCaptureStatus").value = "Disponible";
       $("capStatus").textContent = "";
+      $("capSaveBtn").textContent = "Guardar captura";
       renderCaptureComponents();
+      applyPreviousHi(true);
       renderCaptureRecent();
     }
     function captureNumber(id){
@@ -7952,7 +8027,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         source: "web",
         photos: [],
       };
-      record.mobile_id = captureMobileId(record);
+      record.mobile_id = currentCaptureRecord?.mobile_id || captureMobileId(record);
+      if(currentCaptureRecord){
+        record.original_work_date = currentCaptureRecord.work_date || "";
+        record.original_shift = currentCaptureRecord.shift || "";
+        record.original_equipment_code = currentCaptureRecord.equipment_code || "";
+        record.original_component_name = currentCaptureRecord.component || currentCaptureRecord.component_name || "";
+        record.original_capture_id = currentCaptureRecord.id || "";
+      }
       return record;
     }
     async function saveDailyCapture(){
@@ -7967,19 +8049,51 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
       if(!result.ok) throw new Error(`No se pudo guardar la captura. Errores: ${result.errors || 0}`);
+      const wasEditing = !!currentCaptureRecord;
+      currentCaptureRecord = null;
       await load();
-      $("capStatus").textContent = result.updated ? "Captura actualizada." : "Captura guardada.";
+      $("capSaveBtn").textContent = "Guardar captura";
+      $("capStatus").textContent = wasEditing || result.updated ? "Captura actualizada." : "Captura guardada.";
+    }
+    function editDailyCapture(index){
+      const row = currentCaptureRows[index];
+      if(!row) return;
+      currentCaptureRecord = row;
+      $("capDate").value = row.work_date || toIsoDate(new Date());
+      $("capShift").value = normalizeCaptureShiftValue(row.shift);
+      $("capEquipment").value = row.equipment_code || row.equipment || "";
+      setCaptureComponent(row.component || row.component_name || "");
+      $("capHi").value = formatCaptureNumber(row.hi);
+      $("capHf").value = formatCaptureNumber(row.hf);
+      $("capWorked").value = formatCaptureNumber(row.worked_hours);
+      $("capMp").value = formatCaptureNumber(row.mp_hours);
+      $("capMc").value = formatCaptureNumber(row.mc_hours);
+      $("capStandby").value = formatCaptureNumber(row.standby_hours);
+      $("capStops").value = formatCaptureNumber(row.stops);
+      $("capOil").value = formatCaptureNumber(row.oil_liters);
+      $("capOil15w40").value = formatCaptureNumber(row.oil_motor_15w40);
+      $("capOilHco68").value = formatCaptureNumber(row.oil_hco_iso68);
+      $("capOilSae30").value = formatCaptureNumber(row.oil_trans_sae30);
+      $("capFault").value = row.fault || "";
+      $("capWear").value = row.wear || "";
+      $("capCaptureStatus").value = normalizeCaptureStatusValue(row.status);
+      $("capObservations").value = row.observations || "";
+      $("capHiHint").textContent = "Editando captura existente.";
+      $("capSaveBtn").textContent = "Guardar cambios";
+      $("capStatus").textContent = `Editando ${row.work_date || ""} ${row.equipment_code || ""} ${row.component || ""}`;
+      renderCaptureRecent();
     }
     function renderCaptureRecent(){
       const selected = $("capEquipment").value;
-      const rows = [...(portal.captures || [])]
+      const rows = sortedCaptureRows((portal.captures || [])
         .filter(row => sameCaptureEquipment(row.equipment_code || row.equipment, selected))
-        .sort((a,b) => `${b.work_date || ""}-${String(b.id || 0).padStart(10,"0")}`.localeCompare(`${a.work_date || ""}-${String(a.id || 0).padStart(10,"0")}`))
-        .slice(0, 25);
+      ).slice(0, 25);
+      currentCaptureRows = rows;
       $("capRecentCount").textContent = `${rows.length} registros`;
-      $("capRecentTable").innerHTML = `<thead><tr><th>Fecha</th><th>Turno</th><th>Equipo</th><th>Comp.</th><th>HI</th><th>HF</th><th>Hrs</th><th>MP</th><th>MC</th><th>Paradas</th><th>Estatus</th></tr></thead><tbody>` +
-        rows.map(row => `<tr><td>${esc(row.work_date)}</td><td>${esc(row.shift)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${one(row.hi)}</td><td>${one(row.hf)}</td><td>${one(row.worked_hours)}</td><td>${one(row.mp_hours)}</td><td>${one(row.mc_hours)}</td><td>${num(row.stops)}</td><td>${esc(row.status)}</td></tr>`).join("") +
+      $("capRecentTable").innerHTML = `<thead><tr><th>Fecha</th><th>Turno</th><th>Equipo</th><th>Comp.</th><th>HI</th><th>HF</th><th>Hrs</th><th>MP</th><th>MC</th><th>Paradas</th><th>Estatus</th><th>Accion</th></tr></thead><tbody>` +
+        rows.map((row, idx) => `<tr class="${currentCaptureRecord === row ? "warn" : ""}"><td>${esc(row.work_date)}</td><td>${esc(row.shift)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${one(row.hi)}</td><td>${one(row.hf)}</td><td>${one(row.worked_hours)}</td><td>${one(row.mp_hours)}</td><td>${one(row.mc_hours)}</td><td>${num(row.stops)}</td><td>${esc(row.status)}</td><td><button type="button" class="btn secondary small" data-cap-edit="${idx}">Editar</button></td></tr>`).join("") +
         `</tbody>`;
+      document.querySelectorAll("[data-cap-edit]").forEach(button => button.addEventListener("click", () => editDailyCapture(Number(button.dataset.capEdit))));
     }
     function conditionClass(condition){
       const text = String(condition || "").toUpperCase();
@@ -8957,7 +9071,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["bitEquipment","bitStart","bitEnd"].forEach(id => $(id).addEventListener("change", renderBitacora));
     $("bitSearch").addEventListener("input", renderBitacora);
     $("renderBitBtn").addEventListener("click", renderBitacora);
-    $("capEquipment").addEventListener("change", () => { renderCaptureComponents(); renderCaptureRecent(); });
+    $("capDate").addEventListener("change", () => applyPreviousHi(true));
+    $("capShift").addEventListener("change", renderCaptureRecent);
+    $("capEquipment").addEventListener("change", () => { renderCaptureComponents(); applyPreviousHi(true); renderCaptureRecent(); });
+    $("capComponent").addEventListener("change", () => applyPreviousHi(true));
     ["capHi","capHf"].forEach(id => $(id).addEventListener("input", updateCaptureWorkedHours));
     $("capNewBtn").addEventListener("click", resetCaptureForm);
     $("capSaveBtn").addEventListener("click", () => saveDailyCapture().catch(showError));
