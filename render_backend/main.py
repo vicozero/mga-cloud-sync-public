@@ -1416,7 +1416,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         "service_history": [],
         "captures": captures,
         "availability": [],
-        "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado", "KPI Aceites", "KPI Llantas"],
+        "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado", "Equipo Utilitario", "KPI Aceites", "KPI Llantas"],
         "kpi_reports": {},
         "oil_kpi": {"rows": [], "totals": {}, "columns": []},
         "tire_kpi": {"rows": [], "summary": {}},
@@ -3132,13 +3132,15 @@ def kpi_format_key(group: str) -> str:
         return "barrenacion"
     if "REZAGADO" in text:
         return "rezagado"
+    if "UTILITARIO" in text:
+        return "utilitario"
     return ""
 
 
 def kpi_format_pdf_path(group: str) -> tuple[str, Path]:
     key = kpi_format_key(group)
     if not key:
-        raise HTTPException(status_code=400, detail="Formato KPI disponible solo para Barrenacion, Rezagado, Aceites y Llantas.")
+        raise HTTPException(status_code=400, detail="Formato KPI disponible solo para Barrenacion, Rezagado, Utilitario, Aceites y Llantas.")
     path = KPI_FORMAT_PDFS.get(key)
     if path is None or not path.exists():
         raise HTTPException(status_code=404, detail="Formato KPI no encontrado en el servidor.")
@@ -3289,7 +3291,25 @@ def group_matches_py(eq: dict[str, Any], group: str) -> bool:
         return code.startswith(("JL", "JA")) or "JUMBO" in text or "BARREN" in text or "ANCLADOR" in text
     if "REZAGADO" in key:
         return code.startswith("ST") or any(token in text for token in ("SCOOP", "CATERPILLAR", "EPROC", "R1300", "R1600", "REZAG"))
+    if "UTILITARIO" in key:
+        return code.startswith(("RET", "MG", "CBP")) or any(
+            token in text
+            for token in ("RETRO", "CAMION", "VEHIC", "UTILITARIO", "PICK", "HILUX", "TACOMA", "POLVORERA")
+        )
     return True
+
+
+def kpi_total_label_py(group: str) -> str:
+    text = normalized_ascii(group)
+    if "BARRENACION" in text:
+        return "Total Equipos de Barrenacion"
+    if "REZAGADO" in text:
+        return "Total Equipos de Rezagado"
+    if "UTILITARIO" in text:
+        return "Total Equipo Utilitario"
+    if "TODOS" in text:
+        return "Total Todos los equipos"
+    return "Total Equipos"
 
 
 def kpi_required_component_py(code: Any) -> str:
@@ -4129,7 +4149,7 @@ def create_monthly_kpi_table_image(portal: dict[str, Any], group: str, start: st
     widths = [int(w * weight / total_weight) for weight in weights]
     widths[-1] += w - sum(widths)
     display_rows = rows[:8]
-    total_label = "Total Equipos de Barrenacion" if "barrenacion" in group.lower() else "Total Equipos de Rezagado"
+    total_label = kpi_total_label_py(group)
     total_row = type(
         "KpiMonthlyRow",
         (),
@@ -5233,19 +5253,21 @@ def get_kpi_format_excel(
     key = kpi_format_key(group)
     normalized_group = normalize_text(group)
     if key in {"aceites", "llantas"} or "DIESEL" in normalized_group:
-        raise HTTPException(status_code=400, detail="Excel editable disponible para Barrenacion y Rezagado.")
+        raise HTTPException(status_code=400, detail="Excel editable disponible para Barrenacion, Rezagado y Utilitario.")
     if key == "barrenacion":
         groups = ["Equipos de Barrenacion"]
     elif key == "rezagado":
         groups = ["Equipos de Rezagado"]
+    elif key == "utilitario":
+        groups = ["Equipo Utilitario"]
     elif normalized_group and "TODO" not in normalized_group:
-        raise HTTPException(status_code=400, detail="Selecciona Barrenacion, Rezagado o Todos los equipos.")
+        raise HTTPException(status_code=400, detail="Selecciona Barrenacion, Rezagado, Utilitario o Todos los equipos.")
     else:
-        groups = ["Equipos de Rezagado", "Equipos de Barrenacion"]
+        groups = ["Equipos de Rezagado", "Equipos de Barrenacion", "Equipo Utilitario"]
     reports = [monthly_kpi_report(portal, item, start_date.isoformat(), end_date.isoformat()) for item in groups]
     settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
     data = build_editable_kpi_excel(reports, settings)
-    group_label = "Barrenacion_Rezagado" if len(groups) > 1 else re.sub(r"[^A-Za-z0-9_.-]+", "_", groups[0].replace("Equipos de ", ""))
+    group_label = "Barrenacion_Rezagado_Utilitario" if len(groups) > 1 else re.sub(r"[^A-Za-z0-9_.-]+", "_", groups[0].replace("Equipos de ", ""))
     filename = f"KPI_{group_label}_{start_date.isoformat()}_{end_date.isoformat()}.xlsx"
     return StreamingResponse(
         BytesIO(data),
@@ -5615,7 +5637,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .inline-check { display:flex; align-items:center; gap:8px; min-height:38px; }
     .inline-check input { width:auto; }
     input:focus, select:focus, textarea:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(0,156,154,.14); }
-    .stats { display:grid; grid-template-columns:repeat(5, 1fr); gap:10px; }
+    .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; }
     .stat { position:relative; overflow:hidden; min-height:92px; display:grid; grid-template-columns:auto 1fr; align-items:start; gap:8px 10px; background:linear-gradient(180deg,#fff,#f8fbff); border:1px solid var(--line); padding:14px 15px; border-radius:8px; box-shadow:0 12px 28px rgba(15,23,42,.07); }
     .stat::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:linear-gradient(180deg,var(--teal),var(--green)); }
     .stat-icon { position:relative; width:38px; height:38px; border-radius:8px; background:linear-gradient(135deg,rgba(37,99,235,.16),rgba(20,184,166,.18)); border:1px solid rgba(37,99,235,.16); }
@@ -5912,6 +5934,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="stats">
           <div class="stat"><strong>Barrenacion</strong>KPI mensual</div>
           <div class="stat"><strong>Rezagado</strong>KPI mensual</div>
+          <div class="stat"><strong>Utilitario</strong>KPI mensual</div>
           <div class="stat"><strong>Llantas</strong>Vida util</div>
           <div class="stat"><strong>Diesel</strong>Consumo</div>
           <div class="stat"><strong>Aceites</strong>KPI mensual</div>
@@ -6798,7 +6821,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const group = $("kpiGroup").value || "Todos los equipos";
       const normalized = group.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
       if(normalized.includes("ACEITE") || normalized.includes("LLANTA") || normalized.includes("DIESEL")){
-        alert("Excel editable disponible para Barrenacion y Rezagado.");
+        alert("Excel editable disponible para Barrenacion, Rezagado y Utilitario.");
         return;
       }
       const params = new URLSearchParams({
@@ -7187,6 +7210,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(key.includes("TODOS")) return true;
       if(key.includes("BARRENACION")) return code.startsWith("JL") || code.startsWith("JA") || text.includes("JUMBO") || text.includes("BARREN") || text.includes("ANCLADOR");
       if(key.includes("REZAGADO")) return code.startsWith("ST") || text.includes("SCOOP") || text.includes("CATERPILLAR") || text.includes("EPROC") || text.includes("R1300") || text.includes("R1600") || text.includes("REZAG");
+      if(key.includes("UTILITARIO")) return code.startsWith("RET") || code.startsWith("MG") || code.startsWith("CBP") || text.includes("RETRO") || text.includes("CAMION") || text.includes("VEHIC") || text.includes("UTILITARIO") || text.includes("PICK") || text.includes("HILUX") || text.includes("TACOMA") || text.includes("POLVORERA");
       return true;
     }
     function metric(period, worked, mp, mc, stops, missionHours=24){
@@ -7261,7 +7285,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("dieselDate").value) $("dieselDate").value = today;
       if(!$("dieselDayDate").value) $("dieselDayDate").value = today;
       $("dieselMeta").value = diesel.meta_lh || (portal.settings || {}).meta_diesel_lh || $("dieselMeta").value || 25;
-      const rawGroups = portal.kpi_groups && portal.kpi_groups.length ? [...portal.kpi_groups] : ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado"];
+      const rawGroups = portal.kpi_groups && portal.kpi_groups.length ? [...portal.kpi_groups] : ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado", "Equipo Utilitario"];
+      if(!rawGroups.includes("Equipo Utilitario")) rawGroups.splice(Math.min(rawGroups.length, 3), 0, "Equipo Utilitario");
       ["KPI Aceites", "KPI Llantas", "KPI Diesel"].forEach(group => { if(!rawGroups.includes(group)) rawGroups.push(group); });
       const groups = rawGroups.map(g => ({value:g, label:g}));
       const previousGroup = $("kpiGroup").value;

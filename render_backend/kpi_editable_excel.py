@@ -157,7 +157,22 @@ def _group_title(group: str) -> tuple[str, str]:
     text = str(group or "").upper()
     if "REZAG" in text:
         return "REZAGADO", "Equipos de Rezagado"
+    if "UTILITARIO" in text:
+        return "UTILITARIO", "Equipo Utilitario"
     return "BARRENACION", "Equipos de Barrenacion"
+
+
+def _total_label(group: str) -> str:
+    text = str(group or "").upper()
+    if "BARREN" in text:
+        return "Total Equipos de Barrenacion"
+    if "REZAG" in text:
+        return "Total Equipos de Rezagado"
+    if "UTILITARIO" in text:
+        return "Total Equipo Utilitario"
+    if "TODO" in text:
+        return "Total Todos los equipos"
+    return "Total Equipos"
 
 
 def _configure_sheet(ws) -> None:
@@ -252,7 +267,7 @@ def _write_table(ws, report: dict[str, Any], start_row: int, start_col: int, set
         cell.alignment = _align()
     total_row = start_row + len(rows) + 1
     group = report.get("group") or ""
-    total_label = "Total Equipos de Rezagado" if "REZAG" in str(group).upper() else "Total Equipos de Barrenacion"
+    total_label = _total_label(group)
     ws.cell(total_row, start_col, "")
     ws.cell(total_row, start_col + 1, total_label)
     for col in range(start_col, start_col + len(headers)):
