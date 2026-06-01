@@ -37,6 +37,11 @@ from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 try:
+    from .kpi_editable_excel import build_editable_kpi_excel
+except ImportError:
+    from kpi_editable_excel import build_editable_kpi_excel
+
+try:
     import fitz
 except Exception:
     fitz = None
@@ -5208,6 +5213,50 @@ def get_kpi_format_image(group: str = Query(default="")) -> StreamingResponse:
     )
 
 
+@app.get("/api/kpi-format/excel")
+def get_kpi_format_excel(
+    group: str = Query(default="Todos los equipos"),
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+) -> StreamingResponse:
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+    period = portal.get("period") if isinstance(portal.get("period"), dict) else {}
+    today = utc_now().date().isoformat()
+    start_text = start or str(period.get("start") or today)
+    end_text = end or str(period.get("end") or start_text)
+    start_date = parse_report_date(start_text, "start")
+    end_date = parse_report_date(end_text, "end")
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="La fecha final no puede ser menor que la fecha inicial.")
+
+    key = kpi_format_key(group)
+    normalized_group = normalize_text(group)
+    if key in {"aceites", "llantas"} or "DIESEL" in normalized_group:
+        raise HTTPException(status_code=400, detail="Excel editable disponible para Barrenacion y Rezagado.")
+    if key == "barrenacion":
+        groups = ["Equipos de Barrenacion"]
+    elif key == "rezagado":
+        groups = ["Equipos de Rezagado"]
+    elif normalized_group and "TODO" not in normalized_group:
+        raise HTTPException(status_code=400, detail="Selecciona Barrenacion, Rezagado o Todos los equipos.")
+    else:
+        groups = ["Equipos de Rezagado", "Equipos de Barrenacion"]
+    reports = [monthly_kpi_report(portal, item, start_date.isoformat(), end_date.isoformat()) for item in groups]
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    data = build_editable_kpi_excel(reports, settings)
+    group_label = "Barrenacion_Rezagado" if len(groups) > 1 else re.sub(r"[^A-Za-z0-9_.-]+", "_", groups[0].replace("Equipos de ", ""))
+    filename = f"KPI_{group_label}_{start_date.isoformat()}_{end_date.isoformat()}.xlsx"
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )
+
+
 @app.get("/api/monthly-report/powerpoint")
 def get_monthly_report_powerpoint(
     year: int = Query(default=0),
@@ -5829,6 +5878,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
         <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
         <button class="btn secondary" id="kpiImageBtn">Descargar imagen</button>
+        <button class="btn secondary" id="kpiExcelBtn">Excel editable</button>
       </div>
       <div class="panel" id="kpiPrintArea">
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
@@ -6743,6 +6793,32 @@ WAREHOUSE_HTML = r"""<!doctype html>
       };
       image.onerror = () => alert("No se pudo generar la imagen KPI.");
       image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    }
+    async function downloadKpiExcel(){
+      const group = $("kpiGroup").value || "Todos los equipos";
+      const normalized = group.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      if(normalized.includes("ACEITE") || normalized.includes("LLANTA") || normalized.includes("DIESEL")){
+        alert("Excel editable disponible para Barrenacion y Rezagado.");
+        return;
+      }
+      const params = new URLSearchParams({
+        group,
+        start: $("kpiStart").value || "",
+        end: $("kpiEnd").value || ""
+      });
+      const response = await fetch(`/api/kpi-format/excel?${params.toString()}`, {headers: headers(), cache: "no-store"});
+      if(!response.ok) throw new Error(await apiError(response));
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      const safeGroup = group.replace(/^Equipos de\s+/i, "").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "KPI";
+      const start = $("kpiStart").value || "inicio";
+      const end = $("kpiEnd").value || "fin";
+      link.href = URL.createObjectURL(blob);
+      link.download = `KPI_${safeGroup}_${start}_${end}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      URL.revokeObjectURL(link.href);
+      link.remove();
     }
     async function load(){
       const [r, p, prod, req, hosePayload, dieselPayload, eppPayload] = await Promise.all([
@@ -9213,6 +9289,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("renderKpiBtn").addEventListener("click", renderDashboard);
     $("printKpiBtn").addEventListener("click", printExactKpi);
     $("kpiImageBtn").addEventListener("click", () => downloadKpiImage().catch(showError));
+    $("kpiExcelBtn").addEventListener("click", () => downloadKpiExcel().catch(showError));
     $("monthlyPptBtn").addEventListener("click", () => downloadMonthlyPowerPoint().catch(showError));
     $("weeklyBase").addEventListener("change", () => applyWeeklyPeriod(true));
     $("weeklyApplyBtn").addEventListener("click", () => applyWeeklyPeriod(true));
