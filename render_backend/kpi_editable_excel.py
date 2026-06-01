@@ -157,6 +157,8 @@ def _group_title(group: str) -> tuple[str, str]:
     text = str(group or "").upper()
     if "REZAG" in text:
         return "REZAGADO", "Equipos de Rezagado"
+    if "ACARREO" in text:
+        return "ACARREO", "Acarreo"
     if "UTILITARIO" in text:
         return "UTILITARIO", "Equipo Utilitario"
     return "BARRENACION", "Equipos de Barrenacion"
@@ -168,6 +170,8 @@ def _total_label(group: str) -> str:
         return "Total Equipos de Barrenacion"
     if "REZAG" in text:
         return "Total Equipos de Rezagado"
+    if "ACARREO" in text:
+        return "Total Acarreo"
     if "UTILITARIO" in text:
         return "Total Equipo Utilitario"
     if "TODO" in text:
