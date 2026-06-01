@@ -3292,10 +3292,7 @@ def group_matches_py(eq: dict[str, Any], group: str) -> bool:
     if "REZAGADO" in key:
         return code.startswith("ST") or any(token in text for token in ("SCOOP", "CATERPILLAR", "EPROC", "R1300", "R1600", "REZAG"))
     if "UTILITARIO" in key:
-        return code.startswith(("RET", "MG", "CBP")) or any(
-            token in text
-            for token in ("RETRO", "CAMION", "VEHIC", "UTILITARIO", "PICK", "HILUX", "TACOMA", "POLVORERA")
-        )
+        return re.sub(r"[^A-Z0-9]", "", code) in {"RET009", "RET010"}
     return True
 
 
@@ -7210,7 +7207,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(key.includes("TODOS")) return true;
       if(key.includes("BARRENACION")) return code.startsWith("JL") || code.startsWith("JA") || text.includes("JUMBO") || text.includes("BARREN") || text.includes("ANCLADOR");
       if(key.includes("REZAGADO")) return code.startsWith("ST") || text.includes("SCOOP") || text.includes("CATERPILLAR") || text.includes("EPROC") || text.includes("R1300") || text.includes("R1600") || text.includes("REZAG");
-      if(key.includes("UTILITARIO")) return code.startsWith("RET") || code.startsWith("MG") || code.startsWith("CBP") || text.includes("RETRO") || text.includes("CAMION") || text.includes("VEHIC") || text.includes("UTILITARIO") || text.includes("PICK") || text.includes("HILUX") || text.includes("TACOMA") || text.includes("POLVORERA");
+      if(key.includes("UTILITARIO")) return ["RET009","RET010"].includes(code.replace(/[^A-Z0-9]/g, ""));
       return true;
     }
     function metric(period, worked, mp, mc, stops, missionHours=24){
