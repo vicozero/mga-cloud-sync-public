@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.14")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.15")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1279,11 +1279,15 @@ def mobile_capture_portal_row(row: MobileCapture) -> dict[str, Any]:
 
 
 def capture_merge_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    equipment_code = str(row.get("equipment_code") or row.get("equipment") or "").strip().upper()
+    component = str(row.get("component") or row.get("component_name") or "").strip().upper()
+    if not component:
+        component = kpi_required_component_py(equipment_code)
     return (
         str(row.get("work_date") or "").strip(),
         str(row.get("shift") or "").strip().upper(),
-        str(row.get("equipment_code") or row.get("equipment") or "").strip().upper(),
-        str(row.get("component") or row.get("component_name") or "").strip().upper(),
+        equipment_code,
+        component,
     )
 
 
