@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.22")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.23")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -6680,9 +6680,27 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function serviceFiltersText(row){
       if(row.filters_text) return String(row.filters_text);
+      if(Array.isArray(row.filters_used)){
+        return row.filters_used.map(item => `${item.part_number || ""} ${item.quantity || ""} ${item.unit || ""}`.trim()).filter(Boolean).join("; ");
+      }
+      if(row.filters_used && String(row.filters_used).trim().startsWith("[")){
+        try {
+          return JSON.parse(row.filters_used).map(item => `${item.part_number || ""} ${item.quantity || ""} ${item.unit || ""}`.trim()).filter(Boolean).join("; ");
+        } catch(_err) {}
+      }
       const notes = String(row.notes || "");
       const match = notes.match(/Filtros descontados:\s*([^\n]+)/i);
       return match ? match[1].trim() : "";
+    }
+    function serviceOilsText(row){
+      const raw = row.oils_used || "";
+      if(!raw) return "";
+      if(typeof raw === "object") return Object.entries(raw).map(([k,v]) => `${k}: ${v}`).join("; ");
+      try {
+        return Object.entries(JSON.parse(raw)).map(([k,v]) => `${k}: ${v}`).join("; ");
+      } catch(_err) {
+        return String(raw);
+      }
     }
     function setDashboardMode(mode){
       const area = $("kpiPrintArea");
@@ -8364,7 +8382,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const intervalOk = !interval || service === interval.toUpperCase() || service.includes(interval.toUpperCase());
         const typeOk = !type || serviceType === type.toUpperCase();
         const dateOk = !start || !end || inRange(row.completed_date, start, end);
-        const text = [row.equipment_code,row.equipment_description,row.component,row.service_type,row.service_name,row.service_interval,row.order_number,row.notes,row.status].join(" ").toUpperCase();
+        const text = [row.equipment_code,row.equipment_description,row.component,row.service_type,row.stage,row.service_name,row.service_interval,row.order_number,row.document_name,row.notes,row.status].join(" ").toUpperCase();
         return eqOk && intervalOk && typeOk && dateOk && (!search || text.includes(search));
       }).sort((a,b) => String(b.completed_date || "").localeCompare(String(a.completed_date || "")) || String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")));
       return {start, end, rows};
@@ -8395,12 +8413,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const number = Number(value || 0);
         return number > 0 ? one(number) : "";
       };
-      $("srvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Tipo</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Servicio</th><th>Programado</th><th>Realizado</th><th>Fecha prog.</th><th>Estado</th><th>OT</th><th>Filtros usados</th><th>Detalle</th></tr></thead><tbody>` +
+      $("srvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Tipo</th><th>Etapa</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Servicio</th><th>Programado</th><th>Realizado</th><th>Fecha prog.</th><th>Estado</th><th>OT</th><th>Carta/gama</th><th>Filtros usados</th><th>Aceites</th><th>Detalle</th></tr></thead><tbody>` +
         result.rows.map(row => {
           const status = String(row.status || "");
           const cls = status === "A TIEMPO" ? "ok" : (status === "TARDIO" ? "bad" : "warn");
           const service = row.service_interval || row.service_name || "";
-          return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.service_type || "Programado")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
+          const documentText = row.document_name || (row.document_path ? "Registrada" : "");
+          return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.service_type || "Programado")}</td><td>${esc(row.stage || "Cerrado")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(documentText)}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(serviceOilsText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
         }).join("") +
         `</tbody>`;
     }
