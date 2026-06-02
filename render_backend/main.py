@@ -524,6 +524,18 @@ def normalize_text(value: Any) -> str:
     return " ".join(str(value or "").strip().upper().split())
 
 
+def normalize_capture_shift_py(value: Any) -> str:
+    text = normalize_text(value)
+    compact = text.replace(" ", "")
+    if compact in {"1", "T1", "TURNO1", "PRIMERO", "DIA"}:
+        return "Turno 1"
+    if compact in {"2", "T2", "TURNO2", "SEGUNDO", "NOCHE"}:
+        return "Turno 2"
+    if text == "GENERAL":
+        return "General"
+    return "Turno 1"
+
+
 def normalize_part_key(value: Any) -> str:
     text = normalize_text(value)
     return "".join(ch for ch in text if ch.isalnum())
@@ -1261,7 +1273,7 @@ def mobile_capture_portal_row(row: MobileCapture) -> dict[str, Any]:
         "source": row.source_device or str(payload.get("source") or ""),
         "received_at": row.received_at.isoformat(timespec="seconds") if row.received_at else "",
         "work_date": row.work_date or str(payload.get("work_date") or ""),
-        "shift": str(payload.get("shift") or payload.get("turno") or "General"),
+        "shift": normalize_capture_shift_py(payload.get("shift") or payload.get("turno")),
         "equipment_code": row.equipment_code or str(payload.get("equipment_code") or payload.get("equipment") or ""),
         "equipment_description": "",
         "component": row.component_name or str(payload.get("component_name") or payload.get("component") or ""),
@@ -1295,7 +1307,7 @@ def capture_merge_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
         component = kpi_required_component_py(equipment_code)
     return (
         str(row.get("work_date") or "").strip(),
-        str(row.get("shift") or "").strip().upper(),
+        normalize_capture_shift_py(row.get("shift")),
         equipment_code,
         component,
     )
@@ -1310,6 +1322,22 @@ def capture_delete_key(payload: dict[str, Any]) -> tuple[str, str, str, str]:
             "component": payload.get("component") or payload.get("component_name"),
         }
     )
+
+
+def mobile_capture_by_merge_key(session: Session, record: dict[str, Any]) -> MobileCapture | None:
+    key = capture_merge_key(record)
+    if not any(key):
+        return None
+    candidates = session.scalars(
+        select(MobileCapture)
+        .where(MobileCapture.work_date == key[0])
+        .where(MobileCapture.equipment_code == key[2])
+        .order_by(MobileCapture.id.desc())
+    ).all()
+    for row in candidates:
+        if capture_merge_key(mobile_capture_portal_row(row)) == key:
+            return row
+    return None
 
 
 def remove_capture_rows_from_portal_payload(payload: dict[str, Any], delete_key: tuple[str, str, str, str], mobile_id: str, capture_id: int) -> int:
@@ -8272,9 +8300,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const component = $("capComponent").value;
       const workDate = $("capDate").value;
       if(!equipment || !component || !workDate) return null;
+      const currentShiftOrder = captureShiftOrder($("capShift").value);
       const previousRows = (portal.captures || []).filter(row =>
         sameCaptureEquipment(row.equipment_code || row.equipment, equipment) &&
-        String(row.work_date || "") < workDate &&
+        (
+          String(row.work_date || "") < workDate ||
+          (String(row.work_date || "") === workDate && captureShiftOrder(row.shift) < currentShiftOrder)
+        ) &&
         Number(row.hf || 0) > 0
       );
       const exactComponent = previousRows.filter(row => sameCaptureComponent(row.component || row.component_name, component));
@@ -8360,7 +8392,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const oilSae = captureNumber("capOilSae30");
       const record = {
         work_date: workDate,
-        shift: $("capShift").value || "General",
+        shift: normalizeCaptureShiftValue($("capShift").value),
         equipment_code: equipment,
         equipment: equipment,
         component_name: component,
@@ -9522,7 +9554,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("bitSearch").addEventListener("input", renderBitacora);
     $("renderBitBtn").addEventListener("click", renderBitacora);
     $("capDate").addEventListener("change", () => applyPreviousHi(true));
-    $("capShift").addEventListener("change", renderCaptureRecent);
+    $("capShift").addEventListener("change", () => { applyPreviousHi(true); renderCaptureRecent(); });
     $("capEquipment").addEventListener("change", () => { renderCaptureComponents(); applyPreviousHi(true); renderCaptureRecent(); });
     $("capComponent").addEventListener("change", () => applyPreviousHi(true));
     ["capHi","capHf"].forEach(id => $(id).addEventListener("input", updateCaptureWorkedHours));
@@ -10419,6 +10451,8 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 photos = record.get("photos") or []
                 stored_record = dict(record)
                 stored_record["photos"] = []
+                stored_record["shift"] = normalize_capture_shift_py(stored_record.get("shift") or stored_record.get("turno"))
+                record["shift"] = stored_record["shift"]
                 existing = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == mobile_id))
                 if existing is not None:
                     existing_payload = json_loads(existing.payload_json)
@@ -10451,6 +10485,41 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                             "updated": changed,
                             "stored": True,
                             "desktop_imported": existing.desktop_imported_at is not None,
+                        }
+                    )
+                    continue
+
+                duplicate = mobile_capture_by_merge_key(session, stored_record)
+                if duplicate is not None:
+                    duplicate_payload = json_loads(duplicate.payload_json)
+                    changed = json.dumps(duplicate_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) != json.dumps(
+                        stored_record,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    if changed:
+                        duplicate.mobile_id = mobile_id
+                        duplicate.source_device = source_device
+                        duplicate.user_name = str(record.get("user_name") or user_name)
+                        duplicate.equipment_code = str(record.get("equipment_code") or "")
+                        duplicate.component_name = str(record.get("component_name") or "")
+                        duplicate.work_date = str(record.get("work_date") or "")
+                        duplicate.payload_json = json_dumps(stored_record)
+                        duplicate.received_at = utc_now()
+                        duplicate.desktop_imported_at = None
+                        updated += 1
+                    else:
+                        skipped += 1
+                    results.append(
+                        {
+                            "mobile_id": mobile_id,
+                            "capture_id": duplicate.id,
+                            "created": False,
+                            "updated": changed,
+                            "stored": True,
+                            "duplicate_key": True,
+                            "desktop_imported": duplicate.desktop_imported_at is not None,
                         }
                     )
                     continue
