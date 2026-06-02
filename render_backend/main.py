@@ -1335,8 +1335,15 @@ def capture_deletion_payload(row: CaptureDeletion) -> dict[str, Any]:
     return payload
 
 
-def mobile_capture_portal_rows(session: Session, limit: int = 1000) -> list[dict[str, Any]]:
-    rows = session.scalars(select(MobileCapture).order_by(MobileCapture.work_date.desc(), MobileCapture.id.desc()).limit(limit)).all()
+def mobile_capture_portal_rows(session: Session, limit: int = 1000, start: str = "", end: str = "") -> list[dict[str, Any]]:
+    query = select(MobileCapture).order_by(MobileCapture.work_date.desc(), MobileCapture.id.desc())
+    if start:
+        query = query.where(MobileCapture.work_date >= start)
+    if end:
+        query = query.where(MobileCapture.work_date <= end)
+    if limit:
+        query = query.limit(limit)
+    rows = session.scalars(query).all()
     return [mobile_capture_portal_row(row) for row in rows]
 
 
@@ -3165,6 +3172,13 @@ MONTH_NAMES_ES_FULL = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
+OIL_REPORT_COLUMNS = [
+    {"label": "Motor 15W40", "key": "oil_motor_15w40"},
+    {"label": "ISO 68", "key": "oil_hco_iso68"},
+    {"label": "SAE 30", "key": "oil_trans_sae30"},
+    {"label": "SAE 50", "key": "oil_sae50"},
+    {"label": "85W140", "key": "oil_85w140"},
+]
 PPT_EMU_PER_INCH = 914400
 PPT_BLUE = "#0b2f6f"
 PPT_TEAL = "#00a6a6"
@@ -3480,6 +3494,139 @@ def kpi_row_obj(row: dict[str, Any]):
 
 def monthly_kpi_row_objects(report: dict[str, Any]) -> list[Any]:
     return [kpi_row_obj(row) for row in report.get("rows", [])]
+
+
+def portal_oil_group(eq: dict[str, Any]) -> str:
+    if group_matches_py(eq, "Equipos de Barrenacion"):
+        return "BARRENACION"
+    if group_matches_py(eq, "Equipos de Rezagado"):
+        return "REZAGADO"
+    return "UTILITARIO"
+
+
+def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -> dict[str, Any]:
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9) or 9
+    turns_per_day = parse_float(settings.get("turns_per_day"), 2) or 2
+    daily_hours = shift_hours * turns_per_day
+    try:
+        start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        days = max((end_date - start_date).days + 1, 1)
+    except ValueError:
+        days = 1
+    grouped: dict[str, dict[str, Any]] = {}
+    descriptions: dict[str, str] = {}
+    for eq in portal_equipment_rows(portal):
+        code = str(eq.get("code") or eq.get("equipment_code") or "").strip()
+        if not code:
+            continue
+        descriptions[code.upper()] = str(eq.get("description") or "")
+        grouped.setdefault(
+            code,
+            {
+                "code": code,
+                "description": str(eq.get("description") or ""),
+                "group": portal_oil_group(eq),
+                "period_hours": days * daily_hours,
+                "period": days * daily_hours,
+                "worked_hours": 0.0,
+                "worked": 0.0,
+                "total_liters": 0.0,
+                **{col["key"]: 0.0 for col in OIL_REPORT_COLUMNS},
+            },
+        )
+
+    captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
+    for capture in captures:
+        if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
+            continue
+        code = str(capture.get("equipment_code") or capture.get("code") or "").strip()
+        if not code:
+            continue
+        if code not in grouped:
+            grouped[code] = {
+                "code": code,
+                "description": descriptions.get(code.upper(), str(capture.get("equipment_description") or "")),
+                "group": "UTILITARIO",
+                "period_hours": days * daily_hours,
+                "period": days * daily_hours,
+                "worked_hours": 0.0,
+                "worked": 0.0,
+                "total_liters": 0.0,
+                **{col["key"]: 0.0 for col in OIL_REPORT_COLUMNS},
+            }
+        row = grouped[code]
+        worked = parse_float(capture.get("worked_hours"), 0)
+        row["worked_hours"] += worked
+        row["worked"] += worked
+        for col in OIL_REPORT_COLUMNS:
+            key = col["key"]
+            value = parse_float(capture.get(key), 0)
+            row[key] += value
+            row["total_liters"] += value
+
+    def sort_key(row: dict[str, Any]) -> tuple[int, str]:
+        group_order = {"BARRENACION": 1, "REZAGADO": 2, "UTILITARIO": 3}
+        return group_order.get(str(row.get("group") or ""), 9), str(row.get("code") or "")
+
+    rows = sorted(grouped.values(), key=sort_key)
+    totals: dict[str, float] = {
+        "period": sum(parse_float(row.get("period"), 0) for row in rows),
+        "period_hours": sum(parse_float(row.get("period_hours"), 0) for row in rows),
+        "worked": sum(parse_float(row.get("worked"), 0) for row in rows),
+        "worked_hours": sum(parse_float(row.get("worked_hours"), 0) for row in rows),
+        "total_liters": sum(parse_float(row.get("total_liters"), 0) for row in rows),
+    }
+    for col in OIL_REPORT_COLUMNS:
+        totals[col["key"]] = sum(parse_float(row.get(col["key"]), 0) for row in rows)
+    return {
+        "start": start,
+        "end": end,
+        "start_day": int(str(start)[-2:]) if start else 1,
+        "end_day": int(str(end)[-2:]) if end else 31,
+        "days": days,
+        "daily_hours": daily_hours,
+        "columns": OIL_REPORT_COLUMNS,
+        "rows": rows,
+        "totals": totals,
+    }
+
+
+def portal_for_report_period(session: Session, portal: dict[str, Any], start: str, end: str) -> dict[str, Any]:
+    report_portal = dict(portal)
+    report_portal["period"] = {
+        "start": start,
+        "end": end,
+        "year": int(str(start)[:4]) if start else utc_now().year,
+        "month": int(str(start)[5:7]) if len(str(start)) >= 7 else utc_now().month,
+    }
+    captures = report_portal.get("captures")
+    merged = [row for row in captures if isinstance(row, dict)] if isinstance(captures, list) else []
+    index_by_key = {capture_merge_key(row): idx for idx, row in enumerate(merged) if any(capture_merge_key(row))}
+    equipment_rows = report_portal.get("equipment") if isinstance(report_portal.get("equipment"), list) else []
+    descriptions = {
+        str(e.get("code") or e.get("equipment_code") or "").strip().upper(): str(e.get("description") or e.get("family") or "")
+        for e in equipment_rows
+        if isinstance(e, dict)
+    }
+    for row in mobile_capture_portal_rows(session, limit=0, start=start, end=end):
+        key = capture_merge_key(row)
+        if not any(key):
+            continue
+        code = str(row.get("equipment_code") or "").strip().upper()
+        if code and descriptions.get(code):
+            row["equipment_description"] = descriptions[code]
+        existing_index = index_by_key.get(key)
+        if existing_index is None:
+            merged.append(row)
+            index_by_key[key] = len(merged) - 1
+        else:
+            merged[existing_index] = row
+    merged.sort(key=lambda row: (str(row.get("work_date") or ""), int(parse_float(row.get("id"), 0))), reverse=True)
+    report_portal["captures"] = merged
+    report_portal["oil_kpi"] = portal_oil_report_for_period(report_portal, start, end)
+    return report_portal
 
 
 def is_kpi_out_row_py(row: Any) -> bool:
@@ -5298,8 +5445,8 @@ def get_monthly_report_powerpoint(
     if month < 1 or month > 12:
         raise HTTPException(status_code=400, detail="Mes invalido.")
     with SessionLocal() as session:
-        portal = latest_portal_payload(session)
         start, end = month_bounds(year, month)
+        portal = portal_for_report_period(session, latest_portal_payload(session), start, end)
         diesel_data = diesel_payload(session, start, end)
     data = monthly_report_pptx_bytes(portal, year, month, diesel_data)
     month_name = MONTH_NAMES_ES_FULL[month - 1]
@@ -5331,8 +5478,9 @@ def get_weekly_report_powerpoint(
     if (end_date - start_date).days > 13:
         raise HTTPException(status_code=400, detail="El reporte semanal permite maximo 14 dias.")
     with SessionLocal() as session:
-        portal = latest_portal_payload(session)
-        diesel_data = diesel_payload(session, start_date.isoformat(), end_date.isoformat())
+        start_text, end_text = start_date.isoformat(), end_date.isoformat()
+        portal = portal_for_report_period(session, latest_portal_payload(session), start_text, end_text)
+        diesel_data = diesel_payload(session, start_text, end_text)
     data = weekly_report_pptx_bytes(portal, start_date, end_date, diesel_data)
     filename = re.sub(
         r"[^A-Za-z0-9_.-]+",
