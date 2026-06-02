@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.3.3")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.14")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
