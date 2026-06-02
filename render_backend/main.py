@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.21")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.22")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -6184,6 +6184,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Hasta<input id="backlogEnd" type="date"></label>
         <label>Nivel<select id="backlogLevel"><option value="">Todos</option><option>ALTA</option><option>MEDIA</option><option>BAJA</option></select></label>
         <label>Origen<select id="backlogSource"><option value="">Todos</option><option>Preventivo</option><option>Captura</option><option>OT</option><option>Requisicion</option></select></label>
+        <label>Estado<select id="backlogStatus"><option value="">Todos</option><option>Pendiente</option><option>En proceso</option><option>Atendido</option><option>Cancelado</option></select></label>
         <label>Buscar<input id="backlogSearch" placeholder="Equipo, sistema, detalle"></label>
         <button class="btn" id="renderBacklogBtn">Actualizar</button>
       </div>
@@ -7437,6 +7438,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function backlogLevel(score){ return score >= 80 ? "ALTA" : (score >= 50 ? "MEDIA" : "BAJA"); }
     function levelClass(level){ return level === "ALTA" ? "bad" : (level === "MEDIA" ? "warn" : "ok"); }
+    function flowClass(status){
+      const text = String(status || "").toUpperCase();
+      if(text.includes("ATEND")) return "ok";
+      if(text.includes("CANCEL")) return "bad";
+      if(text.includes("PROCESO")) return "warn";
+      return "warn";
+    }
     function kpiStatusFromCondition(value){
       const text = normalizedText(value);
       if(!text) return "";
@@ -8232,6 +8240,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function calculateBacklogRows(start, end){
       const rows = [];
       const addRow = (row) => rows.push({...row, level: row.level || backlogLevel(Number(row.score || 0))});
+      const published = (portal.backlog && Array.isArray(portal.backlog.items)) ? portal.backlog.items : [];
+      if(published.some(row => row.key || row.flow_status || row.responsible || row.work_order_id)){
+        return published
+          .map(row => ({
+            ...row,
+            level: row.level || backlogLevel(Number(row.score || 0)),
+            flow_status: row.flow_status || "Pendiente",
+          }))
+          .sort((a,b) => {
+            const rank = {Pendiente:0, "En proceso":1, Atendido:2, Cancelado:3};
+            return (rank[a.flow_status || "Pendiente"] ?? 0) - (rank[b.flow_status || "Pendiente"] ?? 0)
+              || Number(b.score || 0) - Number(a.score || 0)
+              || String(a.date || "9999-12-31").localeCompare(String(b.date || "9999-12-31"));
+          });
+      }
       (portal.preventives || []).forEach(row => {
         const status = String(row.status || "").toUpperCase();
         const projected = row.projected_date || "";
@@ -8268,7 +8291,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
           detail: detail || "Captura con condicion de revision.", action:"Generar OT correctiva o validar cierre en bitacora.",
         });
       });
-      const published = (portal.backlog && Array.isArray(portal.backlog.items)) ? portal.backlog.items : [];
       published.filter(row => ["OT", "Requisicion"].includes(String(row.source || ""))).forEach(row => addRow(row));
       (requisitions || []).filter(row => ["ABIERTA", "AUTORIZADA"].includes(String(row.status || "").toUpperCase())).forEach(row => {
         const items = Array.isArray(row.items) ? row.items.length : Number(row.items || 0);
@@ -8287,30 +8309,32 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const end = $("backlogEnd").value || (portal.period || {}).end || start;
       const level = $("backlogLevel").value;
       const source = $("backlogSource").value;
+      const status = $("backlogStatus").value;
       const search = normalizedText($("backlogSearch").value);
       let rows = calculateBacklogRows(start, end).filter(row => {
         const dateValue = row.date || row.due_date || start;
         const dateOk = !dateValue || inRange(dateValue, start, end) || ["VENCIDO", "URGENTE"].includes(String(row.status || row.detail || "").toUpperCase());
         const levelOk = !level || row.level === level;
         const sourceOk = !source || row.source === source;
-        const text = normalizedText([row.level,row.source,row.equipment_code,row.equipment_description,row.component,row.system,row.detail,row.action].join(" "));
-        return dateOk && levelOk && sourceOk && (!search || text.includes(search));
+        const flowOk = !status || (row.flow_status || "Pendiente") === status;
+        const text = normalizedText([row.flow_status,row.level,row.source,row.equipment_code,row.equipment_description,row.component,row.system,row.detail,row.action,row.responsible].join(" "));
+        return dateOk && levelOk && sourceOk && flowOk && (!search || text.includes(search));
       });
       const stats = {
         total: rows.length,
         high: rows.filter(r => r.level === "ALTA").length,
         medium: rows.filter(r => r.level === "MEDIA").length,
         low: rows.filter(r => r.level === "BAJA").length,
-        preventives: rows.filter(r => r.source === "Preventivo").length,
-        captures: rows.filter(r => r.source === "Captura").length,
-        orders: rows.filter(r => r.source === "OT").length,
-        req: rows.filter(r => r.source === "Requisicion").length,
+        pending: rows.filter(r => (r.flow_status || "Pendiente") === "Pendiente").length,
+        process: rows.filter(r => (r.flow_status || "Pendiente") === "En proceso").length,
+        attended: rows.filter(r => (r.flow_status || "Pendiente") === "Atendido").length,
+        cancelled: rows.filter(r => (r.flow_status || "Pendiente") === "Cancelado").length,
       };
       $("backlogTitle").textContent = `Backlog priorizado | ${start} a ${end}`;
-      $("backlogCount").textContent = `${rows.length} pendiente(s)`;
+      $("backlogCount").textContent = `${rows.length} registro(s)`;
       $("backlogStats").innerHTML = [
         ["Total", stats.total], ["Alta", stats.high], ["Media", stats.medium], ["Baja", stats.low],
-        ["Preventivos", stats.preventives], ["Capturas", stats.captures], ["OT", stats.orders], ["Req.", stats.req],
+        ["Pend.", stats.pending], ["Proceso", stats.process], ["Atend.", stats.attended], ["Canc.", stats.cancelled],
       ].map(([k,v]) => `<div class="stat"><strong>${v}</strong>${esc(k)}</div>`).join("");
       const systems = {};
       rows.forEach(row => {
@@ -8319,8 +8343,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
         systems[key].count += 1; systems[key].score += Number(row.score || 0); if(row.level === "ALTA") systems[key].high += 1;
       });
       const systemRows = Object.values(systems).sort((a,b) => b.high - a.high || b.score - a.score || a.system.localeCompare(b.system));
-      $("backlogTable").innerHTML = `<thead><tr><th>Nivel</th><th>Puntaje</th><th>Origen</th><th>Equipo</th><th>Componente</th><th>Sistema</th><th>Fecha</th><th>Vence</th><th>Hrs rest.</th><th>Detalle</th><th>Accion</th></tr></thead><tbody>` +
-        rows.map(row => `<tr><td><span class="pill ${levelClass(row.level)}">${esc(row.level)}</span></td><td>${one(row.score)}</td><td>${esc(row.source)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${esc(row.system)}</td><td>${esc(row.date || "")}</td><td>${esc(row.due_date || "")}</td><td>${row.hours_remaining == null ? "" : one(row.hours_remaining)}</td><td>${esc(shortText(row.detail, 160))}</td><td>${esc(shortText(row.action, 140))}</td></tr>`).join("") +
+      $("backlogTable").innerHTML = `<thead><tr><th>Estado</th><th>Nivel</th><th>Puntaje</th><th>Origen</th><th>Equipo</th><th>Componente</th><th>Sistema</th><th>Fecha</th><th>Vence</th><th>Hrs rest.</th><th>OT</th><th>Responsable</th><th>Cierre</th><th>Detalle</th><th>Accion</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td><span class="pill ${flowClass(row.flow_status)}">${esc(row.flow_status || "Pendiente")}</span></td><td><span class="pill ${levelClass(row.level)}">${esc(row.level)}</span></td><td>${one(row.score)}</td><td>${esc(row.source)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${esc(row.system)}</td><td>${esc(row.date || "")}</td><td>${esc(row.due_date || "")}</td><td>${row.hours_remaining == null ? "" : one(row.hours_remaining)}</td><td>${esc(row.work_order_id || "")}</td><td>${esc(row.responsible || "")}</td><td>${esc(row.closed_at || "")}</td><td>${esc(shortText(row.detail, 160))}</td><td>${esc(shortText(row.action, 140))}</td></tr>`).join("") +
         `</tbody>`;
       $("backlogSystemTable").innerHTML = `<thead><tr><th>Sistema</th><th>Total</th><th>Altas</th><th>Puntaje</th></tr></thead><tbody>` +
         systemRows.map(row => `<tr><td>${esc(row.system)}</td><td>${row.count}</td><td>${row.high}</td><td>${one(row.score)}</td></tr>`).join("") +
@@ -9698,7 +9722,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
-    ["backlogStart","backlogEnd","backlogLevel","backlogSource"].forEach(id => $(id).addEventListener("change", renderBacklog));
+    ["backlogStart","backlogEnd","backlogLevel","backlogSource","backlogStatus"].forEach(id => $(id).addEventListener("change", renderBacklog));
     $("backlogSearch").addEventListener("input", renderBacklog);
     $("renderBacklogBtn").addEventListener("click", renderBacklog);
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
