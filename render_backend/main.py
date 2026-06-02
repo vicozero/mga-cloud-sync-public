@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
@@ -454,6 +454,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+EPP_MODULE_ENABLED = False
+
+
+@app.middleware("http")
+async def block_removed_epp_module(request: Request, call_next):
+    if not EPP_MODULE_ENABLED and request.url.path.startswith("/api/epp"):
+        return JSONResponse({"detail": "Modulo EPP almacen retirado."}, status_code=404)
+    return await call_next(request)
+
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -6014,6 +6024,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .subtle-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
     .subtle-title h3 { margin:0; color:var(--blue); }
     .print-only { display:none; }
+    #epp { display:none !important; }
     @media print {
       header, .tabs, #stats, .dashboard-controls, .no-print { display:none !important; }
       main { width:100%; padding:0; }
@@ -6033,7 +6044,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
-      <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad, diesel, filtros y EPP</p></div>
+      <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad, diesel y filtros</p></div>
     </div>
     <div class="hero-visual" aria-hidden="true">
       <div class="ops-card"><span>Operacion</span><b>En vivo</b><i></i></div>
@@ -6058,7 +6069,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="seguimientoReq">Seguimiento req.</button>
       <button data-tab="mangueras">Mangueras</button>
       <button data-tab="diesel">Diesel</button>
-      <button data-tab="epp">EPP almacen</button>
       <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
       <button data-tab="importar">Importar / exportar</button>
@@ -7017,14 +7027,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       link.remove();
     }
     async function load(){
-      const [r, p, prod, req, hosePayload, dieselPayload, eppPayload] = await Promise.all([
+      const [r, p, prod, req, hosePayload, dieselPayload] = await Promise.all([
         fetch("/api/filter-inventory", {headers: headers(), cache:"no-store"}),
         fetch("/api/portal", {headers: headers(), cache:"no-store"}),
         fetch("/api/products?limit=25000", {headers: headers(), cache:"no-store"}),
         fetch("/api/requisitions", {headers: headers(), cache:"no-store"}),
         fetch("/api/hose-changes", {headers: headers(), cache:"no-store"}),
-        fetch("/api/diesel", {headers: headers(), cache:"no-store"}),
-        fetch("/api/epp", {headers: headers(), cache:"no-store"})
+        fetch("/api/diesel", {headers: headers(), cache:"no-store"})
       ]);
       if(!r.ok) throw new Error(await apiError(r));
       if(!p.ok) throw new Error(await apiError(p));
@@ -7032,14 +7041,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!req.ok) throw new Error(await apiError(req));
       if(!hosePayload.ok) throw new Error(await apiError(hosePayload));
       if(!dieselPayload.ok) throw new Error(await apiError(dieselPayload));
-      if(!eppPayload.ok) throw new Error(await apiError(eppPayload));
       data = await r.json();
       portal = await p.json();
       products = (await prod.json()).products || [];
       const reqPayload = await req.json();
       hoses = await hosePayload.json();
       diesel = await dieselPayload.json();
-      epp = await eppPayload.json();
+      epp = { items: [], movements: [], deliveries: [], workers: [], summary: {} };
       requisitions = reqPayload.requisitions || [];
       if(!currentReqId && !$("reqFolio").value) newRequisition(reqPayload.next_folio);
       renderAll();
@@ -9486,7 +9494,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderTracking();
       renderHoses();
       renderDiesel();
-      renderEpp();
       renderFilters();
       renderInventory();
       renderMovements();
@@ -9559,25 +9566,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dieselInitial").addEventListener("input", () => updateDieselTankCalc(false));
     $("dieselPrintBtn").addEventListener("click", () => window.print());
     $("dieselExcelBtn").addEventListener("click", () => downloadDieselExcel().catch(showError));
-    $("eppSearch").addEventListener("input", renderEpp);
-    $("eppStatus").addEventListener("change", renderEpp);
-    $("eppRefreshBtn").addEventListener("click", () => refreshEpp().catch(showError));
-    $("eppNewBtn").addEventListener("click", clearEppForm);
-    $("eppSaveBtn").addEventListener("click", () => saveEppItem().catch(showError));
-    $("eppDeleteBtn").addEventListener("click", () => deleteEppItem().catch(showError));
-    $("eppDeleteAllBtn").addEventListener("click", () => deleteAllEpp().catch(showError));
-    $("eppQrBtn").addEventListener("click", openEppQr);
-    $("eppWorkerSaveBtn").addEventListener("click", () => saveEppWorker().catch(showError));
-    $("eppWorkerDeleteBtn").addEventListener("click", () => deleteEppWorker().catch(showError));
-    $("eppWorkerUseBtn").addEventListener("click", applySelectedWorker);
-    $("eppMovBtn").addEventListener("click", () => saveEppMovement().catch(showError));
-    $("eppDelBtn").addEventListener("click", () => saveEppDelivery().catch(showError));
-    $("eppLastPdfBtn").addEventListener("click", openLastEppDeliveryPdf);
-    $("eppExportBtn").addEventListener("click", () => exportEpp().catch(showError));
-    $("eppImportBtn").addEventListener("click", () => importEpp().catch(showError));
-    $("eppCode").addEventListener("input", renderEppHistory);
-    $("eppDelWorker").addEventListener("change", () => { const row = findEppWorker($("eppDelWorker").value); if(row) applyWorkerToEppForms(row); });
-    $("eppMovWorker").addEventListener("change", () => { const row = findEppWorker($("eppMovWorker").value); if(row) applyWorkerToEppForms(row); });
     ["equipmentSelect","serviceSelect","statusSelect","filterSearch"].forEach(id => {
       const eventName = id.endsWith("Select") ? "change" : "input";
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
@@ -10385,8 +10373,6 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             previous_settings = previous_payload.get("settings") if isinstance(previous_payload.get("settings"), dict) else {}
             if isinstance(settings, dict) and "meta_diesel_lh" not in settings and isinstance(previous_settings, dict):
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
-        if "epp" not in payload and isinstance(previous_payload.get("epp"), dict):
-            payload["epp"] = previous_payload["epp"]
         if "service_history" not in payload and isinstance(previous_payload.get("service_history"), list):
             payload["service_history"] = previous_payload["service_history"]
         if snapshot is None:
