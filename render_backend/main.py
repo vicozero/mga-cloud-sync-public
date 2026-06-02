@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.24")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.25")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -6108,6 +6108,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="seguimientoReq">Seguimiento req.</button>
       <button data-tab="mangueras">Mangueras</button>
       <button data-tab="diesel">Diesel</button>
+      <button data-tab="refacciones">Refacciones equipo</button>
       <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
       <button data-tab="auditoria">Auditoria</button>
@@ -6606,6 +6607,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <pre id="eppImportResult"></pre>
       </div>
     </section>
+    <section id="refacciones" class="view">
+      <div class="panel toolbar">
+        <label>Equipo<select id="spareEquipment"></select></label>
+        <label>Estado<select id="spareStatus"><option value="">Todos</option><option>DISPONIBLE</option><option>FALTANTE</option><option>SIN INVENTARIO</option></select></label>
+        <label>Buscar<input id="spareSearch" placeholder="Parte, descripcion, sistema"></label>
+        <button class="btn" id="renderSpareBtn">Actualizar</button>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Refacciones por equipo</h3><span class="muted" id="spareCount"></span></div>
+        <div class="stats" id="spareStats"></div>
+      </div>
+      <div class="table-wrap"><table id="spareTable"></table></div>
+    </section>
     <section id="auditoria" class="view">
       <div class="panel toolbar">
         <label>Desde<input id="auditStart" type="date"></label>
@@ -6631,7 +6645,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], service_history: [], audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
     let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
@@ -7612,6 +7626,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
+      setOptions("spareEquipment", equipmentOptions, "Todos");
       const auditModules = [...new Set((portal.audit_log || []).map(row => row.module).filter(Boolean))].sort();
       setOptions("auditModule", auditModules.map(module => ({value:module, label:module})), "Todos");
       if(!$("capDate").value) $("capDate").value = today;
@@ -8438,6 +8453,37 @@ WAREHOUSE_HTML = r"""<!doctype html>
           const service = row.service_interval || row.service_name || "";
           const documentText = row.document_name || (row.document_path ? "Registrada" : "");
           return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.service_type || "Programado")}</td><td>${esc(row.stage || "Cerrado")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(documentText)}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(serviceOilsText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
+        }).join("") +
+        `</tbody>`;
+    }
+    function renderSpareParts(){
+      const payload = portal.parts_manuals || {rows: [], summary: {}};
+      const selected = $("spareEquipment").value || "";
+      const status = $("spareStatus").value || "";
+      const search = normalizedText($("spareSearch").value || "");
+      const rows = (Array.isArray(payload.rows) ? payload.rows : []).filter(row => {
+        const eqOk = !selected || row.equipment_code === selected;
+        const statusOk = !status || row.inventory_status === status;
+        const text = normalizedText([row.equipment_code,row.equipment_description,row.system,row.component,row.service_interval,row.part_number,row.equivalent_part,row.description,row.brand,row.criticality,row.manual_title,row.notes].join(" "));
+        return eqOk && statusOk && (!search || text.includes(search));
+      }).sort((a,b) => String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")) || String(a.system || "").localeCompare(String(b.system || "")) || String(a.description || "").localeCompare(String(b.description || "")));
+      const summary = payload.summary || {};
+      const missing = rows.filter(row => row.inventory_status === "SIN INVENTARIO").length;
+      const shortage = rows.filter(row => row.inventory_status === "FALTANTE").length;
+      const ok = rows.filter(row => row.inventory_status === "DISPONIBLE").length;
+      $("spareCount").textContent = `${rows.length} refaccion(es)`;
+      $("spareStats").innerHTML = [
+        `<div class="stat"><strong>${summary.manuals || 0}</strong>Manuales</div>`,
+        `<div class="stat"><strong>${rows.length}</strong>Mostradas</div>`,
+        `<div class="stat"><strong>${ok}</strong>Disponibles</div>`,
+        `<div class="stat"><strong>${shortage}</strong>Faltantes</div>`,
+        `<div class="stat"><strong>${missing}</strong>Sin inventario</div>`,
+        `<div class="stat"><strong>${summary.unique_parts || 0}</strong>Partes unicas</div>`,
+      ].join("");
+      $("spareTable").innerHTML = `<thead><tr><th>Estado</th><th>Equipo</th><th>Descripcion equipo</th><th>Sistema</th><th>Componente</th><th>Servicio</th><th>No. parte</th><th>Equiv.</th><th>Descripcion</th><th>Cant.</th><th>Exist.</th><th>Falt.</th><th>Unidad</th><th>Crit.</th><th>Manual</th></tr></thead><tbody>` +
+        rows.map(row => {
+          const cls = row.inventory_status === "DISPONIBLE" ? "ok" : "bad";
+          return `<tr><td><span class="pill ${cls}">${esc(row.inventory_status || "")}</span></td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.system || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.service_interval || "")}</td><td>${esc(row.part_number || "")}</td><td>${esc(row.equivalent_part || "")}</td><td>${esc(row.description || "")}</td><td>${one(row.quantity)}</td><td>${row.available == null ? "" : one(row.available)}</td><td>${one(row.shortage)}</td><td>${esc(row.unit || "")}</td><td>${esc(row.criticality || "")}</td><td>${esc(row.manual_title || "")}</td></tr>`;
         }).join("") +
         `</tbody>`;
     }
@@ -9756,6 +9802,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderTracking();
       renderHoses();
       renderDiesel();
+      renderSpareParts();
       renderFilters();
       renderInventory();
       renderMovements();
@@ -9783,6 +9830,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
     $("srvSearch").addEventListener("input", renderServiceHistory);
     $("renderSrvBtn").addEventListener("click", renderServiceHistory);
+    ["spareEquipment","spareStatus"].forEach(id => $(id).addEventListener("change", renderSpareParts));
+    $("spareSearch").addEventListener("input", renderSpareParts);
+    $("renderSpareBtn").addEventListener("click", renderSpareParts);
     ["auditStart","auditEnd","auditModule"].forEach(id => $(id).addEventListener("change", renderAudit));
     $("auditSearch").addEventListener("input", renderAudit);
     $("auditRefreshBtn").addEventListener("click", renderAudit);
@@ -10643,6 +10693,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
         if "service_history" not in payload and isinstance(previous_payload.get("service_history"), list):
             payload["service_history"] = previous_payload["service_history"]
+        if "parts_manuals" not in payload and isinstance(previous_payload.get("parts_manuals"), dict):
+            payload["parts_manuals"] = previous_payload["parts_manuals"]
         if "audit_log" not in payload and isinstance(previous_payload.get("audit_log"), list):
             payload["audit_log"] = previous_payload["audit_log"]
         if "backlog" not in payload and isinstance(previous_payload.get("backlog"), dict):
@@ -10659,6 +10711,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "captures": len(captures),
         "preventives": len(preventives),
         "service_history": len(payload.get("service_history") or []) if isinstance(payload.get("service_history"), list) else 0,
+        "parts_manuals": len((payload.get("parts_manuals") or {}).get("rows") or []) if isinstance(payload.get("parts_manuals"), dict) else 0,
         "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
     }
