@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.15")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.20")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1412,6 +1412,16 @@ def portal_capture_is_closed_month(row: dict[str, Any]) -> bool:
         return False
     current_month_start = utc_now().date().replace(day=1)
     return day < current_month_start
+
+
+def closed_capture_period_error(row: dict[str, Any]) -> str:
+    text = str(row.get("work_date") or "").strip()
+    if not portal_capture_is_closed_month(row):
+        return ""
+    return (
+        f"El periodo {text[:7]} ya esta cerrado. "
+        "No se puede modificar, eliminar ni importar capturas de meses anteriores."
+    )
 
 
 def merge_mobile_captures_into_portal(session: Session, portal: dict[str, Any]) -> dict[str, Any]:
@@ -10453,6 +10463,9 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 stored_record["photos"] = []
                 stored_record["shift"] = normalize_capture_shift_py(stored_record.get("shift") or stored_record.get("turno"))
                 record["shift"] = stored_record["shift"]
+                period_error = closed_capture_period_error(stored_record)
+                if period_error:
+                    raise ValueError(period_error)
                 existing = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == mobile_id))
                 if existing is not None:
                     existing_payload = json_loads(existing.payload_json)
@@ -10598,6 +10611,9 @@ async def delete_portal_capture(request: Request, _auth: str | None = Header(def
     delete_key = capture_delete_key(payload)
     if not mobile_id and not capture_id and not any(delete_key):
         raise HTTPException(status_code=400, detail="No se recibio identificador de captura.")
+    period_error = closed_capture_period_error({"work_date": payload.get("work_date") or delete_key[0]})
+    if period_error:
+        raise HTTPException(status_code=409, detail=period_error)
 
     with SessionLocal() as session:
         mobile_rows: list[MobileCapture] = []
@@ -10622,6 +10638,10 @@ async def delete_portal_capture(request: Request, _auth: str | None = Header(def
             row = session.scalar(select(MobileCapture).where(MobileCapture.id == capture_id))
             if row is not None:
                 mobile_rows.append(row)
+        for row in mobile_rows:
+            period_error = closed_capture_period_error(mobile_capture_portal_row(row))
+            if period_error:
+                raise HTTPException(status_code=409, detail=period_error)
 
         deleted_mobile = 0
         for row in mobile_rows:
