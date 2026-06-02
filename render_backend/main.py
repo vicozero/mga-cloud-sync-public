@@ -1364,6 +1364,18 @@ def parse_iso_datetime(value: Any) -> datetime | None:
     return parsed
 
 
+def portal_capture_is_closed_month(row: dict[str, Any]) -> bool:
+    text = str(row.get("work_date") or "").strip()
+    if not text:
+        return False
+    try:
+        day = date.fromisoformat(text[:10])
+    except ValueError:
+        return False
+    current_month_start = utc_now().date().replace(day=1)
+    return day < current_month_start
+
+
 def merge_mobile_captures_into_portal(session: Session, portal: dict[str, Any]) -> dict[str, Any]:
     captures = portal.get("captures")
     if not isinstance(captures, list):
@@ -1387,6 +1399,8 @@ def merge_mobile_captures_into_portal(session: Session, portal: dict[str, Any]) 
             row["equipment_description"] = descriptions[code]
         existing_index = index_by_key.get(key)
         received_at = parse_iso_datetime(row.get("received_at"))
+        if portal_updated and portal_capture_is_closed_month(row):
+            continue
         if existing_index is None:
             merged.append(row)
             index_by_key[key] = len(merged) - 1
