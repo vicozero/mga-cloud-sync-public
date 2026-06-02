@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.23")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.24")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -6110,6 +6110,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="diesel">Diesel</button>
       <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
+      <button data-tab="auditoria">Auditoria</button>
       <button data-tab="importar">Importar / exportar</button>
     </nav>
     <section class="stats" id="stats"></section>
@@ -6605,6 +6606,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <pre id="eppImportResult"></pre>
       </div>
     </section>
+    <section id="auditoria" class="view">
+      <div class="panel toolbar">
+        <label>Desde<input id="auditStart" type="date"></label>
+        <label>Hasta<input id="auditEnd" type="date"></label>
+        <label>Modulo<select id="auditModule"><option value="">Todos</option></select></label>
+        <label>Buscar<input id="auditSearch" placeholder="Usuario, accion, resumen"></label>
+        <button class="btn" id="auditRefreshBtn">Actualizar</button>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Auditoria de cambios</h3><span class="muted" id="auditCount"></span></div>
+      </div>
+      <div class="table-wrap"><table id="auditTable"></table></div>
+    </section>
     <section id="importar" class="view">
       <div class="panel">
         <h3>Importar inventario desde Excel</h3>
@@ -6617,7 +6631,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], service_history: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
     let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
@@ -7578,6 +7592,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("srvEnd").value) $("srvEnd").value = period.capture_end || period.end || today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
       if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
+      if(!$("auditStart").value) $("auditStart").value = period.start || today;
+      if(!$("auditEnd").value) $("auditEnd").value = period.end || today;
       if(!$("dieselStart").value) $("dieselStart").value = diesel.start || period.start || today;
       if(!$("dieselEnd").value) $("dieselEnd").value = diesel.end || period.end || today;
       if(!$("dieselBase").value) $("dieselBase").value = diesel.start || period.start || today;
@@ -7596,6 +7612,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
+      const auditModules = [...new Set((portal.audit_log || []).map(row => row.module).filter(Boolean))].sort();
+      setOptions("auditModule", auditModules.map(module => ({value:module, label:module})), "Todos");
       if(!$("capDate").value) $("capDate").value = today;
       setOptions("capEquipment", equipmentOptions, "Selecciona");
       if(!$("capEquipment").value && equipmentOptions.length) $("capEquipment").value = equipmentOptions[0].value;
@@ -8421,6 +8439,23 @@ WAREHOUSE_HTML = r"""<!doctype html>
           const documentText = row.document_name || (row.document_path ? "Registrada" : "");
           return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.service_type || "Programado")}</td><td>${esc(row.stage || "Cerrado")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(documentText)}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(serviceOilsText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
         }).join("") +
+        `</tbody>`;
+    }
+    function renderAudit(){
+      const start = $("auditStart").value || "";
+      const end = $("auditEnd").value || "";
+      const module = $("auditModule").value || "";
+      const search = normalizedText($("auditSearch").value || "");
+      const rows = (Array.isArray(portal.audit_log) ? portal.audit_log : []).filter(row => {
+        const created = String(row.created_at || "").slice(0, 10);
+        const dateOk = (!start || created >= start) && (!end || created <= end);
+        const moduleOk = !module || row.module === module;
+        const text = normalizedText([row.user_name,row.role,row.module,row.action,row.entity_type,row.entity_id,row.summary,row.payload_json].join(" "));
+        return dateOk && moduleOk && (!search || text.includes(search));
+      }).sort((a,b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+      $("auditCount").textContent = `${rows.length} movimiento(s)`;
+      $("auditTable").innerHTML = `<thead><tr><th>Fecha</th><th>Usuario</th><th>Rol</th><th>Modulo</th><th>Accion</th><th>Entidad</th><th>ID</th><th>Resumen</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td>${esc(row.created_at || "")}</td><td>${esc(row.user_name || "")}</td><td>${esc(row.role || "")}</td><td>${esc(row.module || "")}</td><td>${esc(row.action || "")}</td><td>${esc(row.entity_type || "")}</td><td>${esc(row.entity_id || "")}</td><td>${esc(shortText(row.summary || "", 180))}</td></tr>`).join("") +
         `</tbody>`;
     }
     function renderBitacora(){
@@ -9713,6 +9748,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderPreventives();
       renderBacklog();
       renderServiceHistory();
+      renderAudit();
       renderBitacora();
       renderCaptureRecent();
       renderDisponibilidad();
@@ -9747,6 +9783,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
     $("srvSearch").addEventListener("input", renderServiceHistory);
     $("renderSrvBtn").addEventListener("click", renderServiceHistory);
+    ["auditStart","auditEnd","auditModule"].forEach(id => $(id).addEventListener("change", renderAudit));
+    $("auditSearch").addEventListener("input", renderAudit);
+    $("auditRefreshBtn").addEventListener("click", renderAudit);
     ["bitEquipment","bitStart","bitEnd"].forEach(id => $(id).addEventListener("change", renderBitacora));
     $("bitSearch").addEventListener("input", renderBitacora);
     $("renderBitBtn").addEventListener("click", renderBitacora);
@@ -10604,6 +10643,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
         if "service_history" not in payload and isinstance(previous_payload.get("service_history"), list):
             payload["service_history"] = previous_payload["service_history"]
+        if "audit_log" not in payload and isinstance(previous_payload.get("audit_log"), list):
+            payload["audit_log"] = previous_payload["audit_log"]
         if "backlog" not in payload and isinstance(previous_payload.get("backlog"), dict):
             payload["backlog"] = previous_payload["backlog"]
         if snapshot is None:
@@ -10618,6 +10659,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "captures": len(captures),
         "preventives": len(preventives),
         "service_history": len(payload.get("service_history") or []) if isinstance(payload.get("service_history"), list) else 0,
+        "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
     }
 
