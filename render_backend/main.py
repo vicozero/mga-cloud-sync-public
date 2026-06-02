@@ -446,7 +446,7 @@ def ensure_cloud_schema() -> None:
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.20")
+app = FastAPI(title="MGA Cloud Sync", version="1.4.21")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -6099,6 +6099,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button class="active" data-tab="dashboard">Dashboard KPI</button>
       <button data-tab="mensual">Reporte mensual/semanal</button>
       <button data-tab="preventivos">PR Preventivos</button>
+      <button data-tab="backlog">Backlog</button>
       <button data-tab="servicios">Servicios realizados</button>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="captura">Captura diaria</button>
@@ -6176,6 +6177,24 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="schedule-strip" id="prCalendar"></div>
       </div>
       <div class="table-wrap"><table id="prTable"></table></div>
+    </section>
+    <section id="backlog" class="view">
+      <div class="panel toolbar">
+        <label>Desde<input id="backlogStart" type="date"></label>
+        <label>Hasta<input id="backlogEnd" type="date"></label>
+        <label>Nivel<select id="backlogLevel"><option value="">Todos</option><option>ALTA</option><option>MEDIA</option><option>BAJA</option></select></label>
+        <label>Origen<select id="backlogSource"><option value="">Todos</option><option>Preventivo</option><option>Captura</option><option>OT</option><option>Requisicion</option></select></label>
+        <label>Buscar<input id="backlogSearch" placeholder="Equipo, sistema, detalle"></label>
+        <button class="btn" id="renderBacklogBtn">Actualizar</button>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3 id="backlogTitle">Backlog priorizado</h3><span class="muted" id="backlogCount"></span></div>
+        <div class="stats" id="backlogStats"></div>
+      </div>
+      <div class="grid2">
+        <div class="table-wrap"><table id="backlogTable"></table></div>
+        <div class="table-wrap"><table id="backlogSystemTable"></table></div>
+      </div>
     </section>
     <section id="servicios" class="view">
       <div class="panel toolbar">
@@ -6597,7 +6616,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], service_history: [], captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
     let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
@@ -7396,6 +7415,28 @@ WAREHOUSE_HTML = r"""<!doctype html>
       });
       return [...keys].filter(Boolean);
     }
+    const stoppageRules = [
+      ["Hidraulico", ["HIDRAUL", "HCO", "MANGUERA", "BOMBA", "CILINDRO", "FUGA"]],
+      ["Electrico", ["ELECT", "BATERIA", "ALTERNADOR", "CABLE", "SENSOR", "CORTO", "FUSIBLE"]],
+      ["Motor/Diesel", ["MOTOR", "DIESEL", "COMBUST", "INYECTOR", "TURBO", "ACEITE MOTOR", "15W40"]],
+      ["Transmision", ["TRANSM", "CONVERTIDOR", "DIFERENCIAL", "MANDO", "CAJA", "EJE"]],
+      ["Frenos", ["FRENO", "BALATA", "PASTILLA"]],
+      ["Llantas", ["LLANTA", "NEUMATIC", "RIN", "PONCH", "PRESION"]],
+      ["Estructural", ["ESTRUCT", "CHASIS", "BRAZO", "CUCHARON", "FISURA", "SOLDAD"]],
+      ["Perforacion", ["PERFOR", "BARRA", "BROCA", "PERCUS", "COMPRESOR", "PIERNA"]],
+      ["Lubricacion", ["LUBRIC", "GRASA", "ENGRASE", "REFRIGERANTE", "SAE", "ISO 68"]],
+      ["Operacion", ["OPERADOR", "OPERACION", "GALERIA", "ACCESO", "TRAFICO", "VENTILACION"]],
+    ];
+    function classifyStoppage(...values){
+      const text = normalizedText(values.filter(Boolean).join(" "));
+      if(!text) return "Sin clasificar";
+      for(const [label, tokens] of stoppageRules){
+        if(tokens.some(token => text.includes(token))) return label;
+      }
+      return "Otros";
+    }
+    function backlogLevel(score){ return score >= 80 ? "ALTA" : (score >= 50 ? "MEDIA" : "BAJA"); }
+    function levelClass(level){ return level === "ALTA" ? "bad" : (level === "MEDIA" ? "warn" : "ok"); }
     function kpiStatusFromCondition(value){
       const text = normalizedText(value);
       if(!text) return "";
@@ -7505,6 +7546,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("kpiStart").value) $("kpiStart").value = period.start || today;
       if(!$("kpiEnd").value) $("kpiEnd").value = period.end || today;
       if(!$("prBase").value) $("prBase").value = period.start || today;
+      if(!$("backlogStart").value) $("backlogStart").value = period.start || today;
+      if(!$("backlogEnd").value) $("backlogEnd").value = period.end || today;
       if(!$("srvStart").value) $("srvStart").value = period.capture_start || period.start || today;
       if(!$("srvEnd").value) $("srvEnd").value = period.capture_end || period.end || today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
@@ -8184,6 +8227,103 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
       $("prTable").innerHTML = `<thead><tr><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
         result.rows.map(row => `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(row.projected_date || "")}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function calculateBacklogRows(start, end){
+      const rows = [];
+      const addRow = (row) => rows.push({...row, level: row.level || backlogLevel(Number(row.score || 0))});
+      (portal.preventives || []).forEach(row => {
+        const status = String(row.status || "").toUpperCase();
+        const projected = row.projected_date || "";
+        const inPeriod = inRange(projected, start, end);
+        if(!["VENCIDO", "URGENTE", "PROXIMO"].includes(status) && !inPeriod) return;
+        const remaining = Number(row.hours_remaining || 0);
+        let score = status === "VENCIDO" ? 92 + Math.min(Math.abs(remaining) / Math.max(Number(row.service_interval || 250), 1) * 18, 18) : status === "URGENTE" ? 76 : status === "PROXIMO" ? 50 : 35;
+        addRow({
+          score, source:"Preventivo", equipment_code:row.equipment_code || "", equipment_description:row.equipment_description || "",
+          component:row.component || "", system:"Preventivo", date:projected, due_date:projected, hours_remaining:remaining,
+          detail:`${row.service_interval || "PM"} ${status}: faltan ${one(remaining)} h.`,
+          action: status === "VENCIDO" ? "Ejecutar preventivo y registrar horometro real." : "Programar en plan semanal y preparar filtros/refacciones.",
+        });
+      });
+      (portal.captures || []).filter(row => inRange(row.work_date, start, end)).forEach(row => {
+        const stops = Number(row.stops || 0);
+        const mc = Number(row.mc_hours || 0);
+        const fault = String(row.fault || "").trim();
+        const wear = String(row.wear || "").trim();
+        const noDisp = unavailable(row.status);
+        if(!(stops || mc > 0 || fault || wear || noDisp)) return;
+        let score = 26 + stops * 10 + mc * 5 + (fault ? 18 : 0) + (wear ? 9 : 0) + (noDisp ? 25 : 0);
+        const system = classifyStoppage(row.component, row.fault, row.wear, row.observations, row.status);
+        const detail = [
+          stops ? `${stops} parada(s)` : "",
+          mc ? `${one(mc)} h MC` : "",
+          noDisp ? row.status : "",
+          fault ? `Falla: ${fault}` : "",
+          wear ? `Desgaste: ${wear}` : "",
+        ].filter(Boolean).join(" | ");
+        addRow({
+          score, source:"Captura", equipment_code:row.equipment_code || "", equipment_description:row.equipment_description || "",
+          component:row.component || "", system, date:row.work_date || "", due_date:"", hours_remaining:null,
+          detail: detail || "Captura con condicion de revision.", action:"Generar OT correctiva o validar cierre en bitacora.",
+        });
+      });
+      const published = (portal.backlog && Array.isArray(portal.backlog.items)) ? portal.backlog.items : [];
+      published.filter(row => ["OT", "Requisicion"].includes(String(row.source || ""))).forEach(row => addRow(row));
+      (requisitions || []).filter(row => ["ABIERTA", "AUTORIZADA"].includes(String(row.status || "").toUpperCase())).forEach(row => {
+        const items = Array.isArray(row.items) ? row.items.length : Number(row.items || 0);
+        const urgent = String(row.priority || "").toUpperCase().includes("URG");
+        addRow({
+          score: urgent ? 52 : 42, source:"Requisicion", equipment_code:row.equipment || "", equipment_description:"",
+          component:"Refacciones", system:"Refacciones", date:row.request_date || "", due_date:"", hours_remaining:null,
+          detail:`${row.folio || ""} ${row.status || ""} con ${items || 0} partida(s).`,
+          action:"Dar seguimiento a compra/surtido para liberar trabajos.",
+        });
+      });
+      return rows.sort((a,b) => Number(b.score || 0) - Number(a.score || 0) || String(a.date || "9999-12-31").localeCompare(String(b.date || "9999-12-31")));
+    }
+    function renderBacklog(){
+      const start = $("backlogStart").value || (portal.period || {}).start || toIsoDate(new Date());
+      const end = $("backlogEnd").value || (portal.period || {}).end || start;
+      const level = $("backlogLevel").value;
+      const source = $("backlogSource").value;
+      const search = normalizedText($("backlogSearch").value);
+      let rows = calculateBacklogRows(start, end).filter(row => {
+        const dateValue = row.date || row.due_date || start;
+        const dateOk = !dateValue || inRange(dateValue, start, end) || ["VENCIDO", "URGENTE"].includes(String(row.status || row.detail || "").toUpperCase());
+        const levelOk = !level || row.level === level;
+        const sourceOk = !source || row.source === source;
+        const text = normalizedText([row.level,row.source,row.equipment_code,row.equipment_description,row.component,row.system,row.detail,row.action].join(" "));
+        return dateOk && levelOk && sourceOk && (!search || text.includes(search));
+      });
+      const stats = {
+        total: rows.length,
+        high: rows.filter(r => r.level === "ALTA").length,
+        medium: rows.filter(r => r.level === "MEDIA").length,
+        low: rows.filter(r => r.level === "BAJA").length,
+        preventives: rows.filter(r => r.source === "Preventivo").length,
+        captures: rows.filter(r => r.source === "Captura").length,
+        orders: rows.filter(r => r.source === "OT").length,
+        req: rows.filter(r => r.source === "Requisicion").length,
+      };
+      $("backlogTitle").textContent = `Backlog priorizado | ${start} a ${end}`;
+      $("backlogCount").textContent = `${rows.length} pendiente(s)`;
+      $("backlogStats").innerHTML = [
+        ["Total", stats.total], ["Alta", stats.high], ["Media", stats.medium], ["Baja", stats.low],
+        ["Preventivos", stats.preventives], ["Capturas", stats.captures], ["OT", stats.orders], ["Req.", stats.req],
+      ].map(([k,v]) => `<div class="stat"><strong>${v}</strong>${esc(k)}</div>`).join("");
+      const systems = {};
+      rows.forEach(row => {
+        const key = row.system || "Sin clasificar";
+        systems[key] = systems[key] || {system:key, count:0, high:0, score:0};
+        systems[key].count += 1; systems[key].score += Number(row.score || 0); if(row.level === "ALTA") systems[key].high += 1;
+      });
+      const systemRows = Object.values(systems).sort((a,b) => b.high - a.high || b.score - a.score || a.system.localeCompare(b.system));
+      $("backlogTable").innerHTML = `<thead><tr><th>Nivel</th><th>Puntaje</th><th>Origen</th><th>Equipo</th><th>Componente</th><th>Sistema</th><th>Fecha</th><th>Vence</th><th>Hrs rest.</th><th>Detalle</th><th>Accion</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td><span class="pill ${levelClass(row.level)}">${esc(row.level)}</span></td><td>${one(row.score)}</td><td>${esc(row.source)}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.component)}</td><td>${esc(row.system)}</td><td>${esc(row.date || "")}</td><td>${esc(row.due_date || "")}</td><td>${row.hours_remaining == null ? "" : one(row.hours_remaining)}</td><td>${esc(shortText(row.detail, 160))}</td><td>${esc(shortText(row.action, 140))}</td></tr>`).join("") +
+        `</tbody>`;
+      $("backlogSystemTable").innerHTML = `<thead><tr><th>Sistema</th><th>Total</th><th>Altas</th><th>Puntaje</th></tr></thead><tbody>` +
+        systemRows.map(row => `<tr><td>${esc(row.system)}</td><td>${row.count}</td><td>${row.high}</td><td>${one(row.score)}</td></tr>`).join("") +
         `</tbody>`;
     }
     function filteredServiceHistory(){
@@ -9528,6 +9668,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderPortalSelectors();
       renderDashboard();
       renderPreventives();
+      renderBacklog();
       renderServiceHistory();
       renderBitacora();
       renderCaptureRecent();
@@ -9557,6 +9698,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
+    ["backlogStart","backlogEnd","backlogLevel","backlogSource"].forEach(id => $(id).addEventListener("change", renderBacklog));
+    $("backlogSearch").addEventListener("input", renderBacklog);
+    $("renderBacklogBtn").addEventListener("click", renderBacklog);
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
     $("srvSearch").addEventListener("input", renderServiceHistory);
     $("renderSrvBtn").addEventListener("click", renderServiceHistory);
@@ -10417,6 +10561,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
         if "service_history" not in payload and isinstance(previous_payload.get("service_history"), list):
             payload["service_history"] = previous_payload["service_history"]
+        if "backlog" not in payload and isinstance(previous_payload.get("backlog"), dict):
+            payload["backlog"] = previous_payload["backlog"]
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
