@@ -32,7 +32,7 @@ from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas as pdf_canvas
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, func, select, text as sql_text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, delete, func, select, text as sql_text
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
@@ -1422,6 +1422,30 @@ def closed_capture_period_error(row: dict[str, Any]) -> str:
         f"El periodo {text[:7]} ya esta cerrado. "
         "No se puede modificar, eliminar ni importar capturas de meses anteriores."
     )
+
+
+def replace_mobile_photos(session: Session, capture_id: int, mobile_id: str, photos: Any) -> int:
+    if not isinstance(photos, list) or not photos:
+        return 0
+    session.execute(delete(MobilePhoto).where(MobilePhoto.capture_id == capture_id))
+    evidence_count = 0
+    for photo in photos:
+        if not isinstance(photo, dict):
+            continue
+        data_url = str(photo.get("data") or "")
+        if not data_url:
+            continue
+        session.add(
+            MobilePhoto(
+                capture_id=capture_id,
+                file_name=str(photo.get("name") or f"{mobile_id}.jpg")[:260],
+                mime_type=str(photo.get("mime_type") or "image/jpeg")[:120],
+                captured_at=str(photo.get("captured_at") or ""),
+                data_url=data_url,
+            )
+        )
+        evidence_count += 1
+    return evidence_count
 
 
 def merge_mobile_captures_into_portal(session: Session, portal: dict[str, Any]) -> dict[str, Any]:
@@ -10976,6 +11000,7 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                         updated += 1
                     else:
                         skipped += 1
+                    evidence_count = replace_mobile_photos(session, existing.id, mobile_id, photos)
                     results.append(
                         {
                             "mobile_id": mobile_id,
@@ -10984,6 +11009,7 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                             "updated": changed,
                             "stored": True,
                             "desktop_imported": existing.desktop_imported_at is not None,
+                            "evidence": evidence_count,
                         }
                     )
                     continue
@@ -11010,6 +11036,7 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                         updated += 1
                     else:
                         skipped += 1
+                    evidence_count = replace_mobile_photos(session, duplicate.id, mobile_id, photos)
                     results.append(
                         {
                             "mobile_id": mobile_id,
@@ -11019,6 +11046,7 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                             "stored": True,
                             "duplicate_key": True,
                             "desktop_imported": duplicate.desktop_imported_at is not None,
+                            "evidence": evidence_count,
                         }
                     )
                     continue
@@ -11038,23 +11066,7 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 for hose_payload in mobile_hose_change_rows(stored_record, source_device, capture.user_name):
                     upsert_hose_change(session, hose_payload)
                     hose_changes += 1
-                evidence_count = 0
-                for photo in photos if isinstance(photos, list) else []:
-                    if not isinstance(photo, dict):
-                        continue
-                    data_url = str(photo.get("data") or "")
-                    if not data_url:
-                        continue
-                    session.add(
-                        MobilePhoto(
-                            capture_id=capture.id,
-                            file_name=str(photo.get("name") or f"{mobile_id}.jpg")[:260],
-                            mime_type=str(photo.get("mime_type") or "image/jpeg")[:120],
-                            captured_at=str(photo.get("captured_at") or ""),
-                            data_url=data_url,
-                        )
-                    )
-                    evidence_count += 1
+                evidence_count = replace_mobile_photos(session, capture.id, mobile_id, photos)
                 created += 1
                 results.append(
                     {
