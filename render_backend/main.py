@@ -6884,7 +6884,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .kpi-logo{position:absolute;left:34px;top:14px;font-weight:800;font-size:19px;color:white;}
         .kpi-logo::after{content:"";display:block;width:54px;height:4px;background:#e11d48;margin-top:4px;}
         .kpi-title-row{height:54px;display:flex;align-items:center;justify-content:center;color:#06306e;font-size:24px;font-weight:800;background:#f2f2f2;}
-        .kpi-exact-badge{margin-left:12px;padding:4px 8px;border:1px solid #d97706;border-radius:4px;background:#fff3cd;color:#7a4d00;font-size:12px;font-weight:800;}
         .kpi-board{display:grid;grid-template-columns:330px 1fr 280px;gap:12px;padding:0 26px 12px;}
         .kpi-card-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid #d8d8d8;background:white;}
         .kpi-card{height:128px;border-right:1px solid #ddd;border-bottom:1px solid #ddd;padding:16px 12px;text-align:center;background:white;}
@@ -7085,7 +7084,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }).join("") || `<p>Sin datos KPI.</p>`;
       const tableRows = report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td class="${row.availability < targets.availability ? "badtext" : "oktext"}">${esc(row.availabilityText)}</td><td class="${row.utilization < targets.utilization ? "badtext" : "oktext"}">${esc(row.utilizationText)}</td><td class="${row.reliability < targets.reliability ? "badtext" : "oktext"}">${pct(row.reliability)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("");
       return `<section class="kpi-sheet">
-        <div class="kpi-title-row"><div class="kpi-logo">MGA</div>${esc(report.group)}${report.simulation?.enabled ? `<span class="kpi-exact-badge">SIMULACION: ${esc(report.simulation.name || "Escenario KPI")}</span>` : ""}</div>
+        <div class="kpi-title-row"><div class="kpi-logo">MGA</div>${esc(report.group)}</div>
         <div class="kpi-board">
           <div class="kpi-card-grid">
             <div class="kpi-card ${report.totals.availability < targets.availability ? "bad" : ""}"><h3>% Disponibilidad</h3><strong>${pct(report.totals.availability)}</strong><div class="bar"><i style="width:${metricProgress(report.totals.availability, targets.availability)}%"></i></div><small>Meta ${pct(targets.availability)}</small></div>
