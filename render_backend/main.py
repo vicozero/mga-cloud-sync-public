@@ -3536,6 +3536,60 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
     }
 
 
+def kpi_sim_factor(value: Any, default: float = 100) -> float:
+    return max(parse_float(value, default), 0) / 100
+
+
+def simulate_monthly_kpi_report(report: dict[str, Any], scenario: dict[str, Any]) -> dict[str, Any]:
+    mission_hours = parse_float(scenario.get("reliability_mission_hours"), 24) or 24
+    period_factor = kpi_sim_factor(scenario.get("period_percent"), 100)
+    worked_factor = kpi_sim_factor(scenario.get("worked_percent"), 100)
+    mp_factor = kpi_sim_factor(scenario.get("mp_percent"), 100)
+    mc_factor = kpi_sim_factor(scenario.get("mc_percent"), 100)
+    stops_factor = kpi_sim_factor(scenario.get("stops_percent"), 100)
+    rows: list[dict[str, Any]] = []
+    for source in report.get("rows") if isinstance(report.get("rows"), list) else []:
+        row = dict(source)
+        row["period"] = max(parse_float(source.get("period"), 0) * period_factor, 0)
+        row["worked"] = max(parse_float(source.get("worked"), 0) * worked_factor, 0)
+        row["mp"] = max(parse_float(source.get("mp"), 0) * mp_factor, 0)
+        row["mc"] = max(parse_float(source.get("mc"), 0) * mc_factor, 0)
+        row["stops"] = max(round(parse_float(source.get("stops"), 0) * stops_factor), 0)
+        out = row["worked"] <= 0 and kpi_unavailable_status(row.get("status"))
+        metric_values = {"available": 0, "availability": 0, "utilization": 0, "tmef": 0, "tmpr": 0, "reliability": 0} if out else monthly_kpi_metric(row["period"], row["worked"], row["mp"], row["mc"], row["stops"], mission_hours)
+        row.update(metric_values)
+        row["out"] = out
+        row["availability_text"] = "FUERA" if out else f"{row['availability']:.1f}%"
+        row["utilization_text"] = "FUERA" if out else f"{row['utilization']:.1f}%"
+        rows.append(row)
+    totals = {"period": 0.0, "worked": 0.0, "mp": 0.0, "mc": 0.0, "stops": 0.0, "available": 0.0}
+    for row in rows:
+        totals["period"] += parse_float(row.get("period"), 0)
+        totals["worked"] += parse_float(row.get("worked"), 0)
+        totals["mp"] += parse_float(row.get("mp"), 0)
+        totals["mc"] += parse_float(row.get("mc"), 0)
+        totals["stops"] += parse_float(row.get("stops"), 0)
+        totals["available"] += parse_float(row.get("available"), 0)
+    totals["availability"] = (totals["available"] / totals["period"] * 100) if totals["period"] else 0
+    totals["utilization"] = (totals["worked"] / totals["available"] * 100) if totals["available"] else 0
+    totals["tmef"] = (totals["available"] / totals["stops"]) if totals["stops"] else totals["available"]
+    totals["tmpr"] = (totals["mc"] / totals["stops"]) if totals["stops"] else 0
+    totals["reliability"] = (
+        max(min(math.exp(-(mission_hours / totals["tmef"])) * 100, 100), 0)
+        if totals["tmef"] and mission_hours
+        else (100 if totals["available"] else 0)
+    )
+    simulated = dict(report)
+    simulated["rows"] = rows
+    simulated["totals"] = totals
+    simulated["simulation"] = {
+        "enabled": True,
+        "name": str(scenario.get("name") or "Escenario KPI").strip(),
+        "reliability_mission_hours": mission_hours,
+    }
+    return simulated
+
+
 def kpi_row_obj(row: dict[str, Any]):
     return type(
         "KpiMonthlyRow",
@@ -5455,6 +5509,19 @@ def get_kpi_format_excel(
     group: str = Query(default="Todos los equipos"),
     start: str = Query(default=""),
     end: str = Query(default=""),
+    simulation: bool = Query(default=False),
+    sim_name: str = Query(default="Escenario KPI"),
+    sim_period_percent: float = Query(default=100),
+    sim_worked_percent: float = Query(default=100),
+    sim_mp_percent: float = Query(default=100),
+    sim_mc_percent: float = Query(default=100),
+    sim_stops_percent: float = Query(default=100),
+    sim_mission_hours: float = Query(default=24),
+    sim_meta_availability: float = Query(default=85),
+    sim_meta_utilization: float = Query(default=75),
+    sim_meta_reliability: float = Query(default=80),
+    sim_meta_tmef: float = Query(default=8),
+    sim_meta_tmpr: float = Query(default=4),
 ) -> StreamingResponse:
     with SessionLocal() as session:
         portal = latest_portal_payload(session)
@@ -5483,11 +5550,32 @@ def get_kpi_format_excel(
         raise HTTPException(status_code=400, detail="Selecciona Barrenacion, Rezagado, Acarreo, Utilitario o Todos los equipos.")
     else:
         groups = ["Equipos de Rezagado", "Equipos de Barrenacion", "Acarreo", "Equipo Utilitario"]
-    reports = [monthly_kpi_report(portal, item, start_date.isoformat(), end_date.isoformat()) for item in groups]
     settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    reports = [monthly_kpi_report(portal, item, start_date.isoformat(), end_date.isoformat()) for item in groups]
+    if simulation:
+        scenario = {
+            "name": sim_name,
+            "period_percent": sim_period_percent,
+            "worked_percent": sim_worked_percent,
+            "mp_percent": sim_mp_percent,
+            "mc_percent": sim_mc_percent,
+            "stops_percent": sim_stops_percent,
+            "reliability_mission_hours": sim_mission_hours,
+        }
+        reports = [simulate_monthly_kpi_report(report, scenario) for report in reports]
+        settings = {
+            **settings,
+            "meta_availability": sim_meta_availability,
+            "meta_utilization": sim_meta_utilization,
+            "meta_reliability": sim_meta_reliability,
+            "meta_tmef": sim_meta_tmef,
+            "meta_tmpr": sim_meta_tmpr,
+            "reliability_mission_hours": sim_mission_hours,
+        }
     data = build_editable_kpi_excel(reports, settings)
     group_label = "Barrenacion_Rezagado_Acarreo_Utilitario" if len(groups) > 1 else re.sub(r"[^A-Za-z0-9_.-]+", "_", groups[0].replace("Equipos de ", ""))
-    filename = f"KPI_{group_label}_{start_date.isoformat()}_{end_date.isoformat()}.xlsx"
+    prefix = "KPI_SIMULACION" if simulation else "KPI"
+    filename = f"{prefix}_{group_label}_{start_date.isoformat()}_{end_date.isoformat()}.xlsx"
     return StreamingResponse(
         BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -5852,6 +5940,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.97); border:1px solid rgba(215,224,234,.96); border-radius:8px; padding:16px; box-shadow:var(--shadow); }
     .panel::before { content:""; position:absolute; inset:0 0 auto; height:3px; background:linear-gradient(90deg,var(--blue2),var(--teal)); opacity:.86; }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
+    .kpi-sim-toolbar { grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); align-items:end; border-color:#f6d365; background:#fffdf4; }
+    .kpi-sim-toolbar::before { background:linear-gradient(90deg,#f59e0b,#facc15); }
+    .kpi-sim-toolbar input[type="number"] { min-width:0; }
+    .kpi-sim-note { align-self:center; font-size:12px; font-weight:700; }
+    #kpiPrintArea.simulation::before { background:linear-gradient(90deg,#f59e0b,#facc15); }
+    .kpi-simulation-badge { display:inline-block; margin-left:10px; padding:3px 8px; border:1px solid #d97706; border-radius:6px; background:#fff3cd; color:#7a4d00; font-size:12px; font-weight:800; vertical-align:middle; }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
     input, select, textarea { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; background:white; outline:none; transition:border .15s ease, box-shadow .15s ease; }
     .inline-check { display:flex; align-items:center; gap:8px; min-height:38px; }
@@ -6124,6 +6218,22 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
         <button class="btn secondary" id="kpiImageBtn">Descargar imagen</button>
         <button class="btn secondary" id="kpiExcelBtn">Excel editable</button>
+      </div>
+      <div class="panel toolbar kpi-sim-toolbar">
+        <label class="inline-check"><input id="kpiSimEnabled" type="checkbox"> Modo simulacion</label>
+        <label>Escenario<input id="kpiSimName" value="Escenario 1"></label>
+        <label>Meta disp %<input id="kpiSimMetaAvailability" type="number" step="0.1" value="85"></label>
+        <label>Meta util %<input id="kpiSimMetaUtilization" type="number" step="0.1" value="75"></label>
+        <label>Meta conf %<input id="kpiSimMetaReliability" type="number" step="0.1" value="80"></label>
+        <label>Meta TMEF h<input id="kpiSimMetaTmef" type="number" step="0.1" value="8"></label>
+        <label>Meta TMPR h<input id="kpiSimMetaTmpr" type="number" step="0.1" value="4"></label>
+        <label>Hrs periodo %<input id="kpiSimPeriod" type="number" step="1" value="100"></label>
+        <label>Hrs trab %<input id="kpiSimWorked" type="number" step="1" value="100"></label>
+        <label>Hrs MP %<input id="kpiSimMp" type="number" step="1" value="100"></label>
+        <label>Hrs MC %<input id="kpiSimMc" type="number" step="1" value="100"></label>
+        <label>Paradas %<input id="kpiSimStops" type="number" step="1" value="100"></label>
+        <label>Hrs mision<input id="kpiSimMission" type="number" step="0.1" value="24"></label>
+        <span class="muted kpi-sim-note">Solo cambia la vista y las descargas simuladas. No guarda datos reales.</span>
       </div>
       <div class="panel" id="kpiPrintArea">
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
@@ -6665,6 +6775,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentCaptureRows = [];
     let selectedKpiMetric = "availability";
     let monthlyPeriodInitialized = false;
+    let kpiSimulationInitialized = false;
     const AUTO_REFRESH_MS = 15000;
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
@@ -6736,6 +6847,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       area.classList.toggle("kpi-special-mode", mode === "special");
       area.classList.toggle("kpi-oil-mode", mode === "oil");
       area.classList.toggle("kpi-diesel-mode", mode === "diesel");
+      area.classList.remove("simulation");
       $("kpiSideCards").innerHTML = "";
       $("kpiTable").className = "";
       const tableWrap = $("kpiTable").closest(".table-wrap");
@@ -6772,6 +6884,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .kpi-logo{position:absolute;left:34px;top:14px;font-weight:800;font-size:19px;color:white;}
         .kpi-logo::after{content:"";display:block;width:54px;height:4px;background:#e11d48;margin-top:4px;}
         .kpi-title-row{height:54px;display:flex;align-items:center;justify-content:center;color:#06306e;font-size:24px;font-weight:800;background:#f2f2f2;}
+        .kpi-exact-badge{margin-left:12px;padding:4px 8px;border:1px solid #d97706;border-radius:4px;background:#fff3cd;color:#7a4d00;font-size:12px;font-weight:800;}
         .kpi-board{display:grid;grid-template-columns:330px 1fr 280px;gap:12px;padding:0 26px 12px;}
         .kpi-card-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid #d8d8d8;background:white;}
         .kpi-card{height:128px;border-right:1px solid #ddd;border-bottom:1px solid #ddd;padding:16px 12px;text-align:center;background:white;}
@@ -6951,8 +7064,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return inverse ? Math.min((t / Math.max(v, 0.1)) * 100, 100) : Math.min((v / t) * 100, 100);
     }
     function exactMachineHtml(){
-      const report = calculateKpiRows();
-      const settings = portal.settings || {};
+      const report = simulatedKpiReport(calculateKpiRows());
+      const settings = currentKpiSettings();
       const targets = {
         availability:Number(settings.meta_availability || 85),
         utilization:Number(settings.meta_utilization || 75),
@@ -6972,7 +7085,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }).join("") || `<p>Sin datos KPI.</p>`;
       const tableRows = report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td class="${row.availability < targets.availability ? "badtext" : "oktext"}">${esc(row.availabilityText)}</td><td class="${row.utilization < targets.utilization ? "badtext" : "oktext"}">${esc(row.utilizationText)}</td><td class="${row.reliability < targets.reliability ? "badtext" : "oktext"}">${pct(row.reliability)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("");
       return `<section class="kpi-sheet">
-        <div class="kpi-title-row"><div class="kpi-logo">MGA</div>${esc(report.group)}</div>
+        <div class="kpi-title-row"><div class="kpi-logo">MGA</div>${esc(report.group)}${report.simulation?.enabled ? `<span class="kpi-exact-badge">SIMULACION: ${esc(report.simulation.name || "Escenario KPI")}</span>` : ""}</div>
         <div class="kpi-board">
           <div class="kpi-card-grid">
             <div class="kpi-card ${report.totals.availability < targets.availability ? "bad" : ""}"><h3>% Disponibilidad</h3><strong>${pct(report.totals.availability)}</strong><div class="bar"><i style="width:${metricProgress(report.totals.availability, targets.availability)}%"></i></div><small>Meta ${pct(targets.availability)}</small></div>
@@ -7116,6 +7229,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
         start: $("kpiStart").value || "",
         end: $("kpiEnd").value || ""
       });
+      if(kpiSimulationActive()){
+        params.set("simulation", "true");
+        params.set("sim_name", $("kpiSimName").value || "Escenario KPI");
+        params.set("sim_period_percent", String(simNumber("kpiSimPeriod", 100)));
+        params.set("sim_worked_percent", String(simNumber("kpiSimWorked", 100)));
+        params.set("sim_mp_percent", String(simNumber("kpiSimMp", 100)));
+        params.set("sim_mc_percent", String(simNumber("kpiSimMc", 100)));
+        params.set("sim_stops_percent", String(simNumber("kpiSimStops", 100)));
+        params.set("sim_mission_hours", String(simNumber("kpiSimMission", (portal.settings || {}).reliability_mission_hours || 24)));
+        params.set("sim_meta_availability", String(simNumber("kpiSimMetaAvailability", (portal.settings || {}).meta_availability || 85)));
+        params.set("sim_meta_utilization", String(simNumber("kpiSimMetaUtilization", (portal.settings || {}).meta_utilization || 75)));
+        params.set("sim_meta_reliability", String(simNumber("kpiSimMetaReliability", (portal.settings || {}).meta_reliability || 80)));
+        params.set("sim_meta_tmef", String(simNumber("kpiSimMetaTmef", (portal.settings || {}).meta_tmef || 8)));
+        params.set("sim_meta_tmpr", String(simNumber("kpiSimMetaTmpr", (portal.settings || {}).meta_tmpr || 4)));
+      }
       const response = await fetch(`/api/kpi-format/excel?${params.toString()}`, {headers: headers(), cache: "no-store"});
       if(!response.ok) throw new Error(await apiError(response));
       const blob = await response.blob();
@@ -7124,7 +7252,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const start = $("kpiStart").value || "inicio";
       const end = $("kpiEnd").value || "fin";
       link.href = URL.createObjectURL(blob);
-      link.download = `KPI_${safeGroup}_${start}_${end}.xlsx`;
+      link.download = `${kpiSimulationActive() ? "KPI_SIMULACION" : "KPI"}_${safeGroup}_${start}_${end}.xlsx`;
       document.body.appendChild(link);
       link.click();
       URL.revokeObjectURL(link.href);
@@ -7555,6 +7683,74 @@ WAREHOUSE_HTML = r"""<!doctype html>
         reliability,
       };
     }
+    function simNumber(id, fallback){
+      const el = $(id);
+      const value = Number(el ? el.value : fallback);
+      return Number.isFinite(value) ? value : Number(fallback || 0);
+    }
+    function kpiSimulationActive(){
+      const group = String($("kpiGroup").value || "").toUpperCase();
+      return Boolean($("kpiSimEnabled")?.checked) && !group.includes("ACEITE") && !group.includes("LLANTA") && !group.includes("DIESEL");
+    }
+    function currentKpiSettings(){
+      const base = portal.settings || {};
+      if(!kpiSimulationActive()) return base;
+      return {
+        ...base,
+        meta_availability: simNumber("kpiSimMetaAvailability", base.meta_availability || 85),
+        meta_utilization: simNumber("kpiSimMetaUtilization", base.meta_utilization || 75),
+        meta_reliability: simNumber("kpiSimMetaReliability", base.meta_reliability || 80),
+        meta_tmef: simNumber("kpiSimMetaTmef", base.meta_tmef || 8),
+        meta_tmpr: simNumber("kpiSimMetaTmpr", base.meta_tmpr || 4),
+        reliability_mission_hours: simNumber("kpiSimMission", base.reliability_mission_hours || base.mission_hours || 24),
+      };
+    }
+    function initializeKpiSimulationSettings(force=false){
+      if(kpiSimulationInitialized && !force) return;
+      const settings = portal.settings || {};
+      $("kpiSimMetaAvailability").value = Number(settings.meta_availability || 85);
+      $("kpiSimMetaUtilization").value = Number(settings.meta_utilization || 75);
+      $("kpiSimMetaReliability").value = Number(settings.meta_reliability || 80);
+      $("kpiSimMetaTmef").value = Number(settings.meta_tmef || 8);
+      $("kpiSimMetaTmpr").value = Number(settings.meta_tmpr || 4);
+      $("kpiSimMission").value = Number(settings.reliability_mission_hours || settings.mission_hours || 24);
+      kpiSimulationInitialized = true;
+    }
+    function simulatedKpiReport(report){
+      if(!kpiSimulationActive()) return report;
+      const missionHours = simNumber("kpiSimMission", (portal.settings || {}).reliability_mission_hours || 24);
+      const factors = {
+        period: Math.max(simNumber("kpiSimPeriod", 100), 0) / 100,
+        worked: Math.max(simNumber("kpiSimWorked", 100), 0) / 100,
+        mp: Math.max(simNumber("kpiSimMp", 100), 0) / 100,
+        mc: Math.max(simNumber("kpiSimMc", 100), 0) / 100,
+        stops: Math.max(simNumber("kpiSimStops", 100), 0) / 100,
+      };
+      const rows = report.rows.map(source => {
+        const row = {...source};
+        row.period = Math.max(Number(source.period || 0) * factors.period, 0);
+        row.worked = Math.max(Number(source.worked || 0) * factors.worked, 0);
+        row.mp = Math.max(Number(source.mp || 0) * factors.mp, 0);
+        row.mc = Math.max(Number(source.mc || 0) * factors.mc, 0);
+        row.stops = Math.max(Math.round(Number(source.stops || 0) * factors.stops), 0);
+        row.out = row.worked <= 0 && unavailable(row.status);
+        const values = row.out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops, missionHours);
+        Object.assign(row, values);
+        row.availabilityText = row.out ? "FUERA" : pct(row.availability);
+        row.utilizationText = row.out ? "FUERA" : pct(row.utilization);
+        return row;
+      });
+      const totals = rows.reduce((acc, row) => {
+        acc.period += Number(row.period || 0); acc.worked += Number(row.worked || 0); acc.mp += Number(row.mp || 0); acc.mc += Number(row.mc || 0); acc.stops += Number(row.stops || 0); acc.available += Number(row.available || 0);
+        return acc;
+      }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
+      totals.availability = totals.period ? (totals.available / totals.period) * 100 : 0;
+      totals.utilization = totals.available ? (totals.worked / totals.available) * 100 : 0;
+      totals.tmef = totals.stops ? totals.available / totals.stops : totals.available;
+      totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
+      totals.reliability = totals.tmef && missionHours ? Math.max(Math.min(Math.exp(-(missionHours / totals.tmef)) * 100, 100), 0) : (totals.available > 0 ? 100 : 0);
+      return {...report, rows, totals, simulation:{enabled:true, name:$("kpiSimName").value || "Escenario KPI"}};
+    }
     function setOptions(selectId, options, allLabel="Todos"){
       const select = $(selectId);
       const current = select.value;
@@ -7599,6 +7795,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
       if(!$("kpiStart").value) $("kpiStart").value = period.start || today;
       if(!$("kpiEnd").value) $("kpiEnd").value = period.end || today;
+      initializeKpiSimulationSettings();
       if(!$("prBase").value) $("prBase").value = period.start || today;
       if(!$("backlogStart").value) $("backlogStart").value = period.start || today;
       if(!$("backlogEnd").value) $("backlogEnd").value = period.end || today;
@@ -8227,10 +8424,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         return;
       }
       setDashboardMode("format");
-      const report = calculateKpiRows();
-      const settings = portal.settings || {};
+      const report = simulatedKpiReport(calculateKpiRows());
+      const settings = currentKpiSettings();
+      $("kpiPrintArea").classList.toggle("simulation", Boolean(report.simulation?.enabled));
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
-      $("kpiTitle").textContent = `${report.group} | ${report.start} a ${report.end}`;
+      $("kpiTitle").innerHTML = `${esc(report.group)} | ${esc(report.start)} a ${esc(report.end)}${report.simulation?.enabled ? `<span class="kpi-simulation-badge">SIMULACION: ${esc(report.simulation.name || "Escenario KPI")}</span>` : ""}`;
       const metaAvailability = Number(settings.meta_availability || 85);
       const metaUtilization = Number(settings.meta_utilization || 75);
       const metaReliability = Number(settings.meta_reliability || 80);
@@ -9813,6 +10011,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       btn.classList.add("active"); $(btn.dataset.tab).classList.add("active");
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
+    ["kpiSimEnabled","kpiSimName","kpiSimMetaAvailability","kpiSimMetaUtilization","kpiSimMetaReliability","kpiSimMetaTmef","kpiSimMetaTmpr","kpiSimPeriod","kpiSimWorked","kpiSimMp","kpiSimMc","kpiSimStops","kpiSimMission"].forEach(id => {
+      const el = $(id);
+      if(!el) return;
+      el.addEventListener(id === "kpiSimEnabled" ? "change" : "input", renderDashboard);
+    });
     $("renderKpiBtn").addEventListener("click", renderDashboard);
     $("printKpiBtn").addEventListener("click", printExactKpi);
     $("kpiImageBtn").addEventListener("click", () => downloadKpiImage().catch(showError));
