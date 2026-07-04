@@ -53,6 +53,30 @@ Nota importante: si `DATABASE_URL` no esta configurado, el backend usa `cloud_sy
 
 Si ya tienes una base PostgreSQL gratuita activa en tu workspace y Render no permite crear otra, cambia `DATABASE_URL` manualmente para reutilizar esa base. La informacion de MGA queda separada por tablas con prefijo `mga_`: `mga_mobile_capture`, `mga_mobile_photo`, `mga_catalog_snapshot`, `mga_filter_inventory_item` y `mga_filter_inventory_movement`.
 
+## Reset seguro de snapshots dañados
+
+Si `GET /api/portal` o `GET /api/filter-inventory` devuelve `500`, puedes limpiar solo los snapshots sin afectar capturas, inventario ni movimientos:
+
+```powershell
+python scripts/reset_snapshots.py --dry-run
+python scripts/reset_snapshots.py --backup-dir snapshot_backups
+```
+
+Opciones útiles:
+
+- `--portal-only`: borra solo `PortalSnapshot`.
+- `--catalog-only`: borra solo `CatalogSnapshot`.
+- `--dry-run`: solo muestra qué haría.
+- `--backup-dir`: guarda el JSON actual antes de borrar.
+
+En Render, el flujo recomendado es:
+
+1. Abrir el shell del servicio.
+2. Ejecutar el script con la misma `DATABASE_URL` del servicio.
+3. Redeploy del web service.
+4. Reprobar `/health`, `/api/portal` y `/api/filter-inventory`.
+
+
 Render recomienda para FastAPI usar Uvicorn enlazado a `0.0.0.0` y al puerto `$PORT`. Referencias oficiales:
 
 - [Deploy a FastAPI App - Render Docs](https://render.com/docs/deploy-fastapi)

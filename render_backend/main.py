@@ -503,7 +503,10 @@ def json_loads(value: str) -> Any:
 
     if not value:
         return {}
-    return json.loads(value)
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return {}
 
 
 def parse_float(value: Any, default: float = 0) -> float:
@@ -1260,7 +1263,12 @@ def latest_catalog_payload(session: Session) -> dict[str, Any]:
     if snapshot is None:
         return {"ok": True, "source": "cloud-empty", "equipment": []}
     payload = json_loads(snapshot.payload_json)
-    return payload if isinstance(payload, dict) else {"ok": True, "source": "cloud", "equipment": []}
+    if not isinstance(payload, dict):
+        return {"ok": True, "source": "cloud", "equipment": []}
+    payload.setdefault("ok", True)
+    payload.setdefault("source", "cloud")
+    payload.setdefault("equipment", [])
+    return payload
 
 
 def mobile_capture_portal_row(row: MobileCapture) -> dict[str, Any]:
@@ -1530,6 +1538,17 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
         return portal_fallback_payload(session)
     payload.setdefault("ok", True)
     payload.setdefault("source", "cloud-portal")
+    payload.setdefault("period", {})
+    payload.setdefault("settings", {})
+    payload.setdefault("equipment", [])
+    payload.setdefault("captures", [])
+    payload.setdefault("availability", [])
+    payload.setdefault("preventives", [])
+    payload.setdefault("kpi_groups", [])
+    payload.setdefault("kpi_reports", {})
+    payload.setdefault("oil_kpi", {"rows": [], "totals": {}, "columns": []})
+    payload.setdefault("tire_kpi", {"rows": [], "summary": {}})
+    payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
     return merge_mobile_captures_into_portal(session, payload)
 
