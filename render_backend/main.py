@@ -3455,14 +3455,19 @@ def kpi_capture_component_matches_py(equipment_code: Any, component_name: Any) -
     return required in normalized_ascii(component_name)
 
 
-def monthly_kpi_metric(period: float, worked: float, mp: float, mc: float, stops: float, mission_hours: float = 24) -> dict[str, float]:
+def monthly_kpi_metric(period: float, worked: float, mp: float, mc: float, stops: float, mission_hours: float = 12) -> dict[str, float]:
     available = max(period - mp - mc, 0)
     availability = max(min((available / period) * 100, 100), 0) if period > 0 else 0
     utilization = max(min((worked / available) * 100, 100), 0) if available > 0 else 0
     stop_count = max(stops, 0)
-    tmef = available / stop_count if stop_count else available
-    tmpr = mc / stop_count if stop_count else 0
-    reliability = max(min(math.exp(-(mission_hours / tmef)) * 100, 100), 0) if tmef and mission_hours else (100 if available else 0)
+    if stop_count:
+        tmef = worked / stop_count if worked else 0
+        tmpr = mc / stop_count
+        reliability = max(min(math.exp(-(mission_hours / tmef)) * 100, 100), 0) if tmef and mission_hours else 0
+    else:
+        tmef = worked
+        tmpr = 0
+        reliability = 100 if worked else 0
     return {
         "available": available,
         "availability": availability,
@@ -3473,11 +3478,67 @@ def monthly_kpi_metric(period: float, worked: float, mp: float, mc: float, stops
     }
 
 
+def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str) -> dict[str, Any] | None:
+    reports = portal.get("kpi_reports") if isinstance(portal.get("kpi_reports"), dict) else {}
+    source = reports.get(group) if isinstance(reports.get(group), dict) else None
+    if not source or source.get("start") != start or source.get("end") != end:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    for source_row in source.get("rows") if isinstance(source.get("rows"), list) else []:
+        if not isinstance(source_row, dict):
+            continue
+        period = parse_float(source_row.get("period") if "period" in source_row else source_row.get("period_hours"), 0)
+        mp = parse_float(source_row.get("mp") if "mp" in source_row else source_row.get("mp_hours"), 0)
+        mc = parse_float(source_row.get("mc") if "mc" in source_row else source_row.get("mc_hours"), 0)
+        worked = parse_float(source_row.get("worked") if "worked" in source_row else source_row.get("worked_hours"), 0)
+        availability_text = str(source_row.get("availability_text") or source_row.get("availabilityText") or "").strip()
+        utilization_text = str(source_row.get("utilization_text") or source_row.get("utilizationText") or "").strip()
+        out = availability_text.upper() == "FUERA" or utilization_text.upper() == "FUERA"
+        rows.append(
+            {
+                "code": source_row.get("code") or "",
+                "description": source_row.get("description") or "",
+                "family": source_row.get("family") or "",
+                "status": source_row.get("status") or ("FUERA" if out else ""),
+                "period": period,
+                "worked": worked,
+                "mp": mp,
+                "mc": mc,
+                "stops": parse_float(source_row.get("stops"), 0),
+                "available": 0 if out else max(period - mp - mc, 0),
+                "availability": parse_float(source_row.get("availability"), 0),
+                "utilization": parse_float(source_row.get("utilization"), 0),
+                "tmef": parse_float(source_row.get("tmef"), 0),
+                "tmpr": parse_float(source_row.get("tmpr"), 0),
+                "reliability": parse_float(source_row.get("reliability"), 0),
+                "out": out,
+                "availability_text": availability_text or ("FUERA" if out else f"{parse_float(source_row.get('availability'), 0):.1f}%"),
+                "utilization_text": utilization_text or ("FUERA" if out else f"{parse_float(source_row.get('utilization'), 0):.1f}%"),
+            }
+        )
+
+    return {
+        "group": source.get("group") or group,
+        "start": start,
+        "end": end,
+        "start_day": int(str(start)[-2:]) if start else 1,
+        "end_day": int(str(end)[-2:]) if end else 31,
+        "rows": rows,
+        "totals": source.get("totals") if isinstance(source.get("totals"), dict) else {},
+        "source": "desktop-kpi-report",
+    }
+
+
 def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str) -> dict[str, Any]:
+    precomputed = desktop_kpi_report(portal, group, start, end)
+    if precomputed is not None:
+        return precomputed
+
     settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
     shift_hours = parse_float(settings.get("shift_hours"), 9) or 9
     daily_hours = shift_hours * (parse_float(settings.get("turns_per_day"), 2) or 2)
-    mission_hours = parse_float(settings.get("reliability_mission_hours") or settings.get("mission_hours"), 24) or 24
+    mission_hours = parse_float(settings.get("reliability_mission_hours") or settings.get("mission_hours"), 12) or 12
     try:
         start_date = datetime.strptime(start, "%Y-%m-%d").date()
         end_date = datetime.strptime(end, "%Y-%m-%d").date()
@@ -3561,12 +3622,12 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         totals["available"] += row["available"]
     totals["availability"] = (totals["available"] / totals["period"] * 100) if totals["period"] else 0
     totals["utilization"] = (totals["worked"] / totals["available"] * 100) if totals["available"] else 0
-    totals["tmef"] = (totals["available"] / totals["stops"]) if totals["stops"] else totals["available"]
+    totals["tmef"] = (totals["worked"] / totals["stops"]) if totals["stops"] and totals["worked"] else (totals["worked"] if not totals["stops"] else 0)
     totals["tmpr"] = (totals["mc"] / totals["stops"]) if totals["stops"] else 0
     totals["reliability"] = (
         max(min(math.exp(-(mission_hours / totals["tmef"])) * 100, 100), 0)
         if totals["tmef"] and mission_hours
-        else (100 if totals["available"] else 0)
+        else (100 if totals["worked"] and not totals["stops"] else 0)
     )
     return {
         "group": group,
@@ -3584,7 +3645,7 @@ def kpi_sim_factor(value: Any, default: float = 100) -> float:
 
 
 def simulate_monthly_kpi_report(report: dict[str, Any], scenario: dict[str, Any]) -> dict[str, Any]:
-    mission_hours = parse_float(scenario.get("reliability_mission_hours"), 24) or 24
+    mission_hours = parse_float(scenario.get("reliability_mission_hours"), 12) or 12
     period_factor = kpi_sim_factor(scenario.get("period_percent"), 100)
     worked_factor = kpi_sim_factor(scenario.get("worked_percent"), 100)
     mp_factor = kpi_sim_factor(scenario.get("mp_percent"), 100)
@@ -3615,12 +3676,12 @@ def simulate_monthly_kpi_report(report: dict[str, Any], scenario: dict[str, Any]
         totals["available"] += parse_float(row.get("available"), 0)
     totals["availability"] = (totals["available"] / totals["period"] * 100) if totals["period"] else 0
     totals["utilization"] = (totals["worked"] / totals["available"] * 100) if totals["available"] else 0
-    totals["tmef"] = (totals["available"] / totals["stops"]) if totals["stops"] else totals["available"]
+    totals["tmef"] = (totals["worked"] / totals["stops"]) if totals["stops"] and totals["worked"] else (totals["worked"] if not totals["stops"] else 0)
     totals["tmpr"] = (totals["mc"] / totals["stops"]) if totals["stops"] else 0
     totals["reliability"] = (
         max(min(math.exp(-(mission_hours / totals["tmef"])) * 100, 100), 0)
         if totals["tmef"] and mission_hours
-        else (100 if totals["available"] else 0)
+        else (100 if totals["worked"] and not totals["stops"] else 0)
     )
     simulated = dict(report)
     simulated["rows"] = rows
@@ -7708,14 +7769,23 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const required = kpiRequiredComponent(equipmentCode);
       return !required || normalizedText(componentName).includes(required);
     }
-    function metric(period, worked, mp, mc, stops, missionHours=24){
+    function metric(period, worked, mp, mc, stops, missionHours=12){
       const available = Math.max(Number(period || 0) - Number(mp || 0) - Number(mc || 0), 0);
       const availability = period > 0 ? Math.max(Math.min((available / period) * 100, 100), 0) : 0;
       const utilization = available > 0 ? Math.max(Math.min((Number(worked || 0) / available) * 100, 100), 0) : 0;
       const stopCount = Math.max(Number(stops || 0), 0);
-      const tmef = stopCount ? (available / stopCount) : available;
-      const tmpr = stopCount ? (Number(mc || 0) / stopCount) : 0;
-      const reliability = tmef && missionHours ? Math.max(Math.min(Math.exp(-(Number(missionHours || 0) / tmef)) * 100, 100), 0) : (available > 0 ? 100 : 0);
+      let tmef = 0;
+      let tmpr = 0;
+      let reliability = 0;
+      if(stopCount){
+        tmef = Number(worked || 0) ? (Number(worked || 0) / stopCount) : 0;
+        tmpr = Number(mc || 0) / stopCount;
+        reliability = tmef && missionHours ? Math.max(Math.min(Math.exp(-(Number(missionHours || 0) / tmef)) * 100, 100), 0) : 0;
+      } else {
+        tmef = Number(worked || 0);
+        tmpr = 0;
+        reliability = Number(worked || 0) > 0 ? 100 : 0;
+      }
       return {
         available,
         availability,
@@ -7744,7 +7814,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         meta_reliability: simNumber("kpiSimMetaReliability", base.meta_reliability || 80),
         meta_tmef: simNumber("kpiSimMetaTmef", base.meta_tmef || 8),
         meta_tmpr: simNumber("kpiSimMetaTmpr", base.meta_tmpr || 4),
-        reliability_mission_hours: simNumber("kpiSimMission", base.reliability_mission_hours || base.mission_hours || 24),
+        reliability_mission_hours: simNumber("kpiSimMission", base.reliability_mission_hours || base.mission_hours || 12),
       };
     }
     function initializeKpiSimulationSettings(force=false){
@@ -7755,12 +7825,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("kpiSimMetaReliability").value = Number(settings.meta_reliability || 80);
       $("kpiSimMetaTmef").value = Number(settings.meta_tmef || 8);
       $("kpiSimMetaTmpr").value = Number(settings.meta_tmpr || 4);
-      $("kpiSimMission").value = Number(settings.reliability_mission_hours || settings.mission_hours || 24);
+      $("kpiSimMission").value = Number(settings.reliability_mission_hours || settings.mission_hours || 12);
       kpiSimulationInitialized = true;
     }
     function simulatedKpiReport(report){
       if(!kpiSimulationActive()) return report;
-      const missionHours = simNumber("kpiSimMission", (portal.settings || {}).reliability_mission_hours || 24);
+      const missionHours = simNumber("kpiSimMission", (portal.settings || {}).reliability_mission_hours || (portal.settings || {}).mission_hours || 12);
       const factors = {
         period: Math.max(simNumber("kpiSimPeriod", 100), 0) / 100,
         worked: Math.max(simNumber("kpiSimWorked", 100), 0) / 100,
@@ -7788,9 +7858,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
       totals.availability = totals.period ? (totals.available / totals.period) * 100 : 0;
       totals.utilization = totals.available ? (totals.worked / totals.available) * 100 : 0;
-      totals.tmef = totals.stops ? totals.available / totals.stops : totals.available;
+      totals.tmef = totals.stops ? (totals.worked ? totals.worked / totals.stops : 0) : totals.worked;
       totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
-      totals.reliability = totals.tmef && missionHours ? Math.max(Math.min(Math.exp(-(missionHours / totals.tmef)) * 100, 100), 0) : (totals.available > 0 ? 100 : 0);
+      totals.reliability = totals.tmef && missionHours ? Math.max(Math.min(Math.exp(-(missionHours / totals.tmef)) * 100, 100), 0) : (totals.worked > 0 && !totals.stops ? 100 : 0);
       return {...report, rows, totals, simulation:{enabled:true, name:$("kpiSimName").value || "Escenario KPI"}};
     }
     function setOptions(selectId, options, allLabel="Todos"){
@@ -7802,6 +7872,50 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function portalEquipment(){
       const rows = Array.isArray(portal.equipment) ? portal.equipment : [];
       return rows.filter(e => e && (e.code || e.equipment_code));
+    }
+    function desktopKpiReport(group, start, end){
+      const reports = portal.kpi_reports && typeof portal.kpi_reports === "object" ? portal.kpi_reports : {};
+      const source = reports[group];
+      if(!source || source.start !== start || source.end !== end) return null;
+      const rows = Array.isArray(source.rows) ? source.rows.map(sourceRow => {
+        const period = Number(sourceRow.period ?? sourceRow.period_hours ?? 0);
+        const mp = Number(sourceRow.mp ?? sourceRow.mp_hours ?? 0);
+        const mc = Number(sourceRow.mc ?? sourceRow.mc_hours ?? 0);
+        const worked = Number(sourceRow.worked ?? sourceRow.worked_hours ?? 0);
+        const availabilityText = String(sourceRow.availabilityText || sourceRow.availability_text || "").trim();
+        const utilizationText = String(sourceRow.utilizationText || sourceRow.utilization_text || "").trim();
+        const out = availabilityText.toUpperCase() === "FUERA" || utilizationText.toUpperCase() === "FUERA";
+        const availability = Number(sourceRow.availability || 0);
+        const utilization = Number(sourceRow.utilization || 0);
+        return {
+          code: sourceRow.code || "",
+          description: sourceRow.description || "",
+          family: sourceRow.family || "",
+          status: sourceRow.status || (out ? "FUERA" : ""),
+          period,
+          worked,
+          mp,
+          mc,
+          stops: Number(sourceRow.stops || 0),
+          available: out ? 0 : Math.max(period - mp - mc, 0),
+          availability,
+          utilization,
+          tmef: Number(sourceRow.tmef || 0),
+          tmpr: Number(sourceRow.tmpr || 0),
+          reliability: Number(sourceRow.reliability || 0),
+          out,
+          availabilityText: availabilityText || (out ? "FUERA" : pct(availability)),
+          utilizationText: utilizationText || (out ? "FUERA" : pct(utilization)),
+        };
+      }) : [];
+      return {
+        group: source.group || group,
+        start,
+        end,
+        rows,
+        totals: source.totals || {period:0, worked:0, mp:0, mc:0, stops:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0},
+        source: "desktop-kpi-report",
+      };
     }
     function renderReqEquipmentOptions(){
       const select = $("reqEquipment");
@@ -7879,10 +7993,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const group = groupOverride || $("kpiGroup").value || "Todos los equipos";
       const start = startOverride || $("kpiStart").value;
       const end = endOverride || $("kpiEnd").value;
+      const precomputed = desktopKpiReport(group, start, end);
+      if(precomputed) return precomputed;
       const settings = portal.settings || {};
       const shiftHours = Number(settings.shift_hours || 9);
       const dailyHours = shiftHours * Number(settings.turns_per_day || 2);
-      const missionHours = Number(settings.reliability_mission_hours || settings.mission_hours || 24);
+      const missionHours = Number(settings.reliability_mission_hours || settings.mission_hours || 12);
       const days = Math.max(Math.round((parseIsoDate(end) - parseIsoDate(start)) / 86400000) + 1, 1);
       const captures = (portal.captures || []).filter(c => inRange(c.work_date, start, end));
       const grouped = {};
@@ -7932,9 +8048,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
       totals.availability = totals.period ? (totals.available / totals.period) * 100 : 0;
       totals.utilization = totals.available ? (totals.worked / totals.available) * 100 : 0;
-      totals.tmef = totals.stops ? totals.available / totals.stops : totals.available;
+      totals.tmef = totals.stops ? (totals.worked ? totals.worked / totals.stops : 0) : totals.worked;
       totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
-      totals.reliability = totals.tmef && missionHours ? Math.max(Math.min(Math.exp(-(missionHours / totals.tmef)) * 100, 100), 0) : (totals.available > 0 ? 100 : 0);
+      totals.reliability = totals.tmef && missionHours ? Math.max(Math.min(Math.exp(-(missionHours / totals.tmef)) * 100, 100), 0) : (totals.worked > 0 && !totals.stops ? 100 : 0);
       return {group, start, end, rows, totals};
     }
     const kpiMetricTabs = [
