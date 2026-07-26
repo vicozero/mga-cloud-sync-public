@@ -6100,7 +6100,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .capture-actions { position:sticky; bottom:0; z-index:3; padding:10px 0 2px; background:linear-gradient(180deg,rgba(255,255,255,.82),#fff 30%); }
     .capture-actions .btn { min-height:40px; }
     .latest-captures-panel { min-width:0; position:sticky; top:12px; }
-    .latest-captures-wrap { max-height:calc(100vh - 205px); overflow:auto; }
+    .latest-captures-wrap { max-height:clamp(320px, calc(100vh - 395px), 620px); overflow:auto; }
     #capRecentTable { min-width:900px; }
     #capRecentTable th, #capRecentTable td { padding:7px 8px; font-size:12px; line-height:1.2; }
     #capRecentTable th { font-size:11px; white-space:nowrap; }
