@@ -1313,6 +1313,8 @@ def mobile_capture_portal_row(row: MobileCapture) -> dict[str, Any]:
         "oil_85w140": parse_float(payload.get("oil_85w140"), 0),
         "almo_liters": parse_float(payload.get("almo_liters"), 0),
         "coolant_liters": parse_float(payload.get("coolant_liters"), 0),
+        "oil_hyd_vg100": parse_float(payload.get("oil_hyd_vg100"), 0),
+        "atf_liters": parse_float(payload.get("atf_liters"), 0),
         "fault": str(payload.get("fault") or ""),
         "wear": str(payload.get("wear") or ""),
         "status": str(payload.get("status") or "Disponible"),
@@ -6091,6 +6093,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .warn { color:#92400e; background:#fef3c7; }
     .muted { color:var(--muted); }
     .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
+    .capture-layout { grid-template-columns:minmax(660px,1.35fr) minmax(420px,.65fr); }
+    .capture-form-grid { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:10px; }
+    .capture-section-title { grid-column:1 / -1; margin:4px 0 -2px; padding:8px 10px; border-left:4px solid var(--teal); border-radius:4px; background:#f0fdfa; color:#0f766e; font-size:12px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; }
+    .capture-fluid { background:#f8fafc; border-radius:6px; padding:8px; margin:-2px; }
+    .capture-actions { position:sticky; bottom:0; z-index:3; padding:10px 0 2px; background:linear-gradient(180deg,rgba(255,255,255,.82),#fff 30%); }
+    .capture-actions .btn { min-height:40px; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .req-header-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
     .req-item-grid { display:grid; grid-template-columns:110px 150px 1fr 1.6fr; gap:10px; align-items:end; }
@@ -6285,7 +6293,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       th { position:static; }
       .print-only { display:block; }
     }
-    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .capture-form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
+    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .capture-form-grid { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide { grid-column:1; } .capture-actions .btn { width:100%; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
   </style>
 </head>
@@ -6453,10 +6462,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="table-wrap"><table id="bitTable"></table></div>
     </section>
     <section id="captura" class="view">
-      <div class="grid2">
+      <div class="grid2 capture-layout">
         <div class="panel">
           <div class="subtle-title"><h3>Captura diaria</h3><span class="muted" id="capStatus"></span></div>
-          <div class="movement-grid">
+          <div class="capture-form-grid">
+            <div class="capture-section-title">Datos de operacion</div>
             <label>Fecha<input id="capDate" type="date"></label>
             <label>Turno<select id="capShift"><option>Turno 1</option><option>Turno 2</option><option>General</option></select></label>
             <label>Equipo<select id="capEquipment"></select></label>
@@ -6469,15 +6479,22 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Stand By<input id="capStandby" type="number" step="0.1" min="0" value="0"></label>
             <label># Paradas<input id="capStops" type="number" step="1" min="0" value="0"></label>
             <label>Estatus<select id="capCaptureStatus"><option>Disponible</option><option>No Disponible</option><option>Stand By</option><option>Operativa</option></select></label>
-            <label>Aceite total L<input id="capOil" type="number" step="0.1" min="0" value="0"></label>
-            <label>15W40 L<input id="capOil15w40" type="number" step="0.1" min="0" value="0"></label>
-            <label>HCO ISO 68 L<input id="capOilHco68" type="number" step="0.1" min="0" value="0"></label>
-            <label>SAE 30 L<input id="capOilSae30" type="number" step="0.1" min="0" value="0"></label>
+            <div class="capture-section-title">Aceites y fluidos (litros)</div>
+            <label class="capture-fluid">Aceite total<input id="capOil" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">15W40<input id="capOil15w40" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">HCO ISO 68<input id="capOilHco68" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">SAE 30<input id="capOilSae30" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">85W140<input id="capOil85w140" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">ALMO<input id="capAlmo" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">Refrigerante<input id="capCoolant" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">Hidraulico VG100<input id="capOilVg100" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">ATF<input id="capAtf" type="number" step="0.1" min="0" value="0"></label>
+            <div class="capture-section-title">Falla y observaciones</div>
             <label class="wide">Falla<input id="capFault" placeholder="Falla detectada"></label>
             <label class="wide">Desgaste<input id="capWear" placeholder="Desgaste observado"></label>
             <label class="wide">Observaciones<textarea id="capObservations" rows="3" placeholder="Detalle de la captura"></textarea></label>
           </div>
-          <div class="req-actions">
+          <div class="req-actions capture-actions">
             <button class="btn secondary" id="capNewBtn">Nueva captura</button>
             <button class="btn" id="capSaveBtn">Guardar captura</button>
             <button class="btn secondary" id="capRefreshBtn">Actualizar bitacora</button>
@@ -8124,7 +8141,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       });
     }
     function oilColumns(){
-      const cols = portal.oil_kpi && Array.isArray(portal.oil_kpi.columns) && portal.oil_kpi.columns.length ? portal.oil_kpi.columns : [
+      const required = [
         {label:"15W40", key:"oil_motor_15w40"},
         {label:"ISO 68", key:"oil_hco_iso68"},
         {label:"SAE 30", key:"oil_trans_sae30"},
@@ -8132,7 +8149,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
         {label:"85W140", key:"oil_85w140"},
         {label:"ALMO", key:"almo_liters"},
         {label:"Refrigerante", key:"coolant_liters"},
+        {label:"VG100", key:"oil_hyd_vg100"},
+        {label:"ATF", key:"atf_liters"},
       ];
+      const cols = portal.oil_kpi && Array.isArray(portal.oil_kpi.columns) ? [...portal.oil_kpi.columns] : [];
+      required.forEach(item => {
+        if(!cols.some(col => col.key === item.key)) cols.push(item);
+      });
       return cols;
     }
     function oilGroupFor(eq){
@@ -8998,7 +9021,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       currentCaptureRecord = null;
       if(!$("capDate").value) $("capDate").value = toIsoDate(new Date());
       $("capShift").value = "Turno 1";
-      ["capHi","capHf","capWorked","capMp","capMc","capStandby","capStops","capOil","capOil15w40","capOilHco68","capOilSae30"].forEach(id => { $(id).value = "0"; });
+      ["capHi","capHf","capWorked","capMp","capMc","capStandby","capStops","capOil","capOil15w40","capOilHco68","capOilSae30","capOil85w140","capAlmo","capCoolant","capOilVg100","capAtf"].forEach(id => { $(id).value = "0"; });
       ["capFault","capWear","capObservations"].forEach(id => { $(id).value = ""; });
       $("capCaptureStatus").value = "Disponible";
       $("capStatus").textContent = "";
@@ -9018,6 +9041,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         $("capWorked").value = one(hf - hi).replace(/\.0$/, "");
       }
     }
+    function updateCaptureOilTotal(){
+      const detailIds = ["capOil15w40","capOilHco68","capOilSae30","capOil85w140","capAlmo","capCoolant","capOilVg100","capAtf"];
+      const total = detailIds.reduce((sum, id) => sum + captureNumber(id), 0);
+      $("capOil").value = total ? String(Math.round(total * 100) / 100) : "0";
+    }
     function captureMobileId(record){
       return ["web", record.work_date, record.shift, record.equipment_code, record.component_name]
         .map(value => normalizedText(value).replace(/[^A-Z0-9]/g, ""))
@@ -9033,6 +9061,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const oilMotor = captureNumber("capOil15w40");
       const oilHco = captureNumber("capOilHco68");
       const oilSae = captureNumber("capOilSae30");
+      const oil85w140 = captureNumber("capOil85w140");
+      const almo = captureNumber("capAlmo");
+      const coolant = captureNumber("capCoolant");
+      const oilVg100 = captureNumber("capOilVg100");
+      const atf = captureNumber("capAtf");
       const record = {
         work_date: workDate,
         shift: normalizeCaptureShiftValue($("capShift").value),
@@ -9047,10 +9080,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
         mc_hours: captureNumber("capMc"),
         standby_hours: captureNumber("capStandby"),
         stops: Math.round(captureNumber("capStops")),
-        oil_liters: captureNumber("capOil") || oilMotor + oilHco + oilSae,
+        oil_liters: captureNumber("capOil") || oilMotor + oilHco + oilSae + oil85w140 + almo + coolant + oilVg100 + atf,
         oil_motor_15w40: oilMotor,
         oil_hco_iso68: oilHco,
         oil_trans_sae30: oilSae,
+        oil_85w140: oil85w140,
+        almo_liters: almo,
+        coolant_liters: coolant,
+        oil_hyd_vg100: oilVg100,
+        atf_liters: atf,
         fault: $("capFault").value.trim(),
         wear: $("capWear").value.trim(),
         status: $("capCaptureStatus").value || "Disponible",
@@ -9110,6 +9148,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("capOil15w40").value = formatCaptureNumber(row.oil_motor_15w40);
       $("capOilHco68").value = formatCaptureNumber(row.oil_hco_iso68);
       $("capOilSae30").value = formatCaptureNumber(row.oil_trans_sae30);
+      $("capOil85w140").value = formatCaptureNumber(row.oil_85w140);
+      $("capAlmo").value = formatCaptureNumber(row.almo_liters);
+      $("capCoolant").value = formatCaptureNumber(row.coolant_liters);
+      $("capOilVg100").value = formatCaptureNumber(row.oil_hyd_vg100);
+      $("capAtf").value = formatCaptureNumber(row.atf_liters);
       $("capFault").value = row.fault || "";
       $("capWear").value = row.wear || "";
       $("capCaptureStatus").value = normalizeCaptureStatusValue(row.status);
@@ -9173,6 +9216,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         oil_motor_15w40: record.oil_motor_15w40,
         oil_hco_iso68: record.oil_hco_iso68,
         oil_trans_sae30: record.oil_trans_sae30,
+        oil_85w140: record.oil_85w140,
+        almo_liters: record.almo_liters,
+        coolant_liters: record.coolant_liters,
+        oil_hyd_vg100: record.oil_hyd_vg100,
+        atf_liters: record.atf_liters,
         fault: record.fault,
         wear: record.wear,
         status: record.status,
@@ -10180,6 +10228,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       btn.classList.add("active"); $(btn.dataset.tab).classList.add("active");
+      $("stats").style.display = btn.dataset.tab === "dashboard" ? "" : "none";
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     ["kpiSimEnabled","kpiSimName","kpiSimMetaAvailability","kpiSimMetaUtilization","kpiSimMetaReliability","kpiSimMetaTmef","kpiSimMetaTmpr","kpiSimPeriod","kpiSimWorked","kpiSimMp","kpiSimMc","kpiSimStops","kpiSimMission"].forEach(id => {
@@ -10218,6 +10267,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("capEquipment").addEventListener("change", () => { renderCaptureComponents(); applyPreviousHi(true); renderCaptureRecent(); });
     $("capComponent").addEventListener("change", () => applyPreviousHi(true));
     ["capHi","capHf"].forEach(id => $(id).addEventListener("input", updateCaptureWorkedHours));
+    ["capOil15w40","capOilHco68","capOilSae30","capOil85w140","capAlmo","capCoolant","capOilVg100","capAtf"].forEach(id => $(id).addEventListener("input", updateCaptureOilTotal));
     $("capNewBtn").addEventListener("click", resetCaptureForm);
     $("capSaveBtn").addEventListener("click", () => saveDailyCapture().catch(showError));
     $("capRefreshBtn").addEventListener("click", () => load().catch(showError));
