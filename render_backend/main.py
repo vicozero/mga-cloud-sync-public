@@ -6093,12 +6093,22 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .warn { color:#92400e; background:#fef3c7; }
     .muted { color:var(--muted); }
     .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
-    .capture-layout { grid-template-columns:minmax(660px,1.35fr) minmax(420px,.65fr); }
+    .capture-layout { grid-template-columns:minmax(0,1fr) minmax(560px,.9fr); }
     .capture-form-grid { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:10px; }
     .capture-section-title { grid-column:1 / -1; margin:4px 0 -2px; padding:8px 10px; border-left:4px solid var(--teal); border-radius:4px; background:#f0fdfa; color:#0f766e; font-size:12px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; }
     .capture-fluid { background:#f8fafc; border-radius:6px; padding:8px; margin:-2px; }
     .capture-actions { position:sticky; bottom:0; z-index:3; padding:10px 0 2px; background:linear-gradient(180deg,rgba(255,255,255,.82),#fff 30%); }
     .capture-actions .btn { min-height:40px; }
+    .latest-captures-panel { min-width:0; position:sticky; top:12px; }
+    .latest-captures-wrap { max-height:calc(100vh - 205px); overflow:auto; }
+    #capRecentTable { min-width:900px; }
+    #capRecentTable th, #capRecentTable td { padding:7px 8px; font-size:12px; line-height:1.2; }
+    #capRecentTable th { font-size:11px; white-space:nowrap; }
+    #capRecentTable td { white-space:nowrap; }
+    #capRecentTable td:nth-child(1), #capRecentTable td:nth-child(2), #capRecentTable td:nth-child(11) { white-space:normal; }
+    #capRecentTable td:nth-child(12) { width:72px; }
+    #capRecentTable td:nth-child(12) .btn { display:block; width:100%; margin:0 0 5px; padding:5px 7px; font-size:11px; }
+    #capRecentTable td:nth-child(12) .btn:last-child { margin-bottom:0; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .req-header-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
     .req-item-grid { display:grid; grid-template-columns:110px 150px 1fr 1.6fr; gap:10px; align-items:end; }
@@ -6293,6 +6303,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       th { position:static; }
       .print-only { display:block; }
     }
+    @media (max-width: 1180px) { .capture-layout { grid-template-columns:1fr; } .latest-captures-panel { position:static; } .latest-captures-wrap { max-height:520px; } }
     @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .capture-form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
     @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .capture-form-grid { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide { grid-column:1; } .capture-actions .btn { width:100%; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
@@ -6500,9 +6511,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn secondary" id="capRefreshBtn">Actualizar bitacora</button>
           </div>
         </div>
-        <div class="panel">
+        <div class="panel latest-captures-panel">
           <div class="subtle-title"><h3>Ultimas capturas</h3><span class="muted" id="capRecentCount"></span></div>
-          <div class="table-wrap" style="max-height:620px;"><table id="capRecentTable"></table></div>
+          <div class="table-wrap latest-captures-wrap"><table id="capRecentTable"></table></div>
         </div>
       </div>
     </section>
