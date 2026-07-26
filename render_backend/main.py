@@ -120,6 +120,19 @@ class CaptureDeletion(Base):
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class DesktopCaptureChange(Base):
+    __tablename__ = "mga_desktop_capture_change"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sync_id: Mapped[str] = mapped_column(String(80), index=True)
+    logical_key: Mapped[str] = mapped_column(String(500), index=True)
+    source_device: Mapped[str] = mapped_column(String(180), default="")
+    source_updated_at: Mapped[str] = mapped_column(String(40), default="")
+    deleted: Mapped[int] = mapped_column(Integer, default=0)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class CatalogSnapshot(Base):
     __tablename__ = "mga_catalog_snapshot"
 
@@ -11341,6 +11354,93 @@ def desktop_deletions(
             for row in rows
         ]
     return {"ok": True, "deletions": deletions, "count": len(deletions)}
+
+
+@app.post("/api/desktop-sync")
+async def desktop_capture_sync(
+    request: Request,
+    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
+) -> dict[str, Any]:
+    require_api_key(_auth)
+    package = await request.json()
+    if not isinstance(package, dict):
+        raise HTTPException(status_code=400, detail="Paquete de sincronizacion invalido.")
+    device_id = str(package.get("device_id") or "").strip()[:180]
+    cursor = max(0, int(package.get("cursor") or 0))
+    incoming = package.get("records") or []
+    if not device_id:
+        raise HTTPException(status_code=400, detail="Falta device_id.")
+    if not isinstance(incoming, list):
+        raise HTTPException(status_code=400, detail="records debe ser una lista.")
+
+    mappings: list[dict[str, str]] = []
+    created = 0
+    with SessionLocal() as session:
+        for raw in incoming[:500]:
+            if not isinstance(raw, dict):
+                continue
+            sent_id = str(raw.get("sync_id") or "").strip()[:80]
+            logical_key = str(raw.get("logical_key") or "").strip()[:500]
+            if not sent_id or not logical_key:
+                continue
+            latest = session.scalar(
+                select(DesktopCaptureChange)
+                .where(
+                    (DesktopCaptureChange.sync_id == sent_id)
+                    | (DesktopCaptureChange.logical_key == logical_key)
+                )
+                .order_by(DesktopCaptureChange.id.desc())
+                .limit(1)
+            )
+            canonical_id = latest.sync_id if latest is not None else sent_id
+            deleted = 1 if raw.get("deleted") else 0
+            payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+            payload_json = json_dumps(payload)
+            unchanged = latest is not None and latest.deleted == deleted and latest.payload_json == payload_json
+            if not unchanged:
+                session.add(
+                    DesktopCaptureChange(
+                        sync_id=canonical_id,
+                        logical_key=logical_key,
+                        source_device=device_id,
+                        source_updated_at=str(raw.get("updated_at") or "")[:40],
+                        deleted=deleted,
+                        payload_json=payload_json,
+                    )
+                )
+                session.flush()
+                created += 1
+            mappings.append({"sent_id": sent_id, "sync_id": canonical_id})
+        session.commit()
+
+        changes = session.scalars(
+            select(DesktopCaptureChange)
+            .where(DesktopCaptureChange.id > cursor)
+            .order_by(DesktopCaptureChange.id.asc())
+            .limit(1000)
+        ).all()
+        records = [
+            {
+                "revision": row.id,
+                "sync_id": row.sync_id,
+                "logical_key": row.logical_key,
+                "source_device": row.source_device,
+                "updated_at": row.received_at.isoformat(timespec="seconds"),
+                "deleted": bool(row.deleted),
+                "payload": json_loads(row.payload_json),
+            }
+            for row in changes
+        ]
+        next_cursor = records[-1]["revision"] if records else cursor
+    return {
+        "ok": True,
+        "accepted": len(mappings),
+        "created": created,
+        "mappings": mappings,
+        "records": records,
+        "cursor": next_cursor,
+        "has_more": len(records) >= 1000,
+    }
 
 
 @app.get("/api/desktop/pending")
