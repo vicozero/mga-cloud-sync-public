@@ -540,6 +540,11 @@ def normalize_text(value: Any) -> str:
     return " ".join(str(value or "").strip().upper().split())
 
 
+TIRE_REMAINING_WARNING_PERCENT = 35.0
+TIRE_REMAINING_CRITICAL_PERCENT = 20.0
+TIRE_REMAINING_WARNING_HOURS = 250.0
+
+
 def normalize_capture_shift_py(value: Any) -> str:
     text = normalize_text(value)
     compact = text.replace(" ", "")
@@ -1507,6 +1512,120 @@ def merge_mobile_captures_into_portal(session: Session, portal: dict[str, Any]) 
     return portal
 
 
+def tire_event_list(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    tracking = portal.get("tire_tracking") if isinstance(portal.get("tire_tracking"), dict) else {}
+    events = tracking.get("events") if isinstance(tracking.get("events"), list) else []
+    return [event for event in events if isinstance(event, dict)]
+
+
+def tire_rows_list(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    tire = portal.get("tire_kpi") if isinstance(portal.get("tire_kpi"), dict) else {}
+    rows = tire.get("rows") if isinstance(tire.get("rows"), list) else []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def tire_tread_remaining_percent_py(tread_initial: float, tread_current: float) -> float:
+    if tread_initial <= 0 or tread_current <= 0:
+        return 0.0
+    return max(min((tread_current / tread_initial) * 100, 100), 0)
+
+
+def tire_control_status_py(row: dict[str, Any]) -> tuple[str, str]:
+    status = normalize_text(row.get("status"))
+    if status == "BAJA":
+        return "BAJA", "Fuera de servicio"
+    if status == "REPARACION":
+        return "REVISION", "Validar reparacion"
+    if status == "ALMACEN":
+        return "ALMACEN", "Disponible en almacen"
+    life_percent = parse_float(row.get("life_percent") or row.get("tread_remaining_percent"), 0)
+    remaining_hours = parse_float(row.get("life_remaining_hours"), 0)
+    tread_initial = parse_float(row.get("tread_initial"), 0)
+    tread_current = parse_float(row.get("tread_current"), 0)
+    tread_percent = tire_tread_remaining_percent_py(tread_initial, tread_current)
+    basis_percent = tread_percent if tread_percent > 0 else life_percent
+    if basis_percent and basis_percent <= TIRE_REMAINING_CRITICAL_PERCENT:
+        return "CRITICA", "Cambiar / dar de baja"
+    if tread_initial > 0 and tread_current <= 0:
+        return "REVISION", "Capturar piso actual"
+    if (basis_percent and basis_percent <= TIRE_REMAINING_WARNING_PERCENT) or (remaining_hours and remaining_hours <= TIRE_REMAINING_WARNING_HOURS):
+        return "PROXIMA", "Programar cambio"
+    return "OK", "Seguimiento normal"
+
+
+def normalize_tire_row(row: dict[str, Any]) -> dict[str, Any]:
+    clean = dict(row)
+    clean["tire_code"] = normalize_text(clean.get("tire_code") or clean.get("code"))
+    clean["equipment_code"] = normalize_text(clean.get("equipment_code") or clean.get("equipment"))
+    clean["position"] = normalize_text(clean.get("position"))[:80]
+    clean["brand"] = normalize_text(clean.get("brand"))[:120]
+    clean["model"] = normalize_text(clean.get("model"))[:120]
+    clean["size"] = normalize_text(clean.get("size"))[:80]
+    clean["status"] = normalize_text(clean.get("status") or "MONTADA")[:80]
+    clean["install_date"] = str(clean.get("install_date") or "")[:20]
+    clean["install_meter"] = max(parse_float(clean.get("install_meter"), 0), 0)
+    clean["current_meter"] = max(parse_float(clean.get("current_meter"), 0), 0)
+    clean["target_life_hours"] = max(parse_float(clean.get("target_life_hours"), 0), 0)
+    clean["tread_initial"] = max(parse_float(clean.get("tread_initial"), 0), 0)
+    clean["tread_current"] = max(parse_float(clean.get("tread_current"), 0), 0)
+    clean["pressure_current"] = max(parse_float(clean.get("pressure_current"), 0), 0)
+    clean["hours_used"] = max(clean["current_meter"] - clean["install_meter"], 0) if clean["current_meter"] or clean["install_meter"] else max(parse_float(clean.get("hours_used"), 0), 0)
+    clean["life_remaining_hours"] = max(clean["target_life_hours"] - clean["hours_used"], 0) if clean["target_life_hours"] else max(parse_float(clean.get("life_remaining_hours"), 0), 0)
+    tread_percent = tire_tread_remaining_percent_py(clean["tread_initial"], clean["tread_current"])
+    if tread_percent > 0:
+        clean["life_percent"] = tread_percent
+        clean["tread_remaining_percent"] = tread_percent
+        clean["life_text"] = f"{tread_percent:.0f}%"
+    else:
+        clean["life_percent"] = max(min(parse_float(clean.get("life_percent") or clean.get("tread_remaining_percent"), 0), 100), 0)
+        clean["tread_remaining_percent"] = clean["life_percent"]
+        clean["life_text"] = f"{clean['life_percent']:.0f}%" if clean["life_percent"] else "S/D"
+    control_status, recommendation = tire_control_status_py(clean)
+    clean["control_status"] = control_status
+    clean["recommendation"] = normalize_text(clean.get("recommendation")) or recommendation
+    clean["notes"] = str(clean.get("notes") or "").strip()
+    return clean
+
+
+def tire_summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    normalized = [normalize_tire_row(row) for row in rows if row.get("tire_code")]
+    total = len(normalized)
+    counts: dict[str, int] = {}
+    for row in normalized:
+        status = normalize_text(row.get("control_status") or "S/D")
+        counts[status] = counts.get(status, 0) + 1
+    avg_life = sum(parse_float(row.get("life_percent"), 0) for row in normalized) / total if total else 0
+    avg_remaining = sum(parse_float(row.get("life_remaining_hours"), 0) for row in normalized) / total if total else 0
+    return {
+        "total": total,
+        "critical": counts.get("CRITICA", 0),
+        "soon": counts.get("PROXIMA", 0),
+        "review": counts.get("REVISION", 0),
+        "ok": counts.get("OK", 0),
+        "warehouse": counts.get("ALMACEN", 0),
+        "retired": counts.get("BAJA", 0),
+        "avg_life": avg_life,
+        "avg_remaining": avg_remaining,
+    }
+
+
+def enrich_tire_tracking(portal: dict[str, Any]) -> dict[str, Any]:
+    rows = [normalize_tire_row(row) for row in tire_rows_list(portal) if row.get("tire_code")]
+    rows.sort(
+        key=lambda row: (
+            row.get("equipment_code") or "ZZZ",
+            {"CRITICA": 0, "PROXIMA": 1, "REVISION": 2, "OK": 3, "ALMACEN": 4, "BAJA": 5}.get(normalize_text(row.get("control_status")), 9),
+            row.get("position") or "",
+            row.get("tire_code") or "",
+        )
+    )
+    portal["tire_kpi"] = {"rows": rows, "summary": tire_summary_from_rows(rows)}
+    tracking = portal.get("tire_tracking") if isinstance(portal.get("tire_tracking"), dict) else {}
+    events = sorted(tire_event_list(portal), key=lambda event: (str(event.get("event_date") or ""), int(parse_float(event.get("id"), 0))), reverse=True)
+    portal["tire_tracking"] = {"events": events[:500]}
+    return portal
+
+
 def portal_fallback_payload(session: Session) -> dict[str, Any]:
     catalog = latest_catalog_payload(session)
     equipment = catalog.get("equipment") if isinstance(catalog, dict) else []
@@ -1540,6 +1659,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         "kpi_reports": {},
         "oil_kpi": {"rows": [], "totals": {}, "columns": []},
         "tire_kpi": {"rows": [], "summary": {}},
+        "tire_tracking": {"events": []},
         "diesel": {"records": [], "days": [], "rows": [], "totals": {}},
     }
 
@@ -1563,9 +1683,10 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("kpi_reports", {})
     payload.setdefault("oil_kpi", {"rows": [], "totals": {}, "columns": []})
     payload.setdefault("tire_kpi", {"rows": [], "summary": {}})
+    payload.setdefault("tire_tracking", {"events": []})
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
-    return merge_mobile_captures_into_portal(session, payload)
+    return enrich_tire_tracking(merge_mobile_captures_into_portal(session, payload))
 
 
 def diesel_iso_or_none(value: Any) -> str | None:
@@ -6109,6 +6230,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
     #capRecentTable td:nth-child(12) { width:72px; }
     #capRecentTable td:nth-child(12) .btn { display:block; width:100%; margin:0 0 5px; padding:5px 7px; font-size:11px; }
     #capRecentTable td:nth-child(12) .btn:last-child { margin-bottom:0; }
+    .tire-track-layout { grid-template-columns:minmax(430px,.75fr) minmax(620px,1.25fr); }
+    .tire-track-form { display:grid; grid-template-columns:repeat(3,minmax(110px,1fr)); gap:10px; }
+    .tire-track-form .wide { grid-column:1 / -1; }
+    .tire-kpi-short { display:grid; grid-template-columns:repeat(4,minmax(110px,1fr)); gap:8px; margin-bottom:10px; }
+    .tire-kpi-short span { display:grid; gap:3px; padding:9px 10px; border:1px solid var(--line); border-radius:7px; background:#f8fafc; color:#475569; font-size:11px; font-weight:800; text-transform:uppercase; }
+    .tire-kpi-short b { color:var(--blue); font-size:22px; line-height:1; }
     .movement-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
     .req-header-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
     .req-item-grid { display:grid; grid-template-columns:110px 150px 1fr 1.6fr; gap:10px; align-items:end; }
@@ -6304,8 +6431,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       .print-only { display:block; }
     }
     @media (max-width: 1180px) { .capture-layout { grid-template-columns:1fr; } .latest-captures-panel { position:static; } .latest-captures-wrap { max-height:520px; } }
-    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .capture-form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
-    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .capture-form-grid { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide { grid-column:1; } .capture-actions .btn { width:100%; } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
+    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions .btn { width:100%; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
   </style>
 </head>
@@ -6339,6 +6466,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="seguimientoReq">Seguimiento req.</button>
       <button data-tab="mangueras">Mangueras</button>
       <button data-tab="diesel">Diesel</button>
+      <button data-tab="llantasTrack">Seguimiento llantas</button>
       <button data-tab="refacciones">Refacciones equipo</button>
       <button data-tab="equipos">Filtros por equipo</button>
       <button data-tab="inventario">Concentrado / movimientos</button>
@@ -6722,6 +6850,47 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <h3>Capturas diesel</h3>
           <div class="table-wrap" style="max-height:360px;"><table id="dieselRecordsTable"></table></div>
         </div>
+      </div>
+    </section>
+    <section id="llantasTrack" class="view">
+      <div class="grid2 tire-track-layout">
+        <div class="panel">
+          <div class="subtle-title"><h3>Seguimiento de llantas</h3><span class="muted" id="tireTrackStatus"></span></div>
+          <div class="tire-track-form">
+            <label>Fecha<input id="tireTrackDate" type="date"></label>
+            <label>Tipo<select id="tireTrackType"><option>INSPECCION</option><option>MOVIMIENTO</option><option>MODIFICACION</option><option>MONTAJE</option><option>ROTACION</option><option>REPARACION</option><option>DESMONTAJE</option><option>BAJA</option></select></label>
+            <label>Serie llanta<input id="tireTrackCode" list="tireTrackCodes" placeholder="Serie / codigo"><datalist id="tireTrackCodes"></datalist></label>
+            <label>Equipo<select id="tireTrackEquipment"></select></label>
+            <label>Posicion<input id="tireTrackPosition" placeholder="Ej. DEL IZQ"></label>
+            <label>Estatus<select id="tireTrackMountStatus"><option>MONTADA</option><option>ALMACEN</option><option>REPARACION</option><option>BAJA</option></select></label>
+            <label>Marca<input id="tireTrackBrand"></label>
+            <label>Modelo<input id="tireTrackModel"></label>
+            <label>Medida<input id="tireTrackSize"></label>
+            <label>Hor. montaje<input id="tireTrackInstallMeter" type="number" step="0.1" min="0" value="0"></label>
+            <label>Hor. actual<input id="tireTrackCurrentMeter" type="number" step="0.1" min="0" value="0"></label>
+            <label>Vida objetivo h<input id="tireTrackTargetHours" type="number" step="0.1" min="0" value="0"></label>
+            <label>Piso inicial mm<input id="tireTrackTreadInitial" type="number" step="0.1" min="0" value="0"></label>
+            <label>Piso actual mm<input id="tireTrackTreadCurrent" type="number" step="0.1" min="0" value="0"></label>
+            <label>Presion PSI<input id="tireTrackPressure" type="number" step="0.1" min="0" value="0"></label>
+            <label>Tecnico<input id="tireTrackTechnician"></label>
+            <label class="wide">Notas<textarea id="tireTrackNotes" rows="3" placeholder="Inspeccion, movimiento o modificacion realizada"></textarea></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn secondary" id="tireTrackNewBtn">Nueva</button>
+            <button class="btn" id="tireTrackSaveBtn">Guardar seguimiento</button>
+            <button class="btn secondary" id="tireTrackKpiBtn">Ver KPI Llantas</button>
+            <button class="btn secondary" id="tireTrackRefreshBtn">Actualizar</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Resumen KPI llantas</h3><span class="muted" id="tireTrackCount"></span></div>
+          <div class="tire-kpi-short" id="tireTrackSummary"></div>
+          <div class="table-wrap" style="max-height:420px;"><table id="tireTrackTable"></table></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Historial de inspecciones y movimientos</h3><span class="muted" id="tireEventCount"></span></div>
+        <div class="table-wrap" style="max-height:360px;"><table id="tireEventTable"></table></div>
       </div>
     </section>
     <section id="equipos" class="view">
@@ -8029,6 +8198,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderCaptureComponents();
       renderDieselSelectors();
       renderReqEquipmentOptions();
+      if(!$("tireTrackDate").value) $("tireTrackDate").value = today;
+      setOptions("tireTrackEquipment", tireTrackEquipmentOptions(), "Sin equipo");
     }
     function calculateKpiRows(groupOverride=null, startOverride=null, endOverride=null){
       const group = groupOverride || $("kpiGroup").value || "Todos los equipos";
@@ -8440,6 +8611,135 @@ WAREHOUSE_HTML = r"""<!doctype html>
           const cls = status === "OK" ? "ok" : (status === "PROXIMA" || status === "REVISION" ? "warn" : "bad");
           return `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.tire_code)}</td><td>${esc(row.position)}</td><td>${esc(row.brand)}</td><td>${one(row.hours_used)}</td><td>${one(row.life_remaining_hours)}</td><td>${pct(value)}</td><td>${pct(value)}</td><td><span class="pill ${cls}">${esc(status || "S/D")}</span></td><td>${esc(row.recommendation || "")}</td></tr>`;
         }).join("") + `</tbody>`;
+    }
+    function tireRows(){
+      const tire = portal.tire_kpi || {};
+      return Array.isArray(tire.rows) ? tire.rows : [];
+    }
+    function tireEvents(){
+      const tracking = portal.tire_tracking || {};
+      return Array.isArray(tracking.events) ? tracking.events : [];
+    }
+    function tireStatusClass(status){
+      const text = normalizedText(status);
+      if(text === "OK" || text === "ALMACEN") return "ok";
+      if(text === "PROXIMA" || text === "REVISION") return "warn";
+      return "bad";
+    }
+    function tireCodeLabel(row){
+      const code = row.tire_code || "";
+      const details = [row.equipment_code, row.position].filter(Boolean).join(" ");
+      return details ? `${code} - ${details}` : code;
+    }
+    function tireTrackEquipmentOptions(){
+      const options = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
+      const seen = new Set(options.map(item => item.value));
+      tireRows().forEach(row => {
+        const code = row.equipment_code || "";
+        if(code && !seen.has(code)){
+          seen.add(code);
+          options.push({value:code, label:code});
+        }
+      });
+      return options;
+    }
+    function resetTireTrackForm(){
+      $("tireTrackDate").value = toIsoDate(new Date());
+      $("tireTrackType").value = "INSPECCION";
+      $("tireTrackCode").value = "";
+      $("tireTrackEquipment").value = "";
+      $("tireTrackPosition").value = "";
+      $("tireTrackMountStatus").value = "MONTADA";
+      ["tireTrackBrand","tireTrackModel","tireTrackSize","tireTrackTechnician","tireTrackNotes"].forEach(id => $(id).value = "");
+      ["tireTrackInstallMeter","tireTrackCurrentMeter","tireTrackTargetHours","tireTrackTreadInitial","tireTrackTreadCurrent","tireTrackPressure"].forEach(id => $(id).value = "0");
+      $("tireTrackStatus").textContent = "";
+    }
+    function fillTireTrackForm(row){
+      if(!row) return;
+      $("tireTrackCode").value = row.tire_code || "";
+      $("tireTrackEquipment").value = row.equipment_code || "";
+      $("tireTrackPosition").value = row.position || "";
+      $("tireTrackMountStatus").value = row.status || "MONTADA";
+      $("tireTrackBrand").value = row.brand || "";
+      $("tireTrackModel").value = row.model || "";
+      $("tireTrackSize").value = row.size || "";
+      $("tireTrackInstallMeter").value = row.install_meter || 0;
+      $("tireTrackCurrentMeter").value = row.current_meter || 0;
+      $("tireTrackTargetHours").value = row.target_life_hours || 0;
+      $("tireTrackTreadInitial").value = row.tread_initial || 0;
+      $("tireTrackTreadCurrent").value = row.tread_current || 0;
+      $("tireTrackPressure").value = row.pressure_current || 0;
+      $("tireTrackNotes").value = row.notes || "";
+      $("tireTrackStatus").textContent = `${row.control_status || "S/D"} | ${row.recommendation || ""}`;
+    }
+    function renderTireTracking(){
+      const rows = tireRows();
+      const events = tireEvents();
+      const summary = (portal.tire_kpi || {}).summary || {};
+      $("tireTrackCount").textContent = `${rows.length} llantas`;
+      $("tireEventCount").textContent = `${events.length} evento(s)`;
+      $("tireTrackSummary").innerHTML = [
+        ["Total", summary.total || rows.length || 0],
+        ["Criticas", summary.critical || 0],
+        ["Proximas", summary.soon || 0],
+        ["Vida prom.", pct(summary.avg_life || 0)],
+      ].map(([label, value]) => `<span>${esc(label)}<b>${esc(value)}</b></span>`).join("");
+      $("tireTrackCodes").innerHTML = rows.map(row => `<option value="${esc(row.tire_code || "")}">${esc(tireCodeLabel(row))}</option>`).join("");
+      setOptions("tireTrackEquipment", tireTrackEquipmentOptions(), "Sin equipo");
+      $("tireTrackTable").innerHTML = `<thead><tr><th>Equipo</th><th>Llanta</th><th>Pos.</th><th>Marca</th><th>Hor.</th><th>Piso</th><th>Vida</th><th>KPI</th><th>Accion</th></tr></thead><tbody>` +
+        rows.map(row => {
+          const status = row.control_status || "S/D";
+          return `<tr><td>${esc(row.equipment_code || "")}</td><td>${esc(row.tire_code || "")}</td><td>${esc(row.position || "")}</td><td>${esc(row.brand || "")}</td><td>${one(row.current_meter)}</td><td>${one(row.tread_current)}</td><td>${pct(row.life_percent || 0)}</td><td><span class="pill ${tireStatusClass(status)}">${esc(status)}</span></td><td><button type="button" class="btn secondary small" data-tire-load="${esc(row.tire_code || "")}">Cargar</button></td></tr>`;
+        }).join("") + `</tbody>`;
+      $("tireEventTable").innerHTML = `<thead><tr><th>Fecha</th><th>Tipo</th><th>Llanta</th><th>Equipo</th><th>Pos.</th><th>Hor.</th><th>Piso</th><th>PSI</th><th>KPI</th><th>Notas</th><th>Accion</th></tr></thead><tbody>` +
+        events.map(event => `<tr><td>${esc(event.event_date || "")}</td><td>${esc(event.event_type || "")}</td><td>${esc(event.tire_code || "")}</td><td>${esc(event.equipment_code || "")}</td><td>${esc(event.position || "")}</td><td>${one(event.meter)}</td><td>${one(event.tread_mm)}</td><td>${one(event.pressure_psi)}</td><td><span class="pill ${tireStatusClass(event.control_status)}">${esc(event.control_status || "")}</span></td><td>${esc(shortText(event.notes || "", 90))}</td><td><button type="button" class="btn danger small" data-tire-event-delete="${esc(event.id || "")}">Eliminar</button></td></tr>`).join("") + `</tbody>`;
+      document.querySelectorAll("[data-tire-load]").forEach(button => button.addEventListener("click", () => {
+        const row = tireRows().find(item => String(item.tire_code || "") === String(button.dataset.tireLoad || ""));
+        fillTireTrackForm(row);
+      }));
+      document.querySelectorAll("[data-tire-event-delete]").forEach(button => button.addEventListener("click", () => deleteTireTrackEvent(button.dataset.tireEventDelete).catch(showError)));
+    }
+    async function saveTireTrackEvent(){
+      if(!hasApiKey()) return;
+      const payload = {
+        event_date:$("tireTrackDate").value,
+        event_type:$("tireTrackType").value,
+        tire_code:$("tireTrackCode").value,
+        equipment_code:$("tireTrackEquipment").value,
+        position:$("tireTrackPosition").value,
+        status:$("tireTrackMountStatus").value,
+        brand:$("tireTrackBrand").value,
+        model:$("tireTrackModel").value,
+        size:$("tireTrackSize").value,
+        install_meter:$("tireTrackInstallMeter").value,
+        current_meter:$("tireTrackCurrentMeter").value,
+        target_life_hours:$("tireTrackTargetHours").value,
+        tread_initial:$("tireTrackTreadInitial").value,
+        tread_current:$("tireTrackTreadCurrent").value,
+        pressure_current:$("tireTrackPressure").value,
+        technician:$("tireTrackTechnician").value,
+        event_notes:$("tireTrackNotes").value,
+        notes:$("tireTrackNotes").value,
+      };
+      const response = await fetch("/api/tire-tracking/events", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      portal = result.portal || portal;
+      $("tireTrackStatus").textContent = "Seguimiento guardado y KPI actualizado.";
+      renderPortalSelectors();
+      renderTireTracking();
+      renderDashboard();
+    }
+    async function deleteTireTrackEvent(id){
+      if(!hasApiKey()) return;
+      if(!confirm("Eliminar este evento de llanta?")) return;
+      const response = await fetch("/api/tire-tracking/events/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      portal = result.portal || portal;
+      $("tireTrackStatus").textContent = "Evento eliminado.";
+      renderTireTracking();
+      renderDashboard();
     }
     function dieselCaptureHoursFromBitacora(capture){
       const hi = Number(capture?.hi || capture?.horometer_initial || 0);
@@ -10230,6 +10530,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderTracking();
       renderHoses();
       renderDiesel();
+      renderTireTracking();
       renderSpareParts();
       renderFilters();
       renderInventory();
@@ -10307,6 +10608,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("hoseNewBtn").addEventListener("click", clearHoseRecord);
     $("hoseSaveBtn").addEventListener("click", () => saveHoseRecord().catch(showError));
     $("hoseDeleteBtn").addEventListener("click", () => deleteHoseRecord().catch(showError));
+    $("tireTrackNewBtn").addEventListener("click", resetTireTrackForm);
+    $("tireTrackSaveBtn").addEventListener("click", () => saveTireTrackEvent().catch(showError));
+    $("tireTrackRefreshBtn").addEventListener("click", () => load().catch(showError));
+    $("tireTrackKpiBtn").addEventListener("click", () => {
+      $("kpiGroup").value = "KPI Llantas";
+      document.querySelector('[data-tab="dashboard"]').click();
+      renderDashboard();
+    });
+    $("tireTrackCode").addEventListener("change", () => {
+      const row = tireRows().find(item => String(item.tire_code || "") === String($("tireTrackCode").value || "").trim().toUpperCase());
+      if(row) fillTireTrackForm(row);
+    });
     $("dieselApplyPeriodBtn").addEventListener("click", applyDieselPeriod);
     $("dieselRefreshBtn").addEventListener("click", () => refreshDiesel().catch(showError));
     $("dieselFilterEquipment").addEventListener("change", renderDiesel);
@@ -11134,6 +11447,9 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             payload["audit_log"] = previous_payload["audit_log"]
         if "backlog" not in payload and isinstance(previous_payload.get("backlog"), dict):
             payload["backlog"] = previous_payload["backlog"]
+        if "tire_tracking" not in payload and isinstance(previous_payload.get("tire_tracking"), dict):
+            payload["tire_tracking"] = previous_payload["tire_tracking"]
+        payload = enrich_tire_tracking(payload)
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
@@ -11150,6 +11466,132 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
     }
+
+
+def next_tire_event_id(events: list[dict[str, Any]]) -> int:
+    current = 0
+    for event in events:
+        current = max(current, int(parse_float(event.get("id"), 0) or 0))
+    return current + 1
+
+
+def portal_snapshot_for_tire_update(session: Session) -> tuple[PortalSnapshot, dict[str, Any]]:
+    snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+    if snapshot is None:
+        snapshot = PortalSnapshot(name="default")
+        session.add(snapshot)
+        payload = portal_fallback_payload(session)
+    else:
+        raw = json_loads(snapshot.payload_json)
+        payload = raw if isinstance(raw, dict) else portal_fallback_payload(session)
+    payload.setdefault("ok", True)
+    payload.setdefault("source", "cloud-portal")
+    payload.setdefault("tire_kpi", {"rows": [], "summary": {}})
+    payload.setdefault("tire_tracking", {"events": []})
+    return snapshot, payload
+
+
+@app.get("/api/tire-tracking")
+def get_tire_tracking(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+        return {"ok": True, "tire_kpi": portal.get("tire_kpi", {}), "tire_tracking": portal.get("tire_tracking", {})}
+
+
+@app.post("/api/tire-tracking/events")
+async def save_tire_tracking_event(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Evento de llanta invalido.")
+    tire_code = normalize_text(payload.get("tire_code"))
+    if not tire_code:
+        raise HTTPException(status_code=400, detail="La serie de llanta es obligatoria.")
+    event_type = normalize_text(payload.get("event_type") or "INSPECCION")
+    if event_type not in {"MODIFICACION", "INSPECCION", "MOVIMIENTO", "MONTAJE", "ROTACION", "REPARACION", "DESMONTAJE", "BAJA"}:
+        raise HTTPException(status_code=400, detail="Tipo de evento invalido.")
+    event_date = iso_date(payload.get("event_date"))
+    with SessionLocal() as session:
+        snapshot, portal = portal_snapshot_for_tire_update(session)
+        rows = tire_rows_list(portal)
+        index = next((idx for idx, row in enumerate(rows) if normalize_text(row.get("tire_code")) == tire_code), None)
+        row = dict(rows[index]) if index is not None else {"tire_code": tire_code}
+        for key in (
+            "equipment_code",
+            "position",
+            "brand",
+            "model",
+            "size",
+            "install_date",
+            "install_meter",
+            "current_meter",
+            "target_life_hours",
+            "tread_initial",
+            "tread_current",
+            "pressure_current",
+            "status",
+            "notes",
+        ):
+            if key in payload:
+                row[key] = payload.get(key)
+        if event_type == "BAJA":
+            row["status"] = "BAJA"
+        if event_type == "REPARACION":
+            row["status"] = "REPARACION"
+        row = normalize_tire_row(row)
+        if index is None:
+            rows.append(row)
+        else:
+            rows[index] = row
+        events = tire_event_list(portal)
+        event = {
+            "id": next_tire_event_id(events),
+            "event_date": event_date,
+            "event_type": event_type,
+            "tire_code": tire_code,
+            "equipment_code": row.get("equipment_code", ""),
+            "position": row.get("position", ""),
+            "meter": row.get("current_meter", 0),
+            "tread_mm": row.get("tread_current", 0),
+            "pressure_psi": row.get("pressure_current", 0),
+            "status": row.get("status", ""),
+            "control_status": row.get("control_status", ""),
+            "technician": normalize_text(payload.get("technician"))[:180],
+            "notes": str(payload.get("event_notes") or payload.get("notes") or "").strip(),
+            "created_at": utc_now().isoformat(timespec="seconds"),
+            "source": "web",
+        }
+        events.append(event)
+        portal["tire_kpi"] = {"rows": rows, "summary": {}}
+        portal["tire_tracking"] = {"events": events}
+        portal["updated_at"] = utc_now().isoformat(timespec="seconds")
+        portal = enrich_tire_tracking(portal)
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(portal)
+        session.commit()
+        return {"ok": True, "row": row, "event": event, "portal": latest_portal_payload(session)}
+
+
+@app.post("/api/tire-tracking/events/delete")
+async def delete_tire_tracking_event(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Solicitud invalida.")
+    event_id = int(parse_float(payload.get("id"), 0) or 0)
+    if not event_id:
+        raise HTTPException(status_code=400, detail="Selecciona un evento.")
+    with SessionLocal() as session:
+        snapshot, portal = portal_snapshot_for_tire_update(session)
+        events = [event for event in tire_event_list(portal) if int(parse_float(event.get("id"), 0) or 0) != event_id]
+        portal["tire_tracking"] = {"events": events}
+        portal["updated_at"] = utc_now().isoformat(timespec="seconds")
+        portal = enrich_tire_tracking(portal)
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(portal)
+        session.commit()
+        return {"ok": True, "portal": latest_portal_payload(session)}
 
 
 @app.post("/api/sync")
