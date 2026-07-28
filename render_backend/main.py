@@ -1766,6 +1766,68 @@ def merge_preventive_execution_into_portal(portal: dict[str, Any]) -> dict[str, 
     return portal
 
 
+WORK_ORDER_CLOSED_STATUSES = {"CERRADA", "CERRADO", "CANCELADA", "CANCELADO"}
+
+
+def work_order_records(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = portal.get("work_orders") if isinstance(portal.get("work_orders"), dict) else {}
+    records = payload.get("records") if isinstance(payload, dict) else []
+    return records if isinstance(records, list) else []
+
+
+def next_work_order_folio(records: list[dict[str, Any]]) -> str:
+    current = 0
+    for row in records:
+        match = re.search(r"OT-(\d+)", str(row.get("folio") or row.get("id") or ""))
+        if match:
+            current = max(current, int(match.group(1)))
+    return f"OT-{current + 1:05d}"
+
+
+def normalize_work_order_record(row: dict[str, Any], existing: dict[str, Any] | None = None, folio: str | None = None) -> dict[str, Any]:
+    now = utc_now().isoformat(timespec="seconds")
+    status = normalize_text(row.get("status") or "ABIERTA")[:30] or "ABIERTA"
+    record_id = str(row.get("id") or (existing.get("id") if existing else "") or "").strip()
+    if not record_id:
+        record_id = folio or str(row.get("folio") or "") or f"OT-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    clean = {
+        "id": record_id[:80],
+        "folio": str(row.get("folio") or folio or (existing.get("folio") if existing else "") or record_id)[:80],
+        "date": str(row.get("date") or row.get("work_date") or utc_now().date().isoformat())[:10],
+        "close_date": str(row.get("close_date") or "")[:10],
+        "equipment_code": str(row.get("equipment_code") or row.get("equipment") or "").strip()[:120],
+        "equipment_description": str(row.get("equipment_description") or "")[:220],
+        "origin": normalize_text(row.get("origin") or "MANUAL")[:80],
+        "priority": normalize_text(row.get("priority") or "MEDIA")[:30],
+        "responsible": str(row.get("responsible") or "").strip()[:180],
+        "mechanic": str(row.get("mechanic") or "").strip()[:180],
+        "supervisor": str(row.get("supervisor") or "").strip()[:180],
+        "status": status,
+        "description": str(row.get("description") or row.get("detail") or "").strip(),
+        "action": str(row.get("action") or "").strip(),
+        "parts_used": str(row.get("parts_used") or "").strip(),
+        "lubricants_used": str(row.get("lubricants_used") or "").strip(),
+        "evidence_note": str(row.get("evidence_note") or "").strip(),
+        "source_ref": str(row.get("source_ref") or "").strip()[:180],
+        "created_at": str(existing.get("created_at") if existing else row.get("created_at") or now)[:40],
+        "updated_at": now,
+    }
+    if clean["status"] in WORK_ORDER_CLOSED_STATUSES and not clean["close_date"]:
+        clean["close_date"] = clean["date"]
+    if clean["status"] not in WORK_ORDER_CLOSED_STATUSES:
+        clean["close_date"] = ""
+    if clean["priority"] not in {"ALTA", "MEDIA", "BAJA", "URGENTE"}:
+        clean["priority"] = "MEDIA"
+    return clean
+
+
+def merge_work_orders_into_backlog(portal: dict[str, Any]) -> dict[str, Any]:
+    records = [normalize_work_order_record(row) for row in work_order_records(portal) if isinstance(row, dict)]
+    records.sort(key=lambda row: (str(row.get("date") or ""), str(row.get("folio") or "")), reverse=True)
+    portal["work_orders"] = {"records": records[:1500]}
+    return portal
+
+
 def portal_fallback_payload(session: Session) -> dict[str, Any]:
     catalog = latest_catalog_payload(session)
     equipment = catalog.get("equipment") if isinstance(catalog, dict) else []
@@ -1794,6 +1856,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         "preventives": [],
         "service_history": [],
         "preventive_execution": {"records": []},
+        "work_orders": {"records": []},
         "captures": captures,
         "availability": [],
         "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado", "Acarreo", "Equipo Utilitario", "KPI Aceites", "KPI Llantas"],
@@ -1822,6 +1885,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("preventives", [])
     payload.setdefault("service_history", [])
     payload.setdefault("preventive_execution", {"records": []})
+    payload.setdefault("work_orders", {"records": []})
     payload.setdefault("kpi_groups", [])
     payload.setdefault("kpi_reports", {})
     payload.setdefault("oil_kpi", {"rows": [], "totals": {}, "columns": []})
@@ -1829,7 +1893,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("tire_tracking", {"events": []})
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
-    return enrich_tire_tracking(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload)))
+    return enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload))))
 
 
 def diesel_iso_or_none(value: Any) -> str | None:
@@ -6717,6 +6781,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="mensual">Reporte mensual/semanal</button>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="backlog">Backlog</button>
+      <button data-tab="ordenesTrabajo">Ordenes trabajo</button>
       <button data-tab="servicios">Servicios realizados</button>
       <button data-tab="ejecucionPreventivos">Ejecucion preventivos</button>
       <button data-tab="bitacora">Bitacora</button>
@@ -6876,6 +6941,48 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="table-wrap"><table id="backlogTable"></table></div>
         <div class="table-wrap"><table id="backlogSystemTable"></table></div>
       </div>
+    </section>
+    <section id="ordenesTrabajo" class="view">
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Orden de trabajo</h3><span class="muted" id="woStatus"></span></div>
+          <div class="capture-form-grid">
+            <input id="woId" type="hidden">
+            <label>Folio<input id="woFolio" placeholder="Automatico" readonly></label>
+            <label>Fecha<input id="woDate" type="date"></label>
+            <label>Equipo<select id="woEquipment"></select></label>
+            <label>Origen<select id="woOrigin"><option>MANUAL</option><option>CAPTURA</option><option>PREVENTIVO</option><option>LLANTA</option><option>STOCK</option><option>FICHA EQUIPO</option></select></label>
+            <label>Prioridad<select id="woPriority"><option>MEDIA</option><option>ALTA</option><option>URGENTE</option><option>BAJA</option></select></label>
+            <label>Estatus<select id="woState"><option>ABIERTA</option><option>EN PROCESO</option><option>CERRADA</option><option>CANCELADA</option></select></label>
+            <label>Responsable<input id="woResponsible" placeholder="Responsable"></label>
+            <label>Mecanico<input id="woMechanic" placeholder="Mecanico"></label>
+            <label>Supervisor<input id="woSupervisor" placeholder="Supervisor"></label>
+            <label class="wide">Descripcion del trabajo<textarea id="woDescription" rows="3" placeholder="Falla, condicion o trabajo requerido"></textarea></label>
+            <label class="wide">Accion / cierre<textarea id="woAction" rows="2" placeholder="Trabajo realizado o accion pendiente"></textarea></label>
+            <label class="wide">Refacciones usadas<textarea id="woParts" rows="2" placeholder="Refacciones usadas"></textarea></label>
+            <label class="wide">Lubricantes<textarea id="woLubricants" rows="2" placeholder="Lubricantes usados"></textarea></label>
+            <label class="wide">Evidencia / firma<textarea id="woEvidence" rows="2" placeholder="Foto, firma, folio o evidencia"></textarea></label>
+          </div>
+          <div class="req-actions capture-actions">
+            <button class="btn secondary" id="woNewBtn">Nueva OT</button>
+            <button class="btn" id="woSaveBtn">Guardar OT</button>
+            <button class="btn secondary" id="woCloseBtn">Cerrar OT</button>
+            <button class="btn danger" id="woDeleteBtn">Eliminar OT</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Resumen OT</h3><span class="muted" id="woSummaryText"></span></div>
+          <div class="exec-alert-grid" id="woSummaryCards"></div>
+        </div>
+      </div>
+      <div class="panel toolbar">
+        <label>Equipo<select id="woFilterEquipment"></select></label>
+        <label>Estatus<select id="woFilterStatus"><option value="">Todos</option><option>ABIERTA</option><option>EN PROCESO</option><option>CERRADA</option><option>CANCELADA</option></select></label>
+        <label>Prioridad<select id="woFilterPriority"><option value="">Todas</option><option>URGENTE</option><option>ALTA</option><option>MEDIA</option><option>BAJA</option></select></label>
+        <label>Buscar<input id="woSearch" placeholder="Folio, equipo, descripcion"></label>
+        <button class="btn" id="woRefreshBtn">Actualizar</button>
+      </div>
+      <div class="table-wrap"><table id="woTable"></table></div>
     </section>
     <section id="servicios" class="view">
       <div class="panel toolbar">
@@ -7429,7 +7536,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], service_history: [], preventive_execution: {records: []}, parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], preventive_execution: {records: []}, work_orders: {records: []}, parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
     let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
@@ -7448,6 +7555,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentCaptureRecord = null;
     let currentCaptureRows = [];
     let currentPreventiveExecutionRecord = null;
+    let currentWorkOrderRecord = null;
     let selectedKpiMetric = "availability";
     let monthlyPeriodInitialized = false;
     let kpiSimulationInitialized = false;
@@ -7985,6 +8093,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
       const overdue = preventives.filter(row => ["VENCIDO","URGENTE"].includes(String(row.status || "").toUpperCase()));
       const servicesOpen = preventiveExecutionRows().filter(row => !isPreventiveClosed(row) && String(row.status || "").toUpperCase() !== "CANCELADO");
+      const openOrders = workOrderRows().filter(row => !workOrderClosed(row));
       const spareRows = (portal.parts_manuals && Array.isArray(portal.parts_manuals.rows)) ? portal.parts_manuals.rows : [];
       const spareShort = spareRows.filter(row => ["FALTANTE","SIN INVENTARIO"].includes(String(row.inventory_status || "").toUpperCase()));
       const tireRows = (portal.tire_kpi && Array.isArray(portal.tire_kpi.rows)) ? portal.tire_kpi.rows : [];
@@ -7997,14 +8106,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
         cards: [
           {label:"Preventivos vencidos", value:overdue.length, note:"PM vencido/urgente", tab:"preventivos", tone:overdue.length ? "bad" : "ok"},
           {label:"Servicios abiertos", value:servicesOpen.length, note:"Pendientes de cierre", tab:"ejecucionPreventivos", tone:servicesOpen.length ? "warn" : "ok"},
+          {label:"OT abiertas", value:openOrders.length, note:"Ordenes en seguimiento", tab:"ordenesTrabajo", tone:openOrders.length ? "warn" : "ok"},
           {label:"Refacciones faltantes", value:spareShort.length, note:"Faltante o sin inventario", tab:"refacciones", tone:spareShort.length ? "bad" : "ok"},
           {label:"Llantas criticas", value:tireCritical.length, note:"Critica/proxima", tab:"llantasTrack", tone:tireCritical.length ? "warn" : "ok"},
           {label:"No disponibles", value:noDisponible.length, note:"Capturas recientes", tab:"captura", tone:noDisponible.length ? "bad" : "ok"},
-          {label:"Aceites periodo", value:one(oilLiters), note:"Litros registrados", tab:"dashboard", tone:oilLiters ? "warn" : "ok", kpiGroup:"KPI Aceites"},
         ],
         alerts: [
           ...overdue.slice(0,3).map(row => ({tone:"bad", label:"PM", text:`${row.equipment_code || ""} ${row.service_interval || row.component || ""}: ${row.status || ""}`})),
           ...servicesOpen.slice(0,2).map(row => ({tone:"warn", label:"Servicio", text:`${row.equipment_code || ""} ${row.service_type || ""}: ${row.status || "ABIERTO"}`})),
+          ...openOrders.slice(0,3).map(row => ({tone:row.priority === "URGENTE" || row.priority === "ALTA" ? "bad" : "warn", label:"OT", text:`${row.folio || ""} ${row.equipment_code || ""}: ${row.description || ""}`})),
           ...spareShort.slice(0,2).map(row => ({tone:"bad", label:"Stock", text:`${row.equipment_code || ""} ${row.description || row.part_number || ""}: ${row.inventory_status || ""}`})),
           ...tireCritical.slice(0,2).map(row => ({tone:"warn", label:"Llanta", text:`${row.equipment_code || ""} ${row.tire_code || ""}: ${row.control_status || ""}`})),
         ],
@@ -8024,6 +8134,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
         }
         activateTab(card.dataset.execTab);
       }));
+    }
+    function workOrderRows(){
+      const payload = portal.work_orders || {};
+      return Array.isArray(payload.records) ? payload.records : [];
+    }
+    function workOrderClosed(row){
+      return ["CERRADA","CERRADO","CANCELADA","CANCELADO"].includes(String(row.status || "").toUpperCase());
+    }
+    function workOrderClass(row){
+      const status = String(row.status || "").toUpperCase();
+      if(status.includes("CERR")) return "ok";
+      if(status.includes("CANCEL")) return "bad";
+      return row.priority === "URGENTE" || row.priority === "ALTA" ? "bad" : "warn";
     }
     function selectedFichaCode(){
       return $("fichaEquipment")?.value || portalEquipment()[0]?.code || portalEquipment()[0]?.equipment_code || "";
@@ -8050,6 +8173,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const preventives = preventiveRowsWithWebClosures(portal.preventives || []).filter(row => normalizedText(row.equipment_code) === normalizedText(code)).sort((a,b) => Number(a.hours_remaining || 999999) - Number(b.hours_remaining || 999999));
       const spareRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code);
       const tireRows = rowsForEquipment((portal.tire_kpi || {}).rows || [], code);
+      const orders = rowsForEquipment(workOrderRows(), code).sort((a,b) => String(b.date || "").localeCompare(String(a.date || "")));
+      const openOrders = orders.filter(row => !workOrderClosed(row));
       const oilReport = oilRowsForRange(start, end);
       const oilRow = (oilReport.rows || []).find(row => normalizedText(row.code) === normalizedText(code)) || {};
       const mp = captures.reduce((sum,row) => sum + Number(row.mp_hours || 0), 0);
@@ -8069,10 +8194,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="profile-badges">
           <span class="profile-badge ${noDisp ? "bad" : ""}">${noDisp ? "Revision disponibilidad" : "Operacion OK"}</span>
           <span class="profile-badge ${overdue.length ? "bad" : ""}">${overdue.length} PM critico(s)</span>
+          <span class="profile-badge ${openOrders.length ? "warn" : ""}">${openOrders.length} OT abierta(s)</span>
           <span class="profile-badge ${spareShort.length ? "warn" : ""}">${spareShort.length} refaccion(es) alerta</span>
         </div>
         <div class="profile-actions">
           <button class="btn secondary" type="button" data-profile-tab="captura">Captura diaria</button>
+          <button class="btn" type="button" data-profile-ot="${esc(code)}">Generar OT</button>
           <button class="btn secondary" type="button" data-profile-tab="ejecucionPreventivos">Servicio preventivo</button>
           <button class="btn secondary" type="button" data-profile-tab="refacciones">Refacciones</button>
           <button class="btn secondary" type="button" data-profile-tab="llantasTrack">Llantas</button>
@@ -8083,9 +8210,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Hrs MC", one(mc)],
         ["Paradas", stops],
         ["Aceites L", one(oilRow.total_liters || 0)],
-        ["Servicios", services.length],
+        ["OT abiertas", openOrders.length],
       ].map(([label,value]) => `<div class="profile-metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("");
       const alerts = [
+        ...openOrders.slice(0,4).map(row => ({tone:row.priority === "URGENTE" || row.priority === "ALTA" ? "bad" : "warn", label:"OT", text:`${row.folio || ""} ${row.priority || ""}: ${row.description || ""}`})),
         ...overdue.slice(0,4).map(row => ({tone:"bad", label:"PM", text:`${row.service_interval || ""} ${row.component || ""}: ${row.status || ""}, faltan ${one(row.hours_remaining || 0)} h`})),
         ...spareShort.slice(0,4).map(row => ({tone:"warn", label:"Stock", text:`${row.description || row.part_number || ""}: ${row.inventory_status || ""}`})),
         ...tireCritical.slice(0,4).map(row => ({tone:"warn", label:"Llanta", text:`${row.tire_code || ""} pos. ${row.position || ""}: ${row.control_status || ""}`})),
@@ -8110,6 +8238,135 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("fichaPartsTable").innerHTML = `<thead><tr><th>Tipo</th><th>Codigo</th><th>Descripcion</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>` +
         (partRows.map(row => `<tr><td>${esc(row.kind)}</td><td>${esc(row.code)}</td><td>${esc(shortText(row.desc, 100))}</td><td>${esc(row.status)}</td><td>${esc(row.extra)}</td></tr>`).join("") || `<tr><td colspan="5">Sin refacciones o llantas relacionadas.</td></tr>`) + `</tbody>`;
       document.querySelectorAll("[data-profile-tab]").forEach(button => button.addEventListener("click", () => activateTab(button.dataset.profileTab)));
+      document.querySelectorAll("[data-profile-ot]").forEach(button => button.addEventListener("click", () => {
+        newWorkOrder({
+          equipment_code: button.dataset.profileOt || code,
+          equipment_description: eq.description || eq.family || "",
+          origin: "FICHA EQUIPO",
+          priority: overdue.length || noDisp ? "ALTA" : "MEDIA",
+          description: alerts[0]?.text || `Seguimiento de mantenimiento para ${code}`,
+        });
+      }));
+    }
+    function newWorkOrder(prefill={}){
+      currentWorkOrderRecord = null;
+      $("woId").value = prefill.id || "";
+      $("woFolio").value = prefill.folio || "";
+      $("woDate").value = prefill.date || toIsoDate(new Date());
+      $("woEquipment").value = prefill.equipment_code || selectedFichaCode() || "";
+      $("woOrigin").value = prefill.origin || "MANUAL";
+      $("woPriority").value = prefill.priority || "MEDIA";
+      $("woState").value = prefill.status || "ABIERTA";
+      $("woResponsible").value = prefill.responsible || "";
+      $("woMechanic").value = prefill.mechanic || "";
+      $("woSupervisor").value = prefill.supervisor || "";
+      $("woDescription").value = prefill.description || "";
+      $("woAction").value = prefill.action || "";
+      $("woParts").value = prefill.parts_used || "";
+      $("woLubricants").value = prefill.lubricants_used || "";
+      $("woEvidence").value = prefill.evidence_note || "";
+      $("woStatus").textContent = prefill.folio ? `Editando ${prefill.folio}` : "Nueva OT";
+      activateTab("ordenesTrabajo");
+    }
+    function workOrderPayload(close=false){
+      const code = $("woEquipment").value || "";
+      const eq = portalEquipment().find(item => normalizedText(item.code || item.equipment_code) === normalizedText(code)) || {};
+      return {
+        id: $("woId").value || "",
+        folio: $("woFolio").value || "",
+        date: $("woDate").value || toIsoDate(new Date()),
+        equipment_code: code,
+        equipment_description: eq.description || eq.family || "",
+        origin: $("woOrigin").value,
+        priority: $("woPriority").value,
+        status: close ? "CERRADA" : $("woState").value,
+        responsible: $("woResponsible").value.trim(),
+        mechanic: $("woMechanic").value.trim(),
+        supervisor: $("woSupervisor").value.trim(),
+        description: $("woDescription").value.trim(),
+        action: $("woAction").value.trim(),
+        parts_used: $("woParts").value.trim(),
+        lubricants_used: $("woLubricants").value.trim(),
+        evidence_note: $("woEvidence").value.trim(),
+      };
+    }
+    function fillWorkOrder(row){
+      currentWorkOrderRecord = row;
+      newWorkOrder(row);
+    }
+    function filteredWorkOrders(){
+      const selected = $("woFilterEquipment").value || "";
+      const status = $("woFilterStatus").value || "";
+      const priority = $("woFilterPriority").value || "";
+      const search = normalizedText($("woSearch").value || "");
+      return workOrderRows().filter(row => {
+        const eqOk = !selected || normalizedText(row.equipment_code) === normalizedText(selected);
+        const statusOk = !status || String(row.status || "").toUpperCase() === status;
+        const priorityOk = !priority || String(row.priority || "").toUpperCase() === priority;
+        const text = normalizedText([row.folio,row.equipment_code,row.origin,row.priority,row.status,row.responsible,row.description,row.action].join(" "));
+        return eqOk && statusOk && priorityOk && (!search || text.includes(search));
+      }).sort((a,b) => {
+        const rank = {URGENTE:0, ALTA:1, MEDIA:2, BAJA:3};
+        return (workOrderClosed(a) ? 1 : 0) - (workOrderClosed(b) ? 1 : 0)
+          || (rank[a.priority] ?? 9) - (rank[b.priority] ?? 9)
+          || String(b.date || "").localeCompare(String(a.date || ""));
+      });
+    }
+    function renderWorkOrders(){
+      const rows = filteredWorkOrders();
+      const all = workOrderRows();
+      const open = all.filter(row => !workOrderClosed(row)).length;
+      const process = all.filter(row => String(row.status || "").toUpperCase().includes("PROCESO")).length;
+      const urgent = all.filter(row => !workOrderClosed(row) && ["URGENTE","ALTA"].includes(String(row.priority || "").toUpperCase())).length;
+      const closed = all.filter(workOrderClosed).length;
+      $("woSummaryText").textContent = `${rows.length} mostrada(s)`;
+      $("woSummaryCards").innerHTML = [
+        ["Abiertas", open, open ? "warn" : ""],
+        ["En proceso", process, process ? "warn" : ""],
+        ["Urgentes/altas", urgent, urgent ? "bad" : ""],
+        ["Cerradas/cancel.", closed, ""],
+      ].map(([label,value,tone]) => `<div class="exec-card ${tone}"><strong>${value}</strong><span>${esc(label)}</span><small>Ordenes de trabajo</small></div>`).join("");
+      $("woTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Origen</th><th>Prioridad</th><th>Estatus</th><th>Responsable</th><th>Descripcion</th><th>Accion</th></tr></thead><tbody>` +
+        (rows.map(row => `<tr data-wo-id="${esc(row.id || row.folio || "")}" style="cursor:pointer"><td>${esc(row.folio || "")}</td><td>${esc(row.date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.origin || "")}</td><td><span class="pill ${workOrderClass(row)}">${esc(row.priority || "")}</span></td><td><span class="pill ${workOrderClass(row)}">${esc(row.status || "")}</span></td><td>${esc(row.responsible || row.mechanic || "")}</td><td>${esc(shortText(row.description || "", 120))}</td><td>${esc(shortText(row.action || "", 100))}</td></tr>`).join("") || `<tr><td colspan="9">Sin ordenes de trabajo.</td></tr>`) + `</tbody>`;
+      document.querySelectorAll("[data-wo-id]").forEach(row => row.addEventListener("click", () => {
+        const record = workOrderRows().find(item => String(item.id || item.folio || "") === String(row.dataset.woId || ""));
+        if(record) fillWorkOrder(record);
+      }));
+    }
+    async function saveWorkOrder(close=false){
+      if(!hasApiKey(true)) return;
+      const payload = workOrderPayload(close);
+      if(!payload.equipment_code) return alert("Selecciona un equipo.");
+      if(!payload.description) return alert("Describe el trabajo de la OT.");
+      if(close && !payload.action && !confirm("No capturaste accion/cierre. ¿Cerrar OT de todos modos?")) return;
+      const response = await fetch("/api/work-orders/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(result.portal) portal = result.portal;
+      renderPortalSelectors();
+      renderWorkOrders();
+      renderExecutiveBoard();
+      renderEquipmentProfile();
+      renderBacklog();
+      if(result.record) fillWorkOrder(result.record);
+      $("woStatus").textContent = close ? "OT cerrada." : "OT guardada.";
+    }
+    async function deleteWorkOrder(){
+      if(!hasApiKey(true)) return;
+      const id = $("woId").value || $("woFolio").value || currentWorkOrderRecord?.id || currentWorkOrderRecord?.folio || "";
+      if(!id) return alert("Selecciona una OT.");
+      if(!confirm("¿Eliminar esta orden de trabajo?")) return;
+      const response = await fetch("/api/work-orders/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(result.portal) portal = result.portal;
+      newWorkOrder();
+      renderPortalSelectors();
+      renderWorkOrders();
+      renderExecutiveBoard();
+      renderEquipmentProfile();
+      renderBacklog();
+      $("woStatus").textContent = "OT eliminada.";
     }
     function renderSelectors(){
       const current = $("equipmentSelect").value;
@@ -8670,6 +8927,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("srvStart").value) $("srvStart").value = period.capture_start || period.start || today;
       if(!$("srvEnd").value) $("srvEnd").value = period.capture_end || period.end || today;
       if(!$("prevExecDate").value) $("prevExecDate").value = today;
+      if(!$("woDate").value) $("woDate").value = today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
       if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
       if(!$("auditStart").value) $("auditStart").value = period.start || today;
@@ -8694,6 +8952,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("prevExecEquipment", equipmentOptions, "Selecciona");
+      setOptions("woEquipment", equipmentOptions, "Selecciona");
+      setOptions("woFilterEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
       setOptions("spareEquipment", equipmentOptions, "Todos");
       const auditModules = [...new Set((portal.audit_log || []).map(row => row.module).filter(Boolean))].sort();
@@ -9642,6 +9902,25 @@ WAREHOUSE_HTML = r"""<!doctype html>
         });
       });
       published.filter(row => ["OT", "Requisicion"].includes(String(row.source || ""))).forEach(row => addRow(row));
+      workOrderRows().filter(row => !workOrderClosed(row)).forEach(row => {
+        const priority = String(row.priority || "").toUpperCase();
+        addRow({
+          score: priority === "URGENTE" ? 96 : (priority === "ALTA" ? 82 : priority === "MEDIA" ? 58 : 38),
+          source:"OT",
+          equipment_code:row.equipment_code || "",
+          equipment_description:row.equipment_description || "",
+          component:row.origin || "OT",
+          system:classifyStoppage(row.description, row.action, row.origin),
+          date:row.date || "",
+          due_date:"",
+          hours_remaining:null,
+          work_order_id:row.folio || row.id || "",
+          responsible:row.responsible || row.mechanic || "",
+          flow_status:String(row.status || "ABIERTA").replace("ABIERTA","Pendiente").replace("EN PROCESO","En proceso"),
+          detail:row.description || "",
+          action:row.action || "Dar seguimiento y cerrar OT.",
+        });
+      });
       (requisitions || []).filter(row => ["ABIERTA", "AUTORIZADA"].includes(String(row.status || "").toUpperCase())).forEach(row => {
         const items = Array.isArray(row.items) ? row.items.length : Number(row.items || 0);
         const urgent = String(row.priority || "").toUpperCase().includes("URG");
@@ -11259,6 +11538,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderDashboard();
       renderPreventives();
       renderBacklog();
+      renderWorkOrders();
       renderServiceHistory();
       renderPreventiveExecution();
       renderAudit();
@@ -11313,6 +11593,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["backlogStart","backlogEnd","backlogLevel","backlogSource","backlogStatus"].forEach(id => $(id).addEventListener("change", renderBacklog));
     $("backlogSearch").addEventListener("input", renderBacklog);
     $("renderBacklogBtn").addEventListener("click", renderBacklog);
+    ["woFilterEquipment","woFilterStatus","woFilterPriority"].forEach(id => $(id).addEventListener("change", renderWorkOrders));
+    $("woSearch").addEventListener("input", renderWorkOrders);
+    $("woRefreshBtn").addEventListener("click", renderWorkOrders);
+    $("woNewBtn").addEventListener("click", () => newWorkOrder());
+    $("woSaveBtn").addEventListener("click", () => saveWorkOrder(false).catch(showError));
+    $("woCloseBtn").addEventListener("click", () => saveWorkOrder(true).catch(showError));
+    $("woDeleteBtn").addEventListener("click", () => deleteWorkOrder().catch(showError));
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
     $("srvSearch").addEventListener("input", renderServiceHistory);
     $("renderSrvBtn").addEventListener("click", renderServiceHistory);
@@ -12202,6 +12489,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             payload["service_history"] = previous_payload["service_history"]
         if "preventive_execution" not in payload and isinstance(previous_payload.get("preventive_execution"), dict):
             payload["preventive_execution"] = previous_payload["preventive_execution"]
+        if "work_orders" not in payload and isinstance(previous_payload.get("work_orders"), dict):
+            payload["work_orders"] = previous_payload["work_orders"]
         if "parts_manuals" not in payload and isinstance(previous_payload.get("parts_manuals"), dict):
             payload["parts_manuals"] = previous_payload["parts_manuals"]
         if "audit_log" not in payload and isinstance(previous_payload.get("audit_log"), list):
@@ -12210,7 +12499,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             payload["backlog"] = previous_payload["backlog"]
         if "tire_tracking" not in payload and isinstance(previous_payload.get("tire_tracking"), dict):
             payload["tire_tracking"] = previous_payload["tire_tracking"]
-        payload = enrich_tire_tracking(merge_preventive_execution_into_portal(payload))
+        payload = enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(payload)))
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
@@ -12224,6 +12513,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "preventives": len(preventives),
         "service_history": len(payload.get("service_history") or []) if isinstance(payload.get("service_history"), list) else 0,
         "preventive_execution": len((payload.get("preventive_execution") or {}).get("records") or []) if isinstance(payload.get("preventive_execution"), dict) else 0,
+        "work_orders": len((payload.get("work_orders") or {}).get("records") or []) if isinstance(payload.get("work_orders"), dict) else 0,
         "parts_manuals": len((payload.get("parts_manuals") or {}).get("rows") or []) if isinstance(payload.get("parts_manuals"), dict) else 0,
         "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
@@ -12251,6 +12541,84 @@ def portal_snapshot_for_preventive_execution_update(session: Session) -> tuple[P
     payload.setdefault("service_history", [])
     payload.setdefault("preventive_execution", {"records": []})
     return snapshot, payload
+
+
+def portal_snapshot_for_work_order_update(session: Session) -> tuple[PortalSnapshot, dict[str, Any]]:
+    snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+    if snapshot is None:
+        snapshot = PortalSnapshot(name="default")
+        session.add(snapshot)
+        payload = portal_fallback_payload(session)
+    else:
+        raw = json_loads(snapshot.payload_json)
+        payload = raw if isinstance(raw, dict) else portal_fallback_payload(session)
+    payload.setdefault("ok", True)
+    payload.setdefault("source", "cloud-portal")
+    payload.setdefault("work_orders", {"records": []})
+    return snapshot, payload
+
+
+@app.get("/api/work-orders")
+def get_work_orders() -> dict[str, Any]:
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+        orders = portal.get("work_orders") if isinstance(portal.get("work_orders"), dict) else {"records": []}
+        return {"ok": True, "work_orders": orders}
+
+
+@app.post("/api/work-orders/records")
+async def save_work_order_record(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Orden de trabajo invalida.")
+    with SessionLocal() as session:
+        snapshot, portal = portal_snapshot_for_work_order_update(session)
+        records = [normalize_work_order_record(row) for row in work_order_records(portal) if isinstance(row, dict)]
+        requested_id = str(payload.get("id") or payload.get("folio") or "").strip()
+        index = next((idx for idx, row in enumerate(records) if requested_id and requested_id in {str(row.get("id") or ""), str(row.get("folio") or "")}), None)
+        existing = records[index] if index is not None else None
+        folio = existing.get("folio") if existing else next_work_order_folio(records)
+        record = normalize_work_order_record(payload, existing=existing, folio=folio)
+        if not record.get("equipment_code"):
+            raise HTTPException(status_code=400, detail="Selecciona un equipo.")
+        if not record.get("description"):
+            raise HTTPException(status_code=400, detail="Describe el trabajo.")
+        if index is None:
+            records.append(record)
+        else:
+            records[index] = record
+        portal["work_orders"] = {"records": records}
+        portal["updated_at"] = utc_now().isoformat(timespec="seconds")
+        portal = enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(portal)))
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(portal)
+        session.commit()
+        return {"ok": True, "record": record, "portal": latest_portal_payload(session)}
+
+
+@app.post("/api/work-orders/records/delete")
+async def delete_work_order_record(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Solicitud invalida.")
+    record_id = str(payload.get("id") or payload.get("folio") or "").strip()
+    if not record_id:
+        raise HTTPException(status_code=400, detail="Selecciona una OT.")
+    with SessionLocal() as session:
+        snapshot, portal = portal_snapshot_for_work_order_update(session)
+        records = [
+            row for row in work_order_records(portal)
+            if isinstance(row, dict) and record_id not in {str(row.get("id") or ""), str(row.get("folio") or "")}
+        ]
+        portal["work_orders"] = {"records": records}
+        portal["updated_at"] = utc_now().isoformat(timespec="seconds")
+        portal = enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(portal)))
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(portal)
+        session.commit()
+        return {"ok": True, "portal": latest_portal_payload(session)}
 
 
 def apply_preventive_oil_inventory_delta(
