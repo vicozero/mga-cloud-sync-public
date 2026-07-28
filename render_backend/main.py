@@ -1640,7 +1640,8 @@ def normalize_preventive_execution_record(row: dict[str, Any]) -> dict[str, Any]
     now = utc_now().isoformat(timespec="seconds")
     service_type = normalize_text(row.get("service_type") or "PM1")[:12] or "PM1"
     if service_type not in PREVENTIVE_SERVICE_HOURS:
-        service_type = service_type.replace(" ", "").upper()[:12] or "PM1"
+        service_match = re.search(r"PM\s*([1-4])", service_type)
+        service_type = f"PM{service_match.group(1)}" if service_match else service_type.replace(" ", "").upper()[:12] or "PM1"
     status = normalize_text(row.get("status") or "ABIERTO")[:30] or "ABIERTO"
     equipment_code = str(row.get("equipment_code") or row.get("equipment") or "").strip()[:120]
     record_id = str(row.get("id") or "").strip()
@@ -1655,6 +1656,8 @@ def normalize_preventive_execution_record(row: dict[str, Any]) -> dict[str, Any]
         "supervisor": str(row.get("supervisor") or "").strip()[:180],
         "mechanic": str(row.get("mechanic") or "").strip()[:180],
         "service_type": service_type,
+        "service_hours": PREVENTIVE_SERVICE_HOURS.get(service_type, 0),
+        "service_interval": f"{PREVENTIVE_SERVICE_HOURS.get(service_type, 0)}H" if PREVENTIVE_SERVICE_HOURS.get(service_type, 0) else "",
         "attribute_type": str(row.get("attribute_type") or "").strip()[:120],
         "status": status,
         "completed_meter": parse_float(row.get("completed_meter"), 0),
@@ -1686,6 +1689,8 @@ def normalize_preventive_execution_record(row: dict[str, Any]) -> dict[str, Any]
 
 def preventive_record_to_service_history(row: dict[str, Any], equipment_lookup: dict[str, dict[str, Any]]) -> dict[str, Any]:
     service_type = normalize_text(row.get("service_type") or "PM") or "PM"
+    service_hours = PREVENTIVE_SERVICE_HOURS.get(service_type, parse_float(row.get("service_hours"), 0))
+    service_interval = f"{int(service_hours)}H" if service_hours else str(row.get("service_interval") or "")
     equipment_code = str(row.get("equipment_code") or "")
     equipment = equipment_lookup.get(equipment_code) or {}
     description = row.get("equipment_description") or equipment.get("description") or equipment.get("family") or ""
@@ -1704,7 +1709,7 @@ def preventive_record_to_service_history(row: dict[str, Any], equipment_lookup: 
         "equipment_description": description,
         "component": row.get("attribute_type") or "Preventivo",
         "service_name": service_type,
-        "service_interval": service_type,
+        "service_interval": service_interval,
         "scheduled_meter": "",
         "completed_meter": row.get("completed_meter") or 0,
         "due_date": "",
@@ -6761,7 +6766,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Equipo<select id="prevExecEquipment"></select></label>
             <label>Supervisor<input id="prevExecSupervisor" placeholder="Supervisor"></label>
             <label>Mecanico<input id="prevExecMechanic" placeholder="Mecanico"></label>
-            <label>Tipo servicio<select id="prevExecServiceType"><option>PM1</option><option>PM2</option><option>PM3</option><option>PM4</option></select></label>
+            <label>Tipo servicio<select id="prevExecServiceType"><option value="PM1">PM1 - 250H</option><option value="PM2">PM2 - 500H</option><option value="PM3">PM3 - 750H</option><option value="PM4">PM4 - 1000H</option></select></label>
             <label>Tipo de atributo<select id="prevExecAttribute"><option>GENERAL</option><option>MOTOR</option><option>ELECT</option><option>DIESEL</option><option>HIDRAULICO</option><option>TRANSMISION</option><option>LLANTAS</option><option>FRENOS</option><option>OTRO</option></select></label>
             <label>Horometro cierre<input id="prevExecMeter" type="number" step="0.1" min="0" value="0"></label>
             <label>Estatus<select id="prevExecState"><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
@@ -9394,7 +9399,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const end = $("srvEnd").value;
       const search = ($("srvSearch").value || "").toUpperCase();
       const rows = (Array.isArray(portal.service_history) ? portal.service_history : []).filter(row => {
-        const service = String(row.service_interval || row.service_name || "").toUpperCase();
+        const service = [row.service_interval, row.service_name, row.stage].join(" ").toUpperCase();
         const serviceType = String(row.service_type || "Programado").toUpperCase();
         const eqOk = !selected || row.equipment_code === selected;
         const intervalOk = !interval || service === interval.toUpperCase() || service.includes(interval.toUpperCase());
@@ -9435,7 +9440,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         result.rows.map(row => {
           const status = String(row.status || "");
           const cls = status === "A TIEMPO" ? "ok" : (status === "TARDIO" ? "bad" : "warn");
-          const service = row.service_interval || row.service_name || "";
+          const service = [row.service_name, row.service_interval].filter(Boolean).join(" / ");
           const documentText = row.document_name || (row.document_path ? "Registrada" : "");
           return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.service_type || "Programado")}</td><td>${esc(row.stage || "Cerrado")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(documentText)}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(serviceOilsText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
         }).join("") +
@@ -11906,7 +11911,9 @@ def apply_preventive_oil_inventory_delta(
     current_closed = bool(current and normalize_text(current.get("status")) in PREVENTIVE_CLOSED_STATUSES)
     service_date = str((current or previous or {}).get("close_date") or (current or previous or {}).get("service_date") or utc_now().date().isoformat())
     equipment_code = str((current or previous or {}).get("equipment_code") or "")
-    service_interval = str((current or previous or {}).get("service_type") or "")
+    service_type = str((current or previous or {}).get("service_type") or "")
+    service_hours = PREVENTIVE_SERVICE_HOURS.get(normalize_text(service_type), parse_float((current or previous or {}).get("service_hours"), 0))
+    service_interval = f"{service_type} / {int(service_hours)}H" if service_hours else service_type
     reference = f"SERVICIO-PREV-{service_id}"
     for key, part_number, description in OIL_STOCK_FIELDS:
         previous_qty = max(parse_float(previous.get(key), 0), 0) if previous_closed and previous else 0
