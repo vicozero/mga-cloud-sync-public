@@ -6439,6 +6439,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .kpi-sim-note { align-self:center; font-size:12px; font-weight:700; }
     #kpiPrintArea.simulation::before { background:linear-gradient(90deg,#f59e0b,#facc15); }
     .kpi-simulation-badge { display:inline-block; margin-left:10px; padding:3px 8px; border:1px solid #d97706; border-radius:6px; background:#fff3cd; color:#7a4d00; font-size:12px; font-weight:800; vertical-align:middle; }
+    .kpi-main-strip { display:grid; grid-template-columns:repeat(6,minmax(150px,1fr)); gap:10px; }
+    .kpi-main-card { position:relative; overflow:hidden; min-height:120px; border:1px solid var(--line); border-radius:14px; padding:14px; background:linear-gradient(135deg,#fff,#f8fbff); box-shadow:0 12px 28px rgba(15,23,42,.08); }
+    .kpi-main-card::before { content:""; position:absolute; inset:0 0 auto; height:4px; background:var(--teal); }
+    .kpi-main-card.warn::before { background:var(--amber); }
+    .kpi-main-card.bad::before { background:var(--red); }
+    .kpi-main-card span { display:block; color:#64748b; font-size:12px; font-weight:900; text-transform:uppercase; }
+    .kpi-main-card strong { display:block; margin-top:8px; color:var(--navy); font-size:32px; line-height:1; }
+    .kpi-main-card small { display:block; margin-top:8px; color:#475569; font-size:12px; line-height:1.25; }
+    .kpi-main-meter { height:7px; overflow:hidden; border-radius:999px; background:#e5e7eb; margin-top:11px; }
+    .kpi-main-meter i { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,var(--teal),var(--green)); }
+    .kpi-main-card.warn .kpi-main-meter i { background:linear-gradient(90deg,#f59e0b,#facc15); }
+    .kpi-main-card.bad .kpi-main-meter i { background:linear-gradient(90deg,#ef4444,#b91c1c); }
     label { display:grid; gap:4px; color:#344054; font-size:12px; font-weight:700; }
     input, select, textarea { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; background:white; outline:none; transition:border .15s ease, box-shadow .15s ease; }
     .inline-check { display:flex; align-items:center; gap:8px; min-height:38px; }
@@ -6768,9 +6780,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       .print-only { display:block; }
     }
     @media (max-width: 1180px) { .capture-layout { grid-template-columns:1fr; } .latest-captures-panel { position:static; } .latest-captures-wrap { max-height:520px; } }
-    @media (max-width: 1180px) { .exec-alert-grid, .profile-grid { grid-template-columns:repeat(3,minmax(120px,1fr)); } .profile-hero, .profile-section-grid, .kpi-command-grid { grid-template-columns:1fr; } }
-    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .exec-alert-grid, .profile-grid { grid-template-columns:repeat(2,minmax(120px,1fr)); } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } .tabs { overflow:auto; flex-wrap:nowrap; } .tabs button { flex:0 0 auto; } }
-    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .exec-alert-grid, .profile-grid, .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions { display:grid; grid-template-columns:1fr; } .capture-actions .btn { width:100%; } .exec-alert { align-items:flex-start; flex-direction:column; } }
+    @media (max-width: 1180px) { .exec-alert-grid, .profile-grid, .kpi-main-strip { grid-template-columns:repeat(3,minmax(120px,1fr)); } .profile-hero, .profile-section-grid, .kpi-command-grid { grid-template-columns:1fr; } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .exec-alert-grid, .profile-grid, .kpi-main-strip { grid-template-columns:repeat(2,minmax(120px,1fr)); } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } .tabs { overflow:auto; flex-wrap:nowrap; } .tabs button { flex:0 0 auto; } }
+    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .exec-alert-grid, .profile-grid, .kpi-main-strip, .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions { display:grid; grid-template-columns:1fr; } .capture-actions .btn { width:100%; } .exec-alert { align-items:flex-start; flex-direction:column; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
   </style>
 </head>
@@ -6846,6 +6858,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Paradas %<input id="kpiSimStops" type="number" step="1" value="100"></label>
         <label>Hrs mision<input id="kpiSimMission" type="number" step="0.1" value="24"></label>
         <span class="muted kpi-sim-note">Solo cambia la vista y las descargas simuladas. No guarda datos reales.</span>
+      </div>
+      <div class="panel no-print">
+        <div class="subtle-title"><h3>Indicadores principales</h3><span class="muted" id="kpiMainSummaryNote"></span></div>
+        <div class="kpi-main-strip" id="kpiMainStrip"></div>
       </div>
       <div class="panel executive-board no-print">
         <div class="subtle-title"><h3>Prioridad operativa</h3><span class="muted" id="execUpdated">Alertas automaticas</span></div>
@@ -8226,6 +8242,30 @@ WAREHOUSE_HTML = r"""<!doctype html>
         renderEquipmentProfile();
         activateTab("fichaEquipo");
       }));
+    }
+    function renderKpiMainSummary(report, settings){
+      const totals = report?.totals || {};
+      const metaAvailability = Number(settings?.meta_availability || 85);
+      const metaUtilization = Number(settings?.meta_utilization || 75);
+      const metaReliability = Number(settings?.meta_reliability || 80);
+      const metaTmef = Number(settings?.meta_tmef || 8);
+      const metaTmpr = Number(settings?.meta_tmpr || 4);
+      const riskRows = kpiRiskRows(report);
+      const critical = riskRows.filter(row => row.semaphore === "red").length;
+      const warn = riskRows.filter(row => row.semaphore === "yellow").length;
+      const cards = [
+        {label:"Disponibilidad", value:pct(totals.availability || 0), note:`Meta ${pct(metaAvailability)}`, width:totals.availability || 0, bad:Number(totals.availability || 0) < metaAvailability},
+        {label:"Utilizacion", value:pct(totals.utilization || 0), note:`Meta ${pct(metaUtilization)}`, width:totals.utilization || 0, bad:Number(totals.utilization || 0) < metaUtilization},
+        {label:"Confiabilidad", value:pct(totals.reliability || 0), note:`Meta ${pct(metaReliability)}`, width:totals.reliability || 0, bad:Number(totals.reliability || 0) < metaReliability},
+        {label:"TMEF", value:`${one(totals.tmef || 0)} h`, note:`Meta ${one(metaTmef)} h`, width:Math.min((Number(totals.tmef || 0) / Math.max(metaTmef, 1)) * 100, 100), bad:Number(totals.tmef || 0) < metaTmef},
+        {label:"TMPR", value:`${one(totals.tmpr || 0)} h`, note:`Meta ${one(metaTmpr)} h`, width:Math.min((metaTmpr / Math.max(Number(totals.tmpr || 0), .1)) * 100, 100), bad:Number(totals.tmpr || 0) > metaTmpr},
+        {label:"Equipos criticos", value:String(critical), note:`${warn} en atencion`, width:Math.max(100 - critical * 18 - warn * 8, 0), bad:critical > 0, warn:critical === 0 && warn > 0},
+      ];
+      $("kpiMainSummaryNote").textContent = `${report.group || "Dashboard"} | ${report.start || ""} a ${report.end || ""}`;
+      $("kpiMainStrip").innerHTML = cards.map(card => {
+        const tone = card.bad ? "bad" : (card.warn ? "warn" : "");
+        return `<div class="kpi-main-card ${tone}"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong><small>${esc(card.note)}</small><div class="kpi-main-meter"><i style="width:${Math.max(Math.min(Number(card.width || 0), 100), 0)}%"></i></div></div>`;
+      }).join("");
     }
     function workOrderRows(){
       const payload = portal.work_orders || {};
@@ -9789,6 +9829,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const selectedGroup = $("kpiGroup").value || "";
       const commandReport = simulatedKpiReport(calculateKpiRows("Todos los equipos", $("kpiStart").value, $("kpiEnd").value));
       renderKpiCommandCenter(commandReport);
+      renderKpiMainSummary(commandReport, currentKpiSettings());
       if(selectedGroup === "KPI Aceites") {
         renderOilDashboard();
         return;
@@ -9805,6 +9846,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const report = simulatedKpiReport(calculateKpiRows());
       renderKpiCommandCenter(report);
       const settings = currentKpiSettings();
+      renderKpiMainSummary(report, settings);
       $("kpiPrintArea").classList.toggle("simulation", Boolean(report.simulation?.enabled));
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
       $("kpiTitle").innerHTML = `${esc(report.group)} | ${esc(report.start)} a ${esc(report.end)}${report.simulation?.enabled ? `<span class="kpi-simulation-badge">SIMULACION: ${esc(report.simulation.name || "Escenario KPI")}</span>` : ""}`;
