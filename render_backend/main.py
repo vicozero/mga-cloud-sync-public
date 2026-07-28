@@ -1665,6 +1665,18 @@ def normalize_preventive_execution_record(row: dict[str, Any]) -> dict[str, Any]
         "created_at": str(row.get("created_at") or now)[:40],
         "updated_at": now,
     }
+    oil_total = 0.0
+    for key, _part_number, _description in OIL_STOCK_FIELDS:
+        value = max(parse_float(row.get(key), 0), 0)
+        normalized[key] = value
+        oil_total += value
+    normalized["oil_liters"] = oil_total
+    if not normalized["lubricants_used"] and oil_total:
+        normalized["lubricants_used"] = "; ".join(
+            f"{part_number}: {normalized[key]:g} L"
+            for key, part_number, _description in OIL_STOCK_FIELDS
+            if normalized.get(key)
+        )
     if normalized["status"] in PREVENTIVE_CLOSED_STATUSES and not normalized["close_date"]:
         normalized["close_date"] = normalized["service_date"]
     if normalized["status"] not in PREVENTIVE_CLOSED_STATUSES:
@@ -1681,6 +1693,7 @@ def preventive_record_to_service_history(row: dict[str, Any], equipment_lookup: 
     detail = " | ".join([f"{label}: {value}" for label, value in (("Supervisor", people[0]), ("Mecanico", people[1])) if value])
     if row.get("notes"):
         detail = f"{detail} | {row.get('notes')}" if detail else str(row.get("notes"))
+    oils_used = {part_number: row.get(key) for key, part_number, _description in OIL_STOCK_FIELDS if parse_float(row.get(key), 0) > 0}
     return {
         "web_id": row.get("id"),
         "completed_date": row.get("close_date") or row.get("service_date") or "",
@@ -1699,10 +1712,27 @@ def preventive_record_to_service_history(row: dict[str, Any], equipment_lookup: 
         "order_number": "",
         "document_name": "Registro web preventivo",
         "filters_text": row.get("parts_used") or "",
-        "oils_used": row.get("lubricants_used") or "",
+        "oils_used": oils_used or row.get("lubricants_used") or "",
         "notes": detail,
         "source": "preventive_execution_web",
     }
+
+
+def preventive_execution_as_oil_capture(row: dict[str, Any]) -> dict[str, Any]:
+    capture = {
+        "work_date": row.get("close_date") or row.get("service_date") or "",
+        "equipment_code": row.get("equipment_code") or "",
+        "equipment_description": row.get("equipment_description") or "",
+        "worked_hours": 0,
+        "source": "preventive_execution_web",
+    }
+    total = 0.0
+    for key, _part_number, _description in OIL_STOCK_FIELDS:
+        value = max(parse_float(row.get(key), 0), 0)
+        capture[key] = value
+        total += value
+    capture["oil_liters"] = total
+    return capture
 
 
 def merge_preventive_execution_into_portal(portal: dict[str, Any]) -> dict[str, Any]:
@@ -3529,6 +3559,20 @@ OIL_REPORT_COLUMNS = [
     {"label": "SAE 30", "key": "oil_trans_sae30"},
     {"label": "SAE 50", "key": "oil_sae50"},
     {"label": "85W140", "key": "oil_85w140"},
+    {"label": "ALMO", "key": "almo_liters"},
+    {"label": "Refrigerante", "key": "coolant_liters"},
+    {"label": "VG100", "key": "oil_hyd_vg100"},
+    {"label": "ATF", "key": "atf_liters"},
+]
+OIL_STOCK_FIELDS = [
+    ("oil_motor_15w40", "15W40", "Aceite 15W40"),
+    ("oil_hco_iso68", "HCO ISO 68", "Aceite HCO ISO 68"),
+    ("oil_trans_sae30", "SAE 30", "Aceite SAE 30"),
+    ("oil_85w140", "85W140", "Aceite 85W140"),
+    ("almo_liters", "ALMO", "ALMO"),
+    ("coolant_liters", "REFRIGERANTE", "Refrigerante"),
+    ("oil_hyd_vg100", "VG100", "Hidraulico VG100"),
+    ("atf_liters", "ATF", "ATF"),
 ]
 PPT_EMU_PER_INCH = 914400
 PPT_BLUE = "#0b2f6f"
@@ -3810,7 +3854,15 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
             "unavailable_count": 0,
         }
     captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
-    for capture in captures:
+    oil_sources = [capture for capture in captures if isinstance(capture, dict)]
+    oil_sources.extend(
+        preventive_execution_as_oil_capture(row)
+        for row in preventive_execution_records(portal)
+        if isinstance(row, dict)
+        and normalize_text(row.get("status")) in PREVENTIVE_CLOSED_STATUSES
+        and sum(parse_float(row.get(key), 0) for key, _part_number, _description in OIL_STOCK_FIELDS) > 0
+    )
+    for capture in oil_sources:
         if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
             continue
         code = str(capture.get("equipment_code") or capture.get("code") or "").strip()
@@ -6714,7 +6766,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Horometro cierre<input id="prevExecMeter" type="number" step="0.1" min="0" value="0"></label>
             <label>Estatus<select id="prevExecState"><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
             <label class="wide">Refacciones usadas<textarea id="prevExecParts" rows="3" placeholder="Ej. filtro aceite 1 pza; banda alternador 1 pza"></textarea></label>
-            <label class="wide">Lubricantes<textarea id="prevExecLubricants" rows="3" placeholder="Ej. 15W40: 20 L; Refrigerante: 5 L"></textarea></label>
+            <div class="capture-section-title">Aceites y fluidos (litros)</div>
+            <label class="capture-fluid">Aceite total<input id="prevExecOilTotal" type="number" step="0.1" min="0" value="0" readonly></label>
+            <label class="capture-fluid">15W40<input id="prevExecOil15w40" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">HCO ISO 68<input id="prevExecOilHco68" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">SAE 30<input id="prevExecOilSae30" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">85W140<input id="prevExecOil85w140" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">ALMO<input id="prevExecAlmo" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">Refrigerante<input id="prevExecCoolant" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">Hidraulico VG100<input id="prevExecOilVg100" type="number" step="0.1" min="0" value="0"></label>
+            <label class="capture-fluid">ATF<input id="prevExecAtf" type="number" step="0.1" min="0" value="0"></label>
             <label class="wide">Observaciones<textarea id="prevExecNotes" rows="3" placeholder="Trabajo realizado, pendientes o condicion encontrada"></textarea></label>
           </div>
           <div class="req-actions capture-actions">
@@ -8573,6 +8634,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
           grouped[code].total_liters += value;
         });
       });
+      preventiveExecutionRows().filter(row => isPreventiveClosed(row) && inRange(row.close_date || row.service_date, start, end)).forEach(row => {
+        const code = row.equipment_code || "";
+        if(!code) return;
+        if(!grouped[code]) {
+          grouped[code] = {code, description:row.equipment_description || "", group:"UTILITARIO", period_hours:days * dailyHours, worked_hours:0, total_liters:0};
+          cols.forEach(col => grouped[code][col.key] = 0);
+        }
+        cols.forEach(col => {
+          const value = Number(row[col.key] || 0);
+          grouped[code][col.key] += value;
+          grouped[code].total_liters += value;
+        });
+      });
       const groupRank = {BARRENACION:1, REZAGADO:2, UTILITARIO:3};
       const rows = Object.values(grouped).sort((a,b) => (groupRank[a.group] || 9) - (groupRank[b.group] || 9) || a.code.localeCompare(b.code));
       const totals = rows.reduce((acc, row) => {
@@ -9107,6 +9181,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     const preventiveServiceHours = {PM1:250, PM2:500, PM3:750, PM4:1000};
     const preventiveClosedStates = new Set(["CERRADO","CERRADA","TERMINADO","TERMINADA","FINALIZADO","FINALIZADA"]);
+    const preventiveOilInputs = [
+      ["prevExecOil15w40", "oil_motor_15w40", "15W40"],
+      ["prevExecOilHco68", "oil_hco_iso68", "HCO ISO 68"],
+      ["prevExecOilSae30", "oil_trans_sae30", "SAE 30"],
+      ["prevExecOil85w140", "oil_85w140", "85W140"],
+      ["prevExecAlmo", "almo_liters", "ALMO"],
+      ["prevExecCoolant", "coolant_liters", "Refrigerante"],
+      ["prevExecOilVg100", "oil_hyd_vg100", "VG100"],
+      ["prevExecAtf", "atf_liters", "ATF"],
+    ];
     function preventiveExecutionRows(){
       const payload = portal.preventive_execution || {};
       return Array.isArray(payload.records) ? payload.records : [];
@@ -9144,6 +9228,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
         else updated.status = "PROGRAMADO";
         return updated;
       });
+    }
+    function preventiveOilTotal(row){
+      return preventiveOilInputs.reduce((sum, item) => sum + Number(row?.[item[1]] || 0), 0);
+    }
+    function preventiveOilsText(row){
+      return preventiveOilInputs
+        .map(item => ({label:item[2], value:Number(row?.[item[1]] || 0)}))
+        .filter(item => item.value > 0)
+        .map(item => `${item.label}: ${one(item.value)} L`)
+        .join("; ");
     }
     function filteredPreventives(){
       const [start, end] = periodRange($("prPeriod").value, $("prBase").value);
@@ -9359,14 +9453,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecMeter").value = "0";
       $("prevExecState").value = "ABIERTO";
       $("prevExecParts").value = "";
-      $("prevExecLubricants").value = "";
+      preventiveOilInputs.forEach(item => { $(item[0]).value = "0"; });
+      updatePreventiveOilTotal();
       $("prevExecNotes").value = "";
       $("prevExecStatus").textContent = "";
+    }
+    function updatePreventiveOilTotal(){
+      const total = preventiveOilInputs.reduce((sum, item) => sum + captureNumber(item[0]), 0);
+      $("prevExecOilTotal").value = total ? String(Math.round(total * 100) / 100) : "0";
     }
     function preventiveExecutionPayload(){
       const equipmentCode = $("prevExecEquipment").value || "";
       const equipment = portalEquipment().find(item => (item.code || item.equipment_code || "") === equipmentCode) || {};
-      return {
+      const payload = {
         id: $("prevExecId").value || "",
         service_date: $("prevExecDate").value || toIsoDate(new Date()),
         equipment_code: equipmentCode,
@@ -9378,9 +9477,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
         completed_meter: Number($("prevExecMeter").value || 0),
         status: $("prevExecState").value,
         parts_used: $("prevExecParts").value.trim(),
-        lubricants_used: $("prevExecLubricants").value.trim(),
+        lubricants_used: "",
         notes: $("prevExecNotes").value.trim(),
       };
+      preventiveOilInputs.forEach(item => { payload[item[1]] = captureNumber(item[0]); });
+      payload.oil_liters = preventiveOilTotal(payload);
+      payload.lubricants_used = preventiveOilsText(payload);
+      return payload;
     }
     function fillPreventiveExecutionForm(row){
       currentPreventiveExecutionRecord = row || null;
@@ -9394,7 +9497,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecMeter").value = Number(row.completed_meter || 0);
       $("prevExecState").value = row.status || "ABIERTO";
       $("prevExecParts").value = row.parts_used || "";
-      $("prevExecLubricants").value = row.lubricants_used || "";
+      preventiveOilInputs.forEach(item => { $(item[0]).value = formatCaptureNumber(row[item[1]]); });
+      updatePreventiveOilTotal();
       $("prevExecNotes").value = row.notes || "";
       $("prevExecStatus").textContent = `Editando ${row.id || ""}`;
       document.querySelector('[data-tab="ejecucionPreventivos"]')?.click();
@@ -9407,7 +9511,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecClosedCount").textContent = `${closed.length} cerrado(s)`;
       const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="8">Sin servicios preventivos abiertos.</td></tr>`;
       $("prevExecOpenTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
-      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="8">Sin servicios cerrados desde esta pestaña.</td></tr>`;
+      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="8">Sin servicios cerrados desde esta pestaña.</td></tr>`;
       $("prevExecClosedTable").innerHTML = `<thead><tr><th>Fecha cierre</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Horometro</th><th>Refacciones</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
       document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
         const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
@@ -10861,6 +10965,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("prevExecCloseBtn").addEventListener("click", () => savePreventiveExecution(true).catch(showError));
     $("prevExecDeleteBtn").addEventListener("click", () => deletePreventiveExecution().catch(showError));
     $("prevExecViewHistoryBtn").addEventListener("click", () => document.querySelector('[data-tab="servicios"]')?.click());
+    preventiveOilInputs.forEach(item => $(item[0]).addEventListener("input", updatePreventiveOilTotal));
     ["spareEquipment","spareStatus"].forEach(id => $(id).addEventListener("change", renderSpareParts));
     $("spareSearch").addEventListener("input", renderSpareParts);
     $("renderSpareBtn").addEventListener("click", renderSpareParts);
@@ -11790,6 +11895,56 @@ def portal_snapshot_for_preventive_execution_update(session: Session) -> tuple[P
     return snapshot, payload
 
 
+def apply_preventive_oil_inventory_delta(
+    session: Session,
+    *,
+    previous: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+    service_id: str,
+) -> None:
+    previous_closed = bool(previous and normalize_text(previous.get("status")) in PREVENTIVE_CLOSED_STATUSES)
+    current_closed = bool(current and normalize_text(current.get("status")) in PREVENTIVE_CLOSED_STATUSES)
+    service_date = str((current or previous or {}).get("close_date") or (current or previous or {}).get("service_date") or utc_now().date().isoformat())
+    equipment_code = str((current or previous or {}).get("equipment_code") or "")
+    service_interval = str((current or previous or {}).get("service_type") or "")
+    reference = f"SERVICIO-PREV-{service_id}"
+    for key, part_number, description in OIL_STOCK_FIELDS:
+        previous_qty = max(parse_float(previous.get(key), 0), 0) if previous_closed and previous else 0
+        current_qty = max(parse_float(current.get(key), 0), 0) if current_closed and current else 0
+        delta = round(current_qty - previous_qty, 4)
+        if abs(delta) < 0.0001:
+            continue
+        item = session.scalar(select(FilterInventoryItem).where(FilterInventoryItem.part_key == normalize_part_key(part_number)))
+        if item is None:
+            item = FilterInventoryItem(part_key=normalize_part_key(part_number), part_number=part_number, description=description, quantity=0, unit="L")
+            session.add(item)
+            session.flush()
+        if not item.description:
+            item.description = description
+        item.unit = "L"
+        movement_type = "SALIDA" if delta > 0 else "ENTRADA"
+        qty = abs(delta)
+        if movement_type == "SALIDA":
+            item.quantity = max(parse_float(item.quantity, 0) - qty, 0)
+        else:
+            item.quantity = max(parse_float(item.quantity, 0) + qty, 0)
+        item.updated_at = utc_now()
+        movement = FilterInventoryMovement(
+            item_id=item.id,
+            movement_date=service_date[:10],
+            movement_type=movement_type,
+            quantity=qty,
+            balance_after=item.quantity,
+            reference=reference,
+            equipment_code=equipment_code[:120],
+            service_interval=service_interval[:80],
+            notes="Movimiento automatico por servicio preventivo web",
+            created_by="Portal web",
+            created_at=utc_now(),
+        )
+        session.add(movement)
+
+
 @app.get("/api/preventive-execution")
 def get_preventive_execution() -> dict[str, Any]:
     with SessionLocal() as session:
@@ -11813,11 +11968,13 @@ async def save_preventive_execution_record(request: Request, _auth: str | None =
         snapshot, portal = portal_snapshot_for_preventive_execution_update(session)
         records = [normalize_preventive_execution_record(row) for row in preventive_execution_records(portal) if isinstance(row, dict)]
         index = next((idx for idx, row in enumerate(records) if str(row.get("id") or "") == str(record.get("id") or "")), None)
+        previous_record = records[index] if index is not None else None
         if index is None:
             records.append(record)
         else:
             record["created_at"] = records[index].get("created_at") or record["created_at"]
             records[index] = record
+        apply_preventive_oil_inventory_delta(session, previous=previous_record, current=record, service_id=str(record.get("id") or ""))
         portal["preventive_execution"] = {"records": records}
         portal["updated_at"] = utc_now().isoformat(timespec="seconds")
         portal = enrich_tire_tracking(merge_preventive_execution_into_portal(portal))
@@ -11838,6 +11995,12 @@ async def delete_preventive_execution_record(request: Request, _auth: str | None
         raise HTTPException(status_code=400, detail="Selecciona un registro.")
     with SessionLocal() as session:
         snapshot, portal = portal_snapshot_for_preventive_execution_update(session)
+        previous_record = next(
+            (normalize_preventive_execution_record(row) for row in preventive_execution_records(portal) if isinstance(row, dict) and str(row.get("id") or "") == record_id),
+            None,
+        )
+        if previous_record:
+            apply_preventive_oil_inventory_delta(session, previous=previous_record, current=None, service_id=record_id)
         records = [row for row in preventive_execution_records(portal) if isinstance(row, dict) and str(row.get("id") or "") != record_id]
         history = [
             row for row in (portal.get("service_history") or [])
