@@ -6405,6 +6405,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .exec-alert b { flex:0 0 auto; min-width:82px; color:white; text-align:center; padding:3px 8px; border-radius:999px; font-size:11px; background:var(--teal); }
     .exec-alert.bad b { background:var(--red); }
     .exec-alert.warn b { background:var(--amber); color:#4a2b00; }
+    .profile-hero { display:grid; grid-template-columns:minmax(260px,.82fr) minmax(420px,1.18fr); gap:14px; align-items:stretch; }
+    .profile-card { border:1px solid var(--line); border-radius:12px; background:linear-gradient(135deg,#ffffff,#f8fbff); padding:15px; box-shadow:0 12px 26px rgba(15,23,42,.07); }
+    .profile-card h3 { margin:0 0 8px; color:var(--navy); font-size:24px; }
+    .profile-card p { margin:4px 0; color:#475569; }
+    .profile-badges { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
+    .profile-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border-radius:999px; background:#e0f2fe; color:#075985; font-size:12px; font-weight:900; }
+    .profile-badge.bad { background:#fee2e2; color:#991b1b; }
+    .profile-badge.warn { background:#fef3c7; color:#92400e; }
+    .profile-grid { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:10px; }
+    .profile-metric { min-height:92px; border:1px solid var(--line); border-radius:12px; padding:12px; background:white; box-shadow:0 10px 22px rgba(15,23,42,.06); }
+    .profile-metric strong { display:block; color:var(--blue); font-size:26px; line-height:1; }
+    .profile-metric span { display:block; margin-top:7px; color:#475569; font-size:12px; font-weight:900; text-transform:uppercase; }
+    .profile-section-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+    .profile-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
     .view { display:none; }
     .view.active { display:grid; gap:14px; }
     table { width:100%; border-collapse:separate; border-spacing:0; background:white; }
@@ -6669,9 +6683,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       .print-only { display:block; }
     }
     @media (max-width: 1180px) { .capture-layout { grid-template-columns:1fr; } .latest-captures-panel { position:static; } .latest-captures-wrap { max-height:520px; } }
-    @media (max-width: 1180px) { .exec-alert-grid { grid-template-columns:repeat(3,minmax(120px,1fr)); } }
-    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .exec-alert-grid { grid-template-columns:repeat(2,minmax(120px,1fr)); } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } .tabs { overflow:auto; flex-wrap:nowrap; } .tabs button { flex:0 0 auto; } }
-    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .exec-alert-grid, .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions { display:grid; grid-template-columns:1fr; } .capture-actions .btn { width:100%; } .exec-alert { align-items:flex-start; flex-direction:column; } }
+    @media (max-width: 1180px) { .exec-alert-grid, .profile-grid { grid-template-columns:repeat(3,minmax(120px,1fr)); } .profile-hero, .profile-section-grid { grid-template-columns:1fr; } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .exec-alert-grid, .profile-grid { grid-template-columns:repeat(2,minmax(120px,1fr)); } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } .tabs { overflow:auto; flex-wrap:nowrap; } .tabs button { flex:0 0 auto; } }
+    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .exec-alert-grid, .profile-grid, .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions { display:grid; grid-template-columns:1fr; } .capture-actions .btn { width:100%; } .exec-alert { align-items:flex-start; flex-direction:column; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
   </style>
 </head>
@@ -6699,6 +6713,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <main>
     <nav class="tabs">
       <button class="active" data-tab="dashboard">Dashboard KPI</button>
+      <button data-tab="fichaEquipo">Ficha equipo</button>
       <button data-tab="mensual">Reporte mensual/semanal</button>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="backlog">Backlog</button>
@@ -6758,6 +6773,44 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="kpi-side" id="kpiSideCards"></div>
         </div>
         <div class="table-wrap kpi-report-table"><table id="kpiTable"></table></div>
+      </div>
+    </section>
+    <section id="fichaEquipo" class="view">
+      <div class="panel toolbar">
+        <label>Equipo<select id="fichaEquipment"></select></label>
+        <label>Desde<input id="fichaStart" type="date"></label>
+        <label>Hasta<input id="fichaEnd" type="date"></label>
+        <button class="btn" id="renderFichaBtn">Actualizar ficha</button>
+        <button class="btn secondary" id="fichaGoCaptureBtn">Capturar diario</button>
+        <button class="btn secondary" id="fichaGoServiceBtn">Nuevo preventivo</button>
+      </div>
+      <div class="profile-hero">
+        <div class="profile-card" id="fichaHeader"></div>
+        <div class="profile-grid" id="fichaMetrics"></div>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Alertas del equipo</h3><span class="muted" id="fichaAlertCount"></span></div>
+        <div class="exec-alert-list" id="fichaAlerts"></div>
+      </div>
+      <div class="profile-section-grid">
+        <div class="panel">
+          <div class="subtle-title"><h3>Ultimos servicios</h3><span class="muted" id="fichaServiceCount"></span></div>
+          <div class="table-wrap"><table id="fichaServicesTable"></table></div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Preventivos programados</h3><span class="muted" id="fichaPreventiveCount"></span></div>
+          <div class="table-wrap"><table id="fichaPreventivesTable"></table></div>
+        </div>
+      </div>
+      <div class="profile-section-grid">
+        <div class="panel">
+          <div class="subtle-title"><h3>Capturas recientes</h3><span class="muted" id="fichaCaptureCount"></span></div>
+          <div class="table-wrap"><table id="fichaCapturesTable"></table></div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Refacciones y llantas</h3><span class="muted" id="fichaPartsCount"></span></div>
+          <div class="table-wrap"><table id="fichaPartsTable"></table></div>
+        </div>
       </div>
     </section>
     <section id="mensual" class="view">
@@ -7972,6 +8025,92 @@ WAREHOUSE_HTML = r"""<!doctype html>
         activateTab(card.dataset.execTab);
       }));
     }
+    function selectedFichaCode(){
+      return $("fichaEquipment")?.value || portalEquipment()[0]?.code || portalEquipment()[0]?.equipment_code || "";
+    }
+    function rowEquipmentCode(row){
+      return String(row?.equipment_code || row?.equipment || row?.code || "").trim();
+    }
+    function rowsForEquipment(rows, code){
+      const wanted = normalizedText(code);
+      return (Array.isArray(rows) ? rows : []).filter(row => normalizedText(rowEquipmentCode(row)) === wanted);
+    }
+    function renderEquipmentProfile(){
+      const code = selectedFichaCode();
+      const start = $("fichaStart").value || $("kpiStart").value || (portal.period || {}).start || toIsoDate(new Date());
+      const end = $("fichaEnd").value || $("kpiEnd").value || (portal.period || {}).end || start;
+      if(!code){
+        $("fichaHeader").innerHTML = `<h3>Ficha equipo</h3><p class="muted">No hay equipos cargados.</p>`;
+        ["fichaMetrics","fichaAlerts","fichaServicesTable","fichaPreventivesTable","fichaCapturesTable","fichaPartsTable"].forEach(id => $(id).innerHTML = "");
+        return;
+      }
+      const eq = portalEquipment().find(item => normalizedText(item.code || item.equipment_code) === normalizedText(code)) || {};
+      const captures = rowsForEquipment(portal.captures || [], code).filter(row => !row.work_date || inRange(row.work_date, start, end)).sort((a,b) => String(b.work_date || "").localeCompare(String(a.work_date || "")));
+      const services = rowsForEquipment(portal.service_history || [], code).filter(row => !row.completed_date || inRange(row.completed_date, start, end)).sort((a,b) => String(b.completed_date || "").localeCompare(String(a.completed_date || "")));
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []).filter(row => normalizedText(row.equipment_code) === normalizedText(code)).sort((a,b) => Number(a.hours_remaining || 999999) - Number(b.hours_remaining || 999999));
+      const spareRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code);
+      const tireRows = rowsForEquipment((portal.tire_kpi || {}).rows || [], code);
+      const oilReport = oilRowsForRange(start, end);
+      const oilRow = (oilReport.rows || []).find(row => normalizedText(row.code) === normalizedText(code)) || {};
+      const mp = captures.reduce((sum,row) => sum + Number(row.mp_hours || 0), 0);
+      const mc = captures.reduce((sum,row) => sum + Number(row.mc_hours || 0), 0);
+      const worked = captures.reduce((sum,row) => sum + Number(row.worked_hours || 0), 0);
+      const stops = captures.reduce((sum,row) => sum + Number(row.stops || 0), 0);
+      const noDisp = captures.filter(row => unavailable(row.status)).length;
+      const overdue = preventives.filter(row => ["VENCIDO","URGENTE"].includes(String(row.status || "").toUpperCase()));
+      const spareShort = spareRows.filter(row => ["FALTANTE","SIN INVENTARIO"].includes(String(row.inventory_status || "").toUpperCase()));
+      const tireCritical = tireRows.filter(row => ["CRITICA","PROXIMA"].includes(String(row.control_status || "").toUpperCase()));
+      const lastCapture = captures[0] || {};
+      $("fichaHeader").innerHTML = `
+        <h3>${esc(code)}</h3>
+        <p><b>${esc(eq.description || eq.family || "Equipo sin descripcion")}</b></p>
+        <p>Periodo: ${esc(start)} a ${esc(end)}</p>
+        <p>Ultima captura: ${esc(lastCapture.work_date || "S/D")} ${esc(lastCapture.status || "")}</p>
+        <div class="profile-badges">
+          <span class="profile-badge ${noDisp ? "bad" : ""}">${noDisp ? "Revision disponibilidad" : "Operacion OK"}</span>
+          <span class="profile-badge ${overdue.length ? "bad" : ""}">${overdue.length} PM critico(s)</span>
+          <span class="profile-badge ${spareShort.length ? "warn" : ""}">${spareShort.length} refaccion(es) alerta</span>
+        </div>
+        <div class="profile-actions">
+          <button class="btn secondary" type="button" data-profile-tab="captura">Captura diaria</button>
+          <button class="btn secondary" type="button" data-profile-tab="ejecucionPreventivos">Servicio preventivo</button>
+          <button class="btn secondary" type="button" data-profile-tab="refacciones">Refacciones</button>
+          <button class="btn secondary" type="button" data-profile-tab="llantasTrack">Llantas</button>
+        </div>`;
+      $("fichaMetrics").innerHTML = [
+        ["Hrs trabajadas", one(worked)],
+        ["Hrs MP", one(mp)],
+        ["Hrs MC", one(mc)],
+        ["Paradas", stops],
+        ["Aceites L", one(oilRow.total_liters || 0)],
+        ["Servicios", services.length],
+      ].map(([label,value]) => `<div class="profile-metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("");
+      const alerts = [
+        ...overdue.slice(0,4).map(row => ({tone:"bad", label:"PM", text:`${row.service_interval || ""} ${row.component || ""}: ${row.status || ""}, faltan ${one(row.hours_remaining || 0)} h`})),
+        ...spareShort.slice(0,4).map(row => ({tone:"warn", label:"Stock", text:`${row.description || row.part_number || ""}: ${row.inventory_status || ""}`})),
+        ...tireCritical.slice(0,4).map(row => ({tone:"warn", label:"Llanta", text:`${row.tire_code || ""} pos. ${row.position || ""}: ${row.control_status || ""}`})),
+        ...captures.filter(row => unavailable(row.status)).slice(0,3).map(row => ({tone:"bad", label:"Disp.", text:`${row.work_date || ""}: ${row.status || ""} ${row.fault || ""}`})),
+      ];
+      $("fichaAlertCount").textContent = `${alerts.length} alerta(s)`;
+      $("fichaAlerts").innerHTML = alerts.length ? alerts.map(alert => `<div class="exec-alert ${alert.tone === "bad" ? "bad" : "warn"}"><b>${esc(alert.label)}</b><span>${esc(alert.text)}</span></div>`).join("") : `<div class="exec-alert"><b>OK</b><span>Sin alertas principales para este equipo.</span></div>`;
+      $("fichaServiceCount").textContent = `${services.length} servicio(s)`;
+      $("fichaServicesTable").innerHTML = `<thead><tr><th>Fecha</th><th>Servicio</th><th>Componente</th><th>Horometro</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>` +
+        (services.slice(0,30).map(row => `<tr><td>${esc(row.completed_date || "")}</td><td>${esc([row.service_name,row.service_interval].filter(Boolean).join(" / "))}</td><td>${esc(row.component || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${esc(row.status || "")}</td><td>${esc(shortText(row.notes || serviceOilsText(row) || serviceFiltersText(row), 120))}</td></tr>`).join("") || `<tr><td colspan="6">Sin servicios en el periodo.</td></tr>`) + `</tbody>`;
+      $("fichaPreventiveCount").textContent = `${preventives.length} preventivo(s)`;
+      $("fichaPreventivesTable").innerHTML = `<thead><tr><th>Servicio</th><th>Componente</th><th>Ultimo</th><th>Proximo</th><th>Hrs rest.</th><th>Estado</th></tr></thead><tbody>` +
+        (preventives.slice(0,30).map(row => `<tr><td>${esc(row.service_interval || row.service_name || "")}</td><td>${esc(row.component || "")}</td><td>${one(row.last_service_meter || 0)}</td><td>${one(row.next_service_meter || 0)}</td><td>${one(row.hours_remaining || 0)}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status || "")}</span></td></tr>`).join("") || `<tr><td colspan="6">Sin preventivos programados.</td></tr>`) + `</tbody>`;
+      $("fichaCaptureCount").textContent = `${captures.length} captura(s)`;
+      $("fichaCapturesTable").innerHTML = `<thead><tr><th>Fecha</th><th>Turno</th><th>Comp.</th><th>HI</th><th>HF</th><th>Trab.</th><th>MP</th><th>MC</th><th>Estatus</th><th>Falla</th></tr></thead><tbody>` +
+        (captures.slice(0,40).map(row => `<tr><td>${esc(row.work_date || "")}</td><td>${esc(row.shift || "")}</td><td>${esc(row.component || row.component_name || "")}</td><td>${one(row.hi || 0)}</td><td>${one(row.hf || 0)}</td><td>${one(row.worked_hours || 0)}</td><td>${one(row.mp_hours || 0)}</td><td>${one(row.mc_hours || 0)}</td><td>${esc(row.status || "")}</td><td>${esc(shortText(row.fault || row.observations || "", 80))}</td></tr>`).join("") || `<tr><td colspan="10">Sin capturas en el periodo.</td></tr>`) + `</tbody>`;
+      const partRows = [
+        ...spareRows.slice(0,25).map(row => ({kind:"Refaccion", code:row.part_number || row.equivalent_part || "", desc:row.description || "", status:row.inventory_status || "", extra:`Req. ${one(row.quantity || 0)} / Disp. ${row.available == null ? "S/D" : one(row.available)}`})),
+        ...tireRows.slice(0,20).map(row => ({kind:"Llanta", code:row.tire_code || "", desc:`Pos. ${row.position || ""} ${row.brand || ""}`, status:row.control_status || row.status || "", extra:`Vida ${one(row.remaining_hours || 0)} h`})),
+      ];
+      $("fichaPartsCount").textContent = `${partRows.length} registro(s)`;
+      $("fichaPartsTable").innerHTML = `<thead><tr><th>Tipo</th><th>Codigo</th><th>Descripcion</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>` +
+        (partRows.map(row => `<tr><td>${esc(row.kind)}</td><td>${esc(row.code)}</td><td>${esc(shortText(row.desc, 100))}</td><td>${esc(row.status)}</td><td>${esc(row.extra)}</td></tr>`).join("") || `<tr><td colspan="5">Sin refacciones o llantas relacionadas.</td></tr>`) + `</tbody>`;
+      document.querySelectorAll("[data-profile-tab]").forEach(button => button.addEventListener("click", () => activateTab(button.dataset.profileTab)));
+    }
     function renderSelectors(){
       const current = $("equipmentSelect").value;
       $("equipmentSelect").innerHTML = (data.equipment || []).map(e => `<option value="${esc(e.code)}">${esc(e.code)} - ${esc(e.description || e.family || "")}</option>`).join("");
@@ -8522,6 +8661,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
       if(!$("kpiStart").value) $("kpiStart").value = period.start || today;
       if(!$("kpiEnd").value) $("kpiEnd").value = period.end || today;
+      if(!$("fichaStart").value) $("fichaStart").value = period.start || today;
+      if(!$("fichaEnd").value) $("fichaEnd").value = period.end || today;
       initializeKpiSimulationSettings();
       if(!$("prBase").value) $("prBase").value = period.start || today;
       if(!$("backlogStart").value) $("backlogStart").value = period.start || today;
@@ -8548,6 +8689,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("kpiGroup").innerHTML = groups.map(g => `<option value="${esc(g.value)}">${esc(g.label)}</option>`).join("");
       $("kpiGroup").value = previousGroup && groups.some(g => g.value === previousGroup) ? previousGroup : groups[0]?.value || "";
       const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
+      setOptions("fichaEquipment", equipmentOptions, "Selecciona");
+      if(!$("fichaEquipment").value && equipmentOptions.length) $("fichaEquipment").value = equipmentOptions[0].value;
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("prevExecEquipment", equipmentOptions, "Selecciona");
@@ -11112,6 +11255,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderSelectors();
       renderPortalSelectors();
       renderExecutiveBoard();
+      renderEquipmentProfile();
       renderDashboard();
       renderPreventives();
       renderBacklog();
@@ -11135,6 +11279,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
       activateTab(btn.dataset.tab);
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
+    ["fichaEquipment","fichaStart","fichaEnd"].forEach(id => $(id).addEventListener("change", renderEquipmentProfile));
+    $("renderFichaBtn").addEventListener("click", renderEquipmentProfile);
+    $("fichaGoCaptureBtn").addEventListener("click", () => {
+      const code = selectedFichaCode();
+      if(code) $("capEquipment").value = code;
+      renderCaptureComponents();
+      applyPreviousHi(true);
+      activateTab("captura");
+    });
+    $("fichaGoServiceBtn").addEventListener("click", () => {
+      const code = selectedFichaCode();
+      resetPreventiveExecutionForm();
+      if(code) $("prevExecEquipment").value = code;
+      activateTab("ejecucionPreventivos");
+    });
     ["kpiSimEnabled","kpiSimName","kpiSimMetaAvailability","kpiSimMetaUtilization","kpiSimMetaReliability","kpiSimMetaTmef","kpiSimMetaTmpr","kpiSimPeriod","kpiSimWorked","kpiSimMp","kpiSimMc","kpiSimStops","kpiSimMission"].forEach(id => {
       const el = $(id);
       if(!el) return;
