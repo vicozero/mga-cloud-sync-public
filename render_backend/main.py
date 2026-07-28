@@ -1626,6 +1626,109 @@ def enrich_tire_tracking(portal: dict[str, Any]) -> dict[str, Any]:
     return portal
 
 
+PREVENTIVE_SERVICE_HOURS = {"PM1": 250, "PM2": 500, "PM3": 750, "PM4": 1000}
+PREVENTIVE_CLOSED_STATUSES = {"CERRADO", "CERRADA", "TERMINADO", "TERMINADA", "FINALIZADO", "FINALIZADA"}
+
+
+def preventive_execution_records(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = portal.get("preventive_execution") if isinstance(portal.get("preventive_execution"), dict) else {}
+    records = payload.get("records") if isinstance(payload, dict) else []
+    return records if isinstance(records, list) else []
+
+
+def normalize_preventive_execution_record(row: dict[str, Any]) -> dict[str, Any]:
+    now = utc_now().isoformat(timespec="seconds")
+    service_type = normalize_text(row.get("service_type") or "PM1")[:12] or "PM1"
+    if service_type not in PREVENTIVE_SERVICE_HOURS:
+        service_type = service_type.replace(" ", "").upper()[:12] or "PM1"
+    status = normalize_text(row.get("status") or "ABIERTO")[:30] or "ABIERTO"
+    equipment_code = str(row.get("equipment_code") or row.get("equipment") or "").strip()[:120]
+    record_id = str(row.get("id") or "").strip()
+    if not record_id:
+        record_id = f"WEB-PM-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    normalized = {
+        "id": record_id[:80],
+        "service_date": str(row.get("service_date") or row.get("date") or utc_now().date().isoformat())[:10],
+        "close_date": str(row.get("close_date") or "")[:10],
+        "equipment_code": equipment_code,
+        "equipment_description": str(row.get("equipment_description") or "")[:220],
+        "supervisor": str(row.get("supervisor") or "").strip()[:180],
+        "mechanic": str(row.get("mechanic") or "").strip()[:180],
+        "service_type": service_type,
+        "attribute_type": str(row.get("attribute_type") or "").strip()[:120],
+        "status": status,
+        "completed_meter": parse_float(row.get("completed_meter"), 0),
+        "parts_used": str(row.get("parts_used") or "").strip(),
+        "lubricants_used": str(row.get("lubricants_used") or "").strip(),
+        "notes": str(row.get("notes") or "").strip(),
+        "source": str(row.get("source") or "web")[:40],
+        "created_at": str(row.get("created_at") or now)[:40],
+        "updated_at": now,
+    }
+    if normalized["status"] in PREVENTIVE_CLOSED_STATUSES and not normalized["close_date"]:
+        normalized["close_date"] = normalized["service_date"]
+    if normalized["status"] not in PREVENTIVE_CLOSED_STATUSES:
+        normalized["close_date"] = ""
+    return normalized
+
+
+def preventive_record_to_service_history(row: dict[str, Any], equipment_lookup: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    service_type = normalize_text(row.get("service_type") or "PM") or "PM"
+    equipment_code = str(row.get("equipment_code") or "")
+    equipment = equipment_lookup.get(equipment_code) or {}
+    description = row.get("equipment_description") or equipment.get("description") or equipment.get("family") or ""
+    people = [row.get("supervisor"), row.get("mechanic")]
+    detail = " | ".join([f"{label}: {value}" for label, value in (("Supervisor", people[0]), ("Mecanico", people[1])) if value])
+    if row.get("notes"):
+        detail = f"{detail} | {row.get('notes')}" if detail else str(row.get("notes"))
+    return {
+        "web_id": row.get("id"),
+        "completed_date": row.get("close_date") or row.get("service_date") or "",
+        "service_date": row.get("service_date") or "",
+        "service_type": "Programado",
+        "stage": service_type,
+        "equipment_code": equipment_code,
+        "equipment_description": description,
+        "component": row.get("attribute_type") or "Preventivo",
+        "service_name": service_type,
+        "service_interval": service_type,
+        "scheduled_meter": "",
+        "completed_meter": row.get("completed_meter") or 0,
+        "due_date": "",
+        "status": "A TIEMPO",
+        "order_number": "",
+        "document_name": "Registro web preventivo",
+        "filters_text": row.get("parts_used") or "",
+        "oils_used": row.get("lubricants_used") or "",
+        "notes": detail,
+        "source": "preventive_execution_web",
+    }
+
+
+def merge_preventive_execution_into_portal(portal: dict[str, Any]) -> dict[str, Any]:
+    records = [normalize_preventive_execution_record(row) for row in preventive_execution_records(portal) if isinstance(row, dict)]
+    records.sort(key=lambda row: (str(row.get("service_date") or ""), str(row.get("id") or "")), reverse=True)
+    portal["preventive_execution"] = {"records": records[:1000]}
+    equipment_lookup: dict[str, dict[str, Any]] = {}
+    for equipment in portal.get("equipment") or []:
+        if isinstance(equipment, dict):
+            code = str(equipment.get("code") or equipment.get("equipment_code") or "")
+            if code:
+                equipment_lookup[code] = equipment
+    raw_history = portal.get("service_history") if isinstance(portal.get("service_history"), list) else []
+    history = [
+        row for row in raw_history
+        if not (isinstance(row, dict) and str(row.get("source") or "") == "preventive_execution_web")
+    ]
+    closed_records = [
+        row for row in records
+        if normalize_text(row.get("status")) in PREVENTIVE_CLOSED_STATUSES
+    ]
+    additions = [preventive_record_to_service_history(row, equipment_lookup) for row in closed_records]
+    portal["service_history"] = additions + history
+    return portal
+
+
 def portal_fallback_payload(session: Session) -> dict[str, Any]:
     catalog = latest_catalog_payload(session)
     equipment = catalog.get("equipment") if isinstance(catalog, dict) else []
@@ -1653,6 +1756,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         "equipment": equipment,
         "preventives": [],
         "service_history": [],
+        "preventive_execution": {"records": []},
         "captures": captures,
         "availability": [],
         "kpi_groups": ["Todos los equipos", "Equipos de Barrenacion", "Equipos de Rezagado", "Acarreo", "Equipo Utilitario", "KPI Aceites", "KPI Llantas"],
@@ -1679,6 +1783,8 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("captures", [])
     payload.setdefault("availability", [])
     payload.setdefault("preventives", [])
+    payload.setdefault("service_history", [])
+    payload.setdefault("preventive_execution", {"records": []})
     payload.setdefault("kpi_groups", [])
     payload.setdefault("kpi_reports", {})
     payload.setdefault("oil_kpi", {"rows": [], "totals": {}, "columns": []})
@@ -1686,7 +1792,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("tire_tracking", {"events": []})
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
-    return enrich_tire_tracking(merge_mobile_captures_into_portal(session, payload))
+    return enrich_tire_tracking(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload)))
 
 
 def diesel_iso_or_none(value: Any) -> str | None:
@@ -6459,6 +6565,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="backlog">Backlog</button>
       <button data-tab="servicios">Servicios realizados</button>
+      <button data-tab="ejecucionPreventivos">Ejecucion preventivos</button>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="captura">Captura diaria</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
@@ -6577,7 +6684,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     <section id="servicios" class="view">
       <div class="panel toolbar">
         <label>Equipo<select id="srvEquipment"></select></label>
-        <label>Servicio<select id="srvInterval"><option value="">Todos</option><option>250H</option><option>500H</option><option>750H</option><option>1000H</option></select></label>
+        <label>Servicio<select id="srvInterval"><option value="">Todos</option><option>PM1</option><option>PM2</option><option>PM3</option><option>PM4</option><option>250H</option><option>500H</option><option>750H</option><option>1000H</option></select></label>
         <label>Tipo<select id="srvType"><option value="">Todos</option><option>Programado</option><option>No programado</option></select></label>
         <label>Desde<input id="srvStart" type="date"></label>
         <label>Hasta<input id="srvEnd" type="date"></label>
@@ -6589,6 +6696,44 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="stats" id="srvStats"></div>
       </div>
       <div class="table-wrap"><table id="srvTable"></table></div>
+    </section>
+    <section id="ejecucionPreventivos" class="view">
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Actualizar servicios preventivos</h3><span class="muted" id="prevExecStatus"></span></div>
+          <p class="muted">Los servicios abiertos quedan pendientes. Solo cuando el estatus sea Cerrado se reflejan en Servicios realizados y se usan para el siguiente preventivo.</p>
+          <div class="capture-form-grid">
+            <div class="capture-section-title">Datos del servicio</div>
+            <input id="prevExecId" type="hidden">
+            <label>Fecha servicio<input id="prevExecDate" type="date"></label>
+            <label>Equipo<select id="prevExecEquipment"></select></label>
+            <label>Supervisor<input id="prevExecSupervisor" placeholder="Supervisor"></label>
+            <label>Mecanico<input id="prevExecMechanic" placeholder="Mecanico"></label>
+            <label>Tipo servicio<select id="prevExecServiceType"><option>PM1</option><option>PM2</option><option>PM3</option><option>PM4</option></select></label>
+            <label>Tipo de atributo<select id="prevExecAttribute"><option>GENERAL</option><option>MOTOR</option><option>ELECT</option><option>DIESEL</option><option>HIDRAULICO</option><option>TRANSMISION</option><option>LLANTAS</option><option>FRENOS</option><option>OTRO</option></select></label>
+            <label>Horometro cierre<input id="prevExecMeter" type="number" step="0.1" min="0" value="0"></label>
+            <label>Estatus<select id="prevExecState"><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
+            <label class="wide">Refacciones usadas<textarea id="prevExecParts" rows="3" placeholder="Ej. filtro aceite 1 pza; banda alternador 1 pza"></textarea></label>
+            <label class="wide">Lubricantes<textarea id="prevExecLubricants" rows="3" placeholder="Ej. 15W40: 20 L; Refrigerante: 5 L"></textarea></label>
+            <label class="wide">Observaciones<textarea id="prevExecNotes" rows="3" placeholder="Trabajo realizado, pendientes o condicion encontrada"></textarea></label>
+          </div>
+          <div class="req-actions capture-actions">
+            <button class="btn secondary" id="prevExecNewBtn">Nuevo</button>
+            <button class="btn" id="prevExecSaveBtn">Guardar</button>
+            <button class="btn secondary" id="prevExecCloseBtn">Cerrar servicio</button>
+            <button class="btn danger" id="prevExecDeleteBtn">Eliminar</button>
+            <button class="btn secondary" id="prevExecViewHistoryBtn">Ver servicios realizados</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Servicios abiertos</h3><span class="muted" id="prevExecOpenCount"></span></div>
+          <div class="table-wrap"><table id="prevExecOpenTable"></table></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Historial preventivo web</h3><span class="muted" id="prevExecClosedCount"></span></div>
+      </div>
+      <div class="table-wrap"><table id="prevExecClosedTable"></table></div>
     </section>
     <section id="bitacora" class="view">
       <div class="panel toolbar">
@@ -7069,7 +7214,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], service_history: [], parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], preventive_execution: {records: []}, parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
     let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
@@ -7087,6 +7232,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentDieselRecord = null;
     let currentCaptureRecord = null;
     let currentCaptureRows = [];
+    let currentPreventiveExecutionRecord = null;
     let selectedKpiMetric = "availability";
     let monthlyPeriodInitialized = false;
     let kpiSimulationInitialized = false;
@@ -8167,6 +8313,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("backlogEnd").value) $("backlogEnd").value = period.end || today;
       if(!$("srvStart").value) $("srvStart").value = period.capture_start || period.start || today;
       if(!$("srvEnd").value) $("srvEnd").value = period.capture_end || period.end || today;
+      if(!$("prevExecDate").value) $("prevExecDate").value = today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
       if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
       if(!$("auditStart").value) $("auditStart").value = period.start || today;
@@ -8188,6 +8335,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
       setOptions("prEquipment", equipmentOptions, "Todos");
       setOptions("srvEquipment", equipmentOptions, "Todos");
+      setOptions("prevExecEquipment", equipmentOptions, "Selecciona");
       setOptions("bitEquipment", equipmentOptions, "Todos");
       setOptions("spareEquipment", equipmentOptions, "Todos");
       const auditModules = [...new Set((portal.audit_log || []).map(row => row.module).filter(Boolean))].sort();
@@ -8957,11 +9105,51 @@ WAREHOUSE_HTML = r"""<!doctype html>
         report.rows.map(row => `<tr><td>${esc(row.code)}</td><td>${esc(row.description)}</td><td>${one(row.period)}</td><td>${one(row.mp)}</td><td>${one(row.mc)}</td><td>${one(row.worked)}</td><td>${num(row.stops)}</td><td>${esc(row.availabilityText)}</td><td>${esc(row.utilizationText)}</td><td>${pct(row.reliability)}</td><td>${one(row.tmef)}</td><td>${one(row.tmpr)}</td><td>${esc(row.out ? "FUERA" : row.status)}</td></tr>`).join("") +
         `<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${pct(report.totals.reliability)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody>`;
     }
+    const preventiveServiceHours = {PM1:250, PM2:500, PM3:750, PM4:1000};
+    const preventiveClosedStates = new Set(["CERRADO","CERRADA","TERMINADO","TERMINADA","FINALIZADO","FINALIZADA"]);
+    function preventiveExecutionRows(){
+      const payload = portal.preventive_execution || {};
+      return Array.isArray(payload.records) ? payload.records : [];
+    }
+    function isPreventiveClosed(row){
+      return preventiveClosedStates.has(String(row.status || "").toUpperCase());
+    }
+    function preventiveIntervalHours(value){
+      const text = String(value || "").toUpperCase().replace(/\s+/g, "");
+      if(preventiveServiceHours[text]) return preventiveServiceHours[text];
+      const match = text.match(/(\d+)/);
+      return match ? Number(match[1]) : 0;
+    }
+    function preventiveRowsWithWebClosures(rows){
+      const closed = preventiveExecutionRows().filter(isPreventiveClosed);
+      if(!closed.length) return rows;
+      return rows.map(row => {
+        const code = row.equipment_code || "";
+        const service = String(row.service_interval || row.service_name || "").toUpperCase().replace(/\s+/g, "");
+        const interval = preventiveIntervalHours(service || row.service_interval || row.service_name);
+        const match = closed
+          .filter(item => {
+            const itemService = String(item.service_type || "").toUpperCase().replace(/\s+/g, "");
+            return item.equipment_code === code && (!service || itemService === service || preventiveServiceHours[itemService] === interval);
+          })
+          .sort((a,b) => String(b.close_date || b.service_date || "").localeCompare(String(a.close_date || a.service_date || "")) || Number(b.completed_meter || 0) - Number(a.completed_meter || 0))[0];
+        if(!match || !Number(match.completed_meter || 0)) return row;
+        const current = Number(row.current_meter || 0);
+        const next = Number(match.completed_meter || 0) + (interval || preventiveServiceHours[String(match.service_type || "").toUpperCase()] || 0);
+        if(!next || next <= Number(row.next_service_meter || 0)) return row;
+        const updated = {...row, last_service_meter:Number(match.completed_meter || 0), next_service_meter:next, hours_remaining:next-current, last_web_service_date:match.close_date || match.service_date || ""};
+        if(updated.hours_remaining < 0) updated.status = "VENCIDO";
+        else if(updated.hours_remaining <= Math.max((interval || 250) * 0.1, 25)) updated.status = "URGENTE";
+        else if(updated.hours_remaining <= Math.max((interval || 250) * 0.25, 50)) updated.status = "PROXIMO";
+        else updated.status = "PROGRAMADO";
+        return updated;
+      });
+    }
     function filteredPreventives(){
       const [start, end] = periodRange($("prPeriod").value, $("prBase").value);
       const selected = $("prEquipment").value;
       const search = ($("prSearch").value || "").toUpperCase();
-      const rows = (portal.preventives || []).filter(row => {
+      const rows = preventiveRowsWithWebClosures(portal.preventives || []).filter(row => {
         const dateOk = inRange(row.projected_date, start, end) || ["VENCIDO", "URGENTE"].includes(String(row.status || "").toUpperCase());
         const eqOk = !selected || row.equipment_code === selected;
         const text = [row.equipment_code,row.equipment_description,row.component,row.meter_type,row.status].join(" ").toUpperCase();
@@ -9158,6 +9346,108 @@ WAREHOUSE_HTML = r"""<!doctype html>
           return `<tr><td>${esc(row.completed_date || "")}</td><td>${esc(row.service_type || "Programado")}</td><td>${esc(row.stage || "Cerrado")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.equipment_description || "")}</td><td>${esc(row.component || "")}</td><td>${esc(service)}</td><td>${esc(meter(row.scheduled_meter))}</td><td>${esc(meter(row.completed_meter))}</td><td>${esc(row.due_date || "")}</td><td><span class="pill ${cls}">${esc(status || "SIN FECHA")}</span></td><td>${esc(row.order_number || "")}</td><td>${esc(documentText)}</td><td>${esc(shortText(serviceFiltersText(row), 100))}</td><td>${esc(shortText(serviceOilsText(row), 100))}</td><td>${esc(shortText(row.notes || ""))}</td></tr>`;
         }).join("") +
         `</tbody>`;
+    }
+    function resetPreventiveExecutionForm(){
+      currentPreventiveExecutionRecord = null;
+      $("prevExecId").value = "";
+      $("prevExecDate").value = toIsoDate(new Date());
+      if(!$("prevExecEquipment").value && $("prevExecEquipment").options.length > 1) $("prevExecEquipment").selectedIndex = 1;
+      $("prevExecSupervisor").value = "";
+      $("prevExecMechanic").value = "";
+      $("prevExecServiceType").value = "PM1";
+      $("prevExecAttribute").value = "GENERAL";
+      $("prevExecMeter").value = "0";
+      $("prevExecState").value = "ABIERTO";
+      $("prevExecParts").value = "";
+      $("prevExecLubricants").value = "";
+      $("prevExecNotes").value = "";
+      $("prevExecStatus").textContent = "";
+    }
+    function preventiveExecutionPayload(){
+      const equipmentCode = $("prevExecEquipment").value || "";
+      const equipment = portalEquipment().find(item => (item.code || item.equipment_code || "") === equipmentCode) || {};
+      return {
+        id: $("prevExecId").value || "",
+        service_date: $("prevExecDate").value || toIsoDate(new Date()),
+        equipment_code: equipmentCode,
+        equipment_description: equipment.description || equipment.family || "",
+        supervisor: $("prevExecSupervisor").value.trim(),
+        mechanic: $("prevExecMechanic").value.trim(),
+        service_type: $("prevExecServiceType").value,
+        attribute_type: $("prevExecAttribute").value,
+        completed_meter: Number($("prevExecMeter").value || 0),
+        status: $("prevExecState").value,
+        parts_used: $("prevExecParts").value.trim(),
+        lubricants_used: $("prevExecLubricants").value.trim(),
+        notes: $("prevExecNotes").value.trim(),
+      };
+    }
+    function fillPreventiveExecutionForm(row){
+      currentPreventiveExecutionRecord = row || null;
+      $("prevExecId").value = row.id || "";
+      $("prevExecDate").value = row.service_date || row.close_date || toIsoDate(new Date());
+      $("prevExecEquipment").value = row.equipment_code || "";
+      $("prevExecSupervisor").value = row.supervisor || "";
+      $("prevExecMechanic").value = row.mechanic || "";
+      $("prevExecServiceType").value = row.service_type || "PM1";
+      $("prevExecAttribute").value = row.attribute_type || "GENERAL";
+      $("prevExecMeter").value = Number(row.completed_meter || 0);
+      $("prevExecState").value = row.status || "ABIERTO";
+      $("prevExecParts").value = row.parts_used || "";
+      $("prevExecLubricants").value = row.lubricants_used || "";
+      $("prevExecNotes").value = row.notes || "";
+      $("prevExecStatus").textContent = `Editando ${row.id || ""}`;
+      document.querySelector('[data-tab="ejecucionPreventivos"]')?.click();
+    }
+    function renderPreventiveExecution(){
+      const rows = preventiveExecutionRows().slice().sort((a,b) => String(b.service_date || "").localeCompare(String(a.service_date || "")) || String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+      const open = rows.filter(row => !isPreventiveClosed(row) && String(row.status || "").toUpperCase() !== "CANCELADO");
+      const closed = rows.filter(isPreventiveClosed);
+      $("prevExecOpenCount").textContent = `${open.length} abierto(s)`;
+      $("prevExecClosedCount").textContent = `${closed.length} cerrado(s)`;
+      const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="8">Sin servicios preventivos abiertos.</td></tr>`;
+      $("prevExecOpenTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
+      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="8">Sin servicios cerrados desde esta pestaña.</td></tr>`;
+      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Fecha cierre</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Horometro</th><th>Refacciones</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
+      document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
+        const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
+        if(record) fillPreventiveExecutionForm(record);
+      }));
+    }
+    async function savePreventiveExecution(close=false){
+      if(!hasApiKey()) return;
+      const payload = preventiveExecutionPayload();
+      if(close) payload.status = "CERRADO";
+      if(!payload.equipment_code) return alert("Selecciona un equipo.");
+      if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. ¿Guardar asi?")) return;
+      const response = await fetch("/api/preventive-execution/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(result.portal) portal = result.portal;
+      renderPortalSelectors();
+      renderPreventiveExecution();
+      renderServiceHistory();
+      renderPreventives();
+      renderBacklog();
+      $("prevExecStatus").textContent = close ? "Servicio cerrado y enviado a Servicios realizados." : "Servicio guardado.";
+      if(result.record) fillPreventiveExecutionForm(result.record);
+    }
+    async function deletePreventiveExecution(){
+      if(!hasApiKey()) return;
+      const id = $("prevExecId").value || (currentPreventiveExecutionRecord || {}).id || "";
+      if(!id) return alert("Selecciona un servicio para eliminar.");
+      if(!confirm("¿Eliminar este servicio preventivo? Si ya estaba cerrado tambien se retirara de Servicios realizados.")) return;
+      const response = await fetch("/api/preventive-execution/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(result.portal) portal = result.portal;
+      renderPortalSelectors();
+      renderPreventiveExecution();
+      renderServiceHistory();
+      renderPreventives();
+      renderBacklog();
+      resetPreventiveExecutionForm();
+      $("prevExecStatus").textContent = "Servicio eliminado.";
     }
     function renderSpareParts(){
       const payload = portal.parts_manuals || {rows: [], summary: {}};
@@ -10522,6 +10812,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderPreventives();
       renderBacklog();
       renderServiceHistory();
+      renderPreventiveExecution();
       renderAudit();
       renderBitacora();
       renderCaptureRecent();
@@ -10565,6 +10856,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
     $("srvSearch").addEventListener("input", renderServiceHistory);
     $("renderSrvBtn").addEventListener("click", renderServiceHistory);
+    $("prevExecNewBtn").addEventListener("click", resetPreventiveExecutionForm);
+    $("prevExecSaveBtn").addEventListener("click", () => savePreventiveExecution(false).catch(showError));
+    $("prevExecCloseBtn").addEventListener("click", () => savePreventiveExecution(true).catch(showError));
+    $("prevExecDeleteBtn").addEventListener("click", () => deletePreventiveExecution().catch(showError));
+    $("prevExecViewHistoryBtn").addEventListener("click", () => document.querySelector('[data-tab="servicios"]')?.click());
     ["spareEquipment","spareStatus"].forEach(id => $(id).addEventListener("change", renderSpareParts));
     $("spareSearch").addEventListener("input", renderSpareParts);
     $("renderSpareBtn").addEventListener("click", renderSpareParts);
@@ -11441,6 +11737,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
         if "service_history" not in payload and isinstance(previous_payload.get("service_history"), list):
             payload["service_history"] = previous_payload["service_history"]
+        if "preventive_execution" not in payload and isinstance(previous_payload.get("preventive_execution"), dict):
+            payload["preventive_execution"] = previous_payload["preventive_execution"]
         if "parts_manuals" not in payload and isinstance(previous_payload.get("parts_manuals"), dict):
             payload["parts_manuals"] = previous_payload["parts_manuals"]
         if "audit_log" not in payload and isinstance(previous_payload.get("audit_log"), list):
@@ -11449,7 +11747,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             payload["backlog"] = previous_payload["backlog"]
         if "tire_tracking" not in payload and isinstance(previous_payload.get("tire_tracking"), dict):
             payload["tire_tracking"] = previous_payload["tire_tracking"]
-        payload = enrich_tire_tracking(payload)
+        payload = enrich_tire_tracking(merge_preventive_execution_into_portal(payload))
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
@@ -11462,6 +11760,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "captures": len(captures),
         "preventives": len(preventives),
         "service_history": len(payload.get("service_history") or []) if isinstance(payload.get("service_history"), list) else 0,
+        "preventive_execution": len((payload.get("preventive_execution") or {}).get("records") or []) if isinstance(payload.get("preventive_execution"), dict) else 0,
         "parts_manuals": len((payload.get("parts_manuals") or {}).get("rows") or []) if isinstance(payload.get("parts_manuals"), dict) else 0,
         "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
@@ -11473,6 +11772,85 @@ def next_tire_event_id(events: list[dict[str, Any]]) -> int:
     for event in events:
         current = max(current, int(parse_float(event.get("id"), 0) or 0))
     return current + 1
+
+
+def portal_snapshot_for_preventive_execution_update(session: Session) -> tuple[PortalSnapshot, dict[str, Any]]:
+    snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+    if snapshot is None:
+        snapshot = PortalSnapshot(name="default")
+        session.add(snapshot)
+        payload = portal_fallback_payload(session)
+    else:
+        raw = json_loads(snapshot.payload_json)
+        payload = raw if isinstance(raw, dict) else portal_fallback_payload(session)
+    payload.setdefault("ok", True)
+    payload.setdefault("source", "cloud-portal")
+    payload.setdefault("service_history", [])
+    payload.setdefault("preventive_execution", {"records": []})
+    return snapshot, payload
+
+
+@app.get("/api/preventive-execution")
+def get_preventive_execution() -> dict[str, Any]:
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+        execution = portal.get("preventive_execution") if isinstance(portal.get("preventive_execution"), dict) else {"records": []}
+        return {"ok": True, "preventive_execution": execution, "service_history": portal.get("service_history") or []}
+
+
+@app.post("/api/preventive-execution/records")
+async def save_preventive_execution_record(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Solicitud invalida.")
+    record = normalize_preventive_execution_record(payload)
+    if not record.get("equipment_code"):
+        raise HTTPException(status_code=400, detail="Selecciona un equipo.")
+    if record.get("service_type") not in PREVENTIVE_SERVICE_HOURS:
+        raise HTTPException(status_code=400, detail="Selecciona PM1, PM2, PM3 o PM4.")
+    with SessionLocal() as session:
+        snapshot, portal = portal_snapshot_for_preventive_execution_update(session)
+        records = [normalize_preventive_execution_record(row) for row in preventive_execution_records(portal) if isinstance(row, dict)]
+        index = next((idx for idx, row in enumerate(records) if str(row.get("id") or "") == str(record.get("id") or "")), None)
+        if index is None:
+            records.append(record)
+        else:
+            record["created_at"] = records[index].get("created_at") or record["created_at"]
+            records[index] = record
+        portal["preventive_execution"] = {"records": records}
+        portal["updated_at"] = utc_now().isoformat(timespec="seconds")
+        portal = enrich_tire_tracking(merge_preventive_execution_into_portal(portal))
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(portal)
+        session.commit()
+        return {"ok": True, "record": record, "portal": latest_portal_payload(session)}
+
+
+@app.post("/api/preventive-execution/records/delete")
+async def delete_preventive_execution_record(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Solicitud invalida.")
+    record_id = str(payload.get("id") or "").strip()
+    if not record_id:
+        raise HTTPException(status_code=400, detail="Selecciona un registro.")
+    with SessionLocal() as session:
+        snapshot, portal = portal_snapshot_for_preventive_execution_update(session)
+        records = [row for row in preventive_execution_records(portal) if isinstance(row, dict) and str(row.get("id") or "") != record_id]
+        history = [
+            row for row in (portal.get("service_history") or [])
+            if not (isinstance(row, dict) and str(row.get("web_id") or "") == record_id)
+        ]
+        portal["preventive_execution"] = {"records": records}
+        portal["service_history"] = history
+        portal["updated_at"] = utc_now().isoformat(timespec="seconds")
+        portal = enrich_tire_tracking(merge_preventive_execution_into_portal(portal))
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(portal)
+        session.commit()
+        return {"ok": True, "portal": latest_portal_payload(session)}
 
 
 def portal_snapshot_for_tire_update(session: Session) -> tuple[PortalSnapshot, dict[str, Any]]:
