@@ -6469,6 +6469,27 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .exec-alert b { flex:0 0 auto; min-width:82px; color:white; text-align:center; padding:3px 8px; border-radius:999px; font-size:11px; background:var(--teal); }
     .exec-alert.bad b { background:var(--red); }
     .exec-alert.warn b { background:var(--amber); color:#4a2b00; }
+    .dashboard-command { background:linear-gradient(135deg,rgba(255,255,255,.98),rgba(239,246,255,.96)); }
+    .kpi-command-grid { display:grid; grid-template-columns:minmax(360px,.9fr) minmax(520px,1.1fr); gap:14px; align-items:start; }
+    .priority-list { display:grid; gap:8px; }
+    .priority-row { display:grid; grid-template-columns:42px 1fr auto; gap:10px; align-items:center; padding:10px 11px; border:1px solid var(--line); border-radius:12px; background:white; cursor:pointer; box-shadow:0 8px 18px rgba(15,23,42,.05); }
+    .priority-row:hover { background:#f0fdfa; transform:translateY(-1px); }
+    .priority-rank { display:grid; place-items:center; width:32px; height:32px; border-radius:10px; color:white; font-weight:900; background:var(--teal); }
+    .priority-row.bad .priority-rank { background:var(--red); }
+    .priority-row.warn .priority-rank { background:var(--amber); color:#4a2b00; }
+    .priority-row strong { display:block; color:var(--navy); font-size:14px; }
+    .priority-row span { display:block; color:#64748b; font-size:12px; margin-top:2px; }
+    .priority-score { font-weight:900; color:#0f172a; }
+    .semaphore-dot { display:inline-block; width:12px; height:12px; border-radius:50%; box-shadow:0 0 0 3px rgba(15,23,42,.06); vertical-align:middle; }
+    .sem-green { background:#22c55e; }
+    .sem-yellow { background:#f59e0b; }
+    .sem-red { background:#ef4444; }
+    .sem-gray { background:#94a3b8; }
+    .meeting-mode header, .meeting-mode .tabs, .meeting-mode #stats, .meeting-mode .dashboard-controls, .meeting-mode .kpi-sim-toolbar { display:none !important; }
+    .meeting-mode main { width:100%; max-width:1600px; padding:12px; }
+    .meeting-mode .no-print { display:grid; }
+    .meeting-mode #dashboard { gap:10px; }
+    .meeting-mode #kpiPrintArea { box-shadow:none; }
     .profile-hero { display:grid; grid-template-columns:minmax(260px,.82fr) minmax(420px,1.18fr); gap:14px; align-items:stretch; }
     .profile-card { border:1px solid var(--line); border-radius:12px; background:linear-gradient(135deg,#ffffff,#f8fbff); padding:15px; box-shadow:0 12px 26px rgba(15,23,42,.07); }
     .profile-card h3 { margin:0 0 8px; color:var(--navy); font-size:24px; }
@@ -6747,7 +6768,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       .print-only { display:block; }
     }
     @media (max-width: 1180px) { .capture-layout { grid-template-columns:1fr; } .latest-captures-panel { position:static; } .latest-captures-wrap { max-height:520px; } }
-    @media (max-width: 1180px) { .exec-alert-grid, .profile-grid { grid-template-columns:repeat(3,minmax(120px,1fr)); } .profile-hero, .profile-section-grid { grid-template-columns:1fr; } }
+    @media (max-width: 1180px) { .exec-alert-grid, .profile-grid { grid-template-columns:repeat(3,minmax(120px,1fr)); } .profile-hero, .profile-section-grid, .kpi-command-grid { grid-template-columns:1fr; } }
     @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .exec-alert-grid, .profile-grid { grid-template-columns:repeat(2,minmax(120px,1fr)); } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } .tabs { overflow:auto; flex-wrap:nowrap; } .tabs button { flex:0 0 auto; } }
     @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .exec-alert-grid, .profile-grid, .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions { display:grid; grid-template-columns:1fr; } .capture-actions .btn { width:100%; } .exec-alert { align-items:flex-start; flex-direction:column; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
@@ -6808,6 +6829,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
         <button class="btn secondary" id="kpiImageBtn">Descargar imagen</button>
         <button class="btn secondary" id="kpiExcelBtn">Excel editable</button>
+        <button class="btn secondary" id="meetingModeBtn">Modo reunion</button>
       </div>
       <div class="panel toolbar kpi-sim-toolbar">
         <label class="inline-check"><input id="kpiSimEnabled" type="checkbox"> Modo simulacion</label>
@@ -6829,6 +6851,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="subtle-title"><h3>Prioridad operativa</h3><span class="muted" id="execUpdated">Alertas automaticas</span></div>
         <div class="exec-alert-grid" id="execCards"></div>
         <div class="exec-alert-list" id="execAlerts"></div>
+      </div>
+      <div class="panel dashboard-command no-print">
+        <div class="subtle-title"><h3>Semaforo y Top 10 prioridades</h3><span class="muted" id="kpiCommandUpdated"></span></div>
+        <div class="kpi-command-grid">
+          <div>
+            <div class="subtle-title"><h3>Top 10 equipos a atender</h3><span class="muted">Riesgo calculado</span></div>
+            <div class="priority-list" id="kpiPriorityList"></div>
+          </div>
+          <div class="table-wrap">
+            <table id="kpiSemaphoreTable"></table>
+          </div>
+        </div>
       </div>
       <div class="panel" id="kpiPrintArea">
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
@@ -8133,6 +8167,64 @@ WAREHOUSE_HTML = r"""<!doctype html>
           renderDashboard();
         }
         activateTab(card.dataset.execTab);
+      }));
+    }
+    function kpiRiskRows(report){
+      const rows = Array.isArray(report?.rows) ? report.rows : [];
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
+      const spareRows = (portal.parts_manuals && Array.isArray(portal.parts_manuals.rows)) ? portal.parts_manuals.rows : [];
+      const tireRows = (portal.tire_kpi && Array.isArray(portal.tire_kpi.rows)) ? portal.tire_kpi.rows : [];
+      const orderRows = workOrderRows().filter(row => !workOrderClosed(row));
+      const byCode = (list, code) => list.filter(row => normalizedText(row.equipment_code || row.equipment || row.code) === normalizedText(code));
+      const metaAvailability = Number((portal.settings || {}).meta_availability || 85);
+      const metaUtilization = Number((portal.settings || {}).meta_utilization || 75);
+      return rows.map(row => {
+        const code = row.code || "";
+        const ots = byCode(orderRows, code);
+        const pm = byCode(preventives, code).filter(item => ["VENCIDO","URGENTE"].includes(String(item.status || "").toUpperCase()));
+        const stock = byCode(spareRows, code).filter(item => ["FALTANTE","SIN INVENTARIO"].includes(String(item.inventory_status || "").toUpperCase()));
+        const tires = byCode(tireRows, code).filter(item => ["CRITICA","PROXIMA"].includes(String(item.control_status || "").toUpperCase()));
+        const noCapture = !Number(row.worked || 0) && !Number(row.mp || 0) && !Number(row.mc || 0) && !Number(row.stops || 0);
+        let score = 0;
+        const reasons = [];
+        if(row.out || noCapture){ score += 28; reasons.push(row.out ? "Fuera/no disponible" : "Sin captura"); }
+        if(Number(row.availability || 0) && Number(row.availability || 0) < metaAvailability){ score += Math.min((metaAvailability - Number(row.availability || 0)) * 1.2, 30); reasons.push("Disponibilidad baja"); }
+        if(Number(row.utilization || 0) && Number(row.utilization || 0) < metaUtilization){ score += Math.min((metaUtilization - Number(row.utilization || 0)) * .7, 18); reasons.push("Utilizacion baja"); }
+        if(Number(row.mc || 0) > 0){ score += Math.min(Number(row.mc || 0) * 2.5, 22); reasons.push(`${one(row.mc)} h MC`); }
+        if(Number(row.stops || 0) > 0){ score += Math.min(Number(row.stops || 0) * 8, 24); reasons.push(`${num(row.stops)} parada(s)`); }
+        if(ots.length){ score += Math.min(ots.length * 12 + ots.filter(item => ["URGENTE","ALTA"].includes(String(item.priority || "").toUpperCase())).length * 10, 34); reasons.push(`${ots.length} OT abierta(s)`); }
+        if(pm.length){ score += Math.min(pm.length * 18, 36); reasons.push(`${pm.length} PM critico(s)`); }
+        if(stock.length){ score += Math.min(stock.length * 6, 20); reasons.push(`${stock.length} stock alerta`); }
+        if(tires.length){ score += Math.min(tires.length * 8, 24); reasons.push(`${tires.length} llanta(s)`); }
+        score = Math.round(Math.max(score, 0));
+        const color = noCapture ? "gray" : score >= 70 ? "red" : score >= 35 ? "yellow" : "green";
+        return {
+          ...row,
+          score,
+          semaphore: color,
+          reasons: reasons.length ? reasons.slice(0,4).join(" | ") : "Sin alerta principal",
+          open_orders: ots.length,
+          pm_due: pm.length,
+          stock_alert: stock.length,
+          tire_alert: tires.length,
+        };
+      }).sort((a,b) => Number(b.score || 0) - Number(a.score || 0) || String(a.code || "").localeCompare(String(b.code || "")));
+    }
+    function renderKpiCommandCenter(report){
+      const rows = kpiRiskRows(report);
+      $("kpiCommandUpdated").textContent = `${rows.length} equipo(s) evaluado(s)`;
+      const top = rows.slice(0,10);
+      $("kpiPriorityList").innerHTML = top.length ? top.map((row, idx) => {
+        const tone = row.semaphore === "red" ? "bad" : (row.semaphore === "yellow" ? "warn" : "");
+        return `<div class="priority-row ${tone}" data-kpi-risk-eq="${esc(row.code)}"><div class="priority-rank">${idx + 1}</div><div><strong>${esc(row.code)} - ${esc(row.description || "")}</strong><span>${esc(row.reasons)}</span></div><div class="priority-score">${row.score}</div></div>`;
+      }).join("") : `<div class="exec-alert"><b>OK</b><span>Sin equipos para priorizar.</span></div>`;
+      $("kpiSemaphoreTable").innerHTML = `<thead><tr><th></th><th>Equipo</th><th>Disp.</th><th>Util.</th><th>MC</th><th>Paradas</th><th>OT</th><th>PM</th><th>Stock</th><th>Llantas</th><th>Riesgo</th></tr></thead><tbody>` +
+        rows.map(row => `<tr data-kpi-risk-eq="${esc(row.code)}" style="cursor:pointer"><td><span class="semaphore-dot sem-${esc(row.semaphore)}"></span></td><td>${esc(row.code)} ${esc(row.description || "")}</td><td>${esc(row.availabilityText || pct(row.availability || 0))}</td><td>${esc(row.utilizationText || pct(row.utilization || 0))}</td><td>${one(row.mc || 0)}</td><td>${num(row.stops || 0)}</td><td>${row.open_orders}</td><td>${row.pm_due}</td><td>${row.stock_alert}</td><td>${row.tire_alert}</td><td><b>${row.score}</b></td></tr>`).join("") + `</tbody>`;
+      document.querySelectorAll("[data-kpi-risk-eq]").forEach(el => el.addEventListener("click", () => {
+        const code = el.dataset.kpiRiskEq || "";
+        if($("fichaEquipment")) $("fichaEquipment").value = code;
+        renderEquipmentProfile();
+        activateTab("fichaEquipo");
       }));
     }
     function workOrderRows(){
@@ -9695,6 +9787,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function renderDashboard(){
       const selectedGroup = $("kpiGroup").value || "";
+      const commandReport = simulatedKpiReport(calculateKpiRows("Todos los equipos", $("kpiStart").value, $("kpiEnd").value));
+      renderKpiCommandCenter(commandReport);
       if(selectedGroup === "KPI Aceites") {
         renderOilDashboard();
         return;
@@ -9709,6 +9803,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
       setDashboardMode("format");
       const report = simulatedKpiReport(calculateKpiRows());
+      renderKpiCommandCenter(report);
       const settings = currentKpiSettings();
       $("kpiPrintArea").classList.toggle("simulation", Boolean(report.simulation?.enabled));
       $("portalUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Sin sincronizar";
@@ -11583,6 +11678,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("printKpiBtn").addEventListener("click", printExactKpi);
     $("kpiImageBtn").addEventListener("click", () => downloadKpiImage().catch(showError));
     $("kpiExcelBtn").addEventListener("click", () => downloadKpiExcel().catch(showError));
+    $("meetingModeBtn").addEventListener("click", () => {
+      document.body.classList.toggle("meeting-mode");
+      $("meetingModeBtn").textContent = document.body.classList.contains("meeting-mode") ? "Salir reunion" : "Modo reunion";
+    });
     $("monthlyPptBtn").addEventListener("click", () => downloadMonthlyPowerPoint().catch(showError));
     $("weeklyBase").addEventListener("change", () => applyWeeklyPeriod(true));
     $("weeklyApplyBtn").addEventListener("click", () => applyWeeklyPeriod(true));
