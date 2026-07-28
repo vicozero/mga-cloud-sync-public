@@ -1664,6 +1664,8 @@ def normalize_preventive_execution_record(row: dict[str, Any]) -> dict[str, Any]
         "parts_used": str(row.get("parts_used") or "").strip(),
         "lubricants_used": str(row.get("lubricants_used") or "").strip(),
         "notes": str(row.get("notes") or "").strip(),
+        "checklist": row.get("checklist") if isinstance(row.get("checklist"), dict) else {},
+        "evidence_note": str(row.get("evidence_note") or "").strip(),
         "source": str(row.get("source") or "web")[:40],
         "created_at": str(row.get("created_at") or now)[:40],
         "updated_at": now,
@@ -6388,6 +6390,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .stat span:not(.stat-icon) { color:var(--muted); font-weight:700; }
     .stat-spark { grid-column:1 / -1; display:flex; align-items:end; gap:4px; height:24px; padding-left:5px; }
     .stat-spark i { flex:1; min-width:3px; border-radius:4px 4px 1px 1px; background:linear-gradient(180deg,var(--blue2),var(--teal)); opacity:.82; }
+    .executive-board { background:linear-gradient(135deg,rgba(255,255,255,.98),rgba(241,245,249,.96)); }
+    .exec-alert-grid { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:10px; }
+    .exec-card { position:relative; overflow:hidden; min-height:104px; padding:13px; border:1px solid var(--line); border-radius:12px; background:white; box-shadow:0 10px 24px rgba(15,23,42,.07); cursor:pointer; transition:transform .16s ease, box-shadow .16s ease; }
+    .exec-card:hover { transform:translateY(-2px); box-shadow:0 16px 30px rgba(15,23,42,.11); }
+    .exec-card::before { content:""; position:absolute; inset:0 auto 0 0; width:5px; background:var(--teal); }
+    .exec-card.bad::before { background:var(--red); }
+    .exec-card.warn::before { background:var(--amber); }
+    .exec-card strong { display:block; color:var(--navy); font-size:30px; line-height:1; }
+    .exec-card span { display:block; margin-top:6px; color:#475569; font-size:12px; font-weight:900; text-transform:uppercase; }
+    .exec-card small { display:block; margin-top:7px; color:var(--muted); font-size:12px; line-height:1.25; }
+    .exec-alert-list { display:grid; gap:7px; margin-top:12px; }
+    .exec-alert { display:flex; gap:9px; align-items:center; padding:9px 11px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; color:#334155; font-size:13px; }
+    .exec-alert b { flex:0 0 auto; min-width:82px; color:white; text-align:center; padding:3px 8px; border-radius:999px; font-size:11px; background:var(--teal); }
+    .exec-alert.bad b { background:var(--red); }
+    .exec-alert.warn b { background:var(--amber); color:#4a2b00; }
     .view { display:none; }
     .view.active { display:grid; gap:14px; }
     table { width:100%; border-collapse:separate; border-spacing:0; background:white; }
@@ -6408,6 +6425,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .capture-fluid { background:#f8fafc; border-radius:6px; padding:8px; margin:-2px; }
     .capture-actions { position:sticky; bottom:0; z-index:3; padding:10px 0 2px; background:linear-gradient(180deg,rgba(255,255,255,.82),#fff 30%); }
     .capture-actions .btn { min-height:40px; }
+    .quick-alerts { display:grid; gap:7px; margin-top:10px; }
+    .quick-alert { padding:8px 10px; border-radius:9px; border:1px solid #fed7aa; background:#fff7ed; color:#9a3412; font-size:12px; font-weight:800; }
+    .input-warning { border-color:#f59e0b !important; box-shadow:0 0 0 3px rgba(245,158,11,.16) !important; }
     .latest-captures-panel { min-width:0; position:sticky; top:12px; }
     .latest-captures-wrap { max-height:clamp(320px, calc(100vh - 395px), 620px); overflow:auto; }
     #capRecentTable { min-width:900px; }
@@ -6649,8 +6669,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       .print-only { display:block; }
     }
     @media (max-width: 1180px) { .capture-layout { grid-template-columns:1fr; } .latest-captures-panel { position:static; } .latest-captures-wrap { max-height:520px; } }
-    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } }
-    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions .btn { width:100%; } }
+    @media (max-width: 1180px) { .exec-alert-grid { grid-template-columns:repeat(3,minmax(120px,1fr)); } }
+    @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .exec-alert-grid { grid-template-columns:repeat(2,minmax(120px,1fr)); } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } .tabs { overflow:auto; flex-wrap:nowrap; } .tabs button { flex:0 0 auto; } }
+    @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .exec-alert-grid, .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions { display:grid; grid-template-columns:1fr; } .capture-actions .btn { width:100%; } .exec-alert { align-items:flex-start; flex-direction:column; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
   </style>
 </head>
@@ -6723,6 +6744,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Paradas %<input id="kpiSimStops" type="number" step="1" value="100"></label>
         <label>Hrs mision<input id="kpiSimMission" type="number" step="0.1" value="24"></label>
         <span class="muted kpi-sim-note">Solo cambia la vista y las descargas simuladas. No guarda datos reales.</span>
+      </div>
+      <div class="panel executive-board no-print">
+        <div class="subtle-title"><h3>Prioridad operativa</h3><span class="muted" id="execUpdated">Alertas automaticas</span></div>
+        <div class="exec-alert-grid" id="execCards"></div>
+        <div class="exec-alert-list" id="execAlerts"></div>
       </div>
       <div class="panel" id="kpiPrintArea">
         <div class="subtle-title"><h3 id="kpiTitle">Dashboard KPI</h3><span class="muted" id="portalUpdated"></span></div>
@@ -6841,6 +6867,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label class="capture-fluid">Refrigerante<input id="prevExecCoolant" type="number" step="0.1" min="0" value="0"></label>
             <label class="capture-fluid">Hidraulico VG100<input id="prevExecOilVg100" type="number" step="0.1" min="0" value="0"></label>
             <label class="capture-fluid">ATF<input id="prevExecAtf" type="number" step="0.1" min="0" value="0"></label>
+            <div class="capture-section-title">Checklist de cierre</div>
+            <label class="inline-check"><input id="prevChkInspection" type="checkbox"> Inspeccion realizada</label>
+            <label class="inline-check"><input id="prevChkFilters" type="checkbox"> Filtros/refacciones aplicadas</label>
+            <label class="inline-check"><input id="prevChkLubrication" type="checkbox"> Lubricacion registrada</label>
+            <label class="inline-check"><input id="prevChkElectrical" type="checkbox"> Revision electrica</label>
+            <label class="inline-check"><input id="prevChkTest" type="checkbox"> Prueba final</label>
+            <label class="inline-check"><input id="prevChkSupervisor" type="checkbox"> Validado por supervisor</label>
+            <label class="wide">Evidencia / firma<textarea id="prevExecEvidence" rows="2" placeholder="Folio, foto, firma o evidencia del cierre"></textarea></label>
             <label class="wide">Observaciones<textarea id="prevExecNotes" rows="3" placeholder="Trabajo realizado, pendientes o condicion encontrada"></textarea></label>
           </div>
           <div class="req-actions capture-actions">
@@ -6907,8 +6941,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="req-actions capture-actions">
             <button class="btn secondary" id="capNewBtn">Nueva captura</button>
             <button class="btn" id="capSaveBtn">Guardar captura</button>
+            <button class="btn secondary" id="capSaveNewBtn">Guardar y nuevo</button>
             <button class="btn secondary" id="capRefreshBtn">Actualizar bitacora</button>
           </div>
+          <div class="quick-alerts" id="capQuickAlerts"></div>
         </div>
         <div class="panel latest-captures-panel">
           <div class="subtle-title"><h3>Ultimas capturas</h3><span class="muted" id="capRecentCount"></span></div>
@@ -7882,6 +7918,59 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const bars = [0,1,2,3,4].map(step => `<i style="height:${10 + ((seed + idx * 7 + step * 9) % 18)}px"></i>`).join("");
         return `<div class="stat"><span class="stat-icon"></span><div><strong>${v}</strong><span>${esc(k)}</span></div><div class="stat-spark">${bars}</div></div>`;
       }).join("");
+    }
+    function activateTab(tabId){
+      const button = document.querySelector(`.tabs button[data-tab="${tabId}"]`);
+      if(!button) return;
+      document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      button.classList.add("active");
+      $(tabId).classList.add("active");
+      $("stats").style.display = tabId === "dashboard" ? "" : "none";
+    }
+    function executiveAlerts(){
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
+      const overdue = preventives.filter(row => ["VENCIDO","URGENTE"].includes(String(row.status || "").toUpperCase()));
+      const servicesOpen = preventiveExecutionRows().filter(row => !isPreventiveClosed(row) && String(row.status || "").toUpperCase() !== "CANCELADO");
+      const spareRows = (portal.parts_manuals && Array.isArray(portal.parts_manuals.rows)) ? portal.parts_manuals.rows : [];
+      const spareShort = spareRows.filter(row => ["FALTANTE","SIN INVENTARIO"].includes(String(row.inventory_status || "").toUpperCase()));
+      const tireRows = (portal.tire_kpi && Array.isArray(portal.tire_kpi.rows)) ? portal.tire_kpi.rows : [];
+      const tireCritical = tireRows.filter(row => ["CRITICA","PROXIMA"].includes(String(row.control_status || "").toUpperCase()));
+      const captures = Array.isArray(portal.captures) ? portal.captures : [];
+      const noDisponible = captures.filter(row => String(row.status || "").toUpperCase().includes("NO DISP")).slice(0, 50);
+      const oilReport = oilRowsForRange($("kpiStart").value || (portal.period || {}).start || toIsoDate(new Date()), $("kpiEnd").value || (portal.period || {}).end || toIsoDate(new Date()));
+      const oilLiters = Number(oilReport.totals.total_liters || 0);
+      return {
+        cards: [
+          {label:"Preventivos vencidos", value:overdue.length, note:"PM vencido/urgente", tab:"preventivos", tone:overdue.length ? "bad" : "ok"},
+          {label:"Servicios abiertos", value:servicesOpen.length, note:"Pendientes de cierre", tab:"ejecucionPreventivos", tone:servicesOpen.length ? "warn" : "ok"},
+          {label:"Refacciones faltantes", value:spareShort.length, note:"Faltante o sin inventario", tab:"refacciones", tone:spareShort.length ? "bad" : "ok"},
+          {label:"Llantas criticas", value:tireCritical.length, note:"Critica/proxima", tab:"llantasTrack", tone:tireCritical.length ? "warn" : "ok"},
+          {label:"No disponibles", value:noDisponible.length, note:"Capturas recientes", tab:"captura", tone:noDisponible.length ? "bad" : "ok"},
+          {label:"Aceites periodo", value:one(oilLiters), note:"Litros registrados", tab:"dashboard", tone:oilLiters ? "warn" : "ok", kpiGroup:"KPI Aceites"},
+        ],
+        alerts: [
+          ...overdue.slice(0,3).map(row => ({tone:"bad", label:"PM", text:`${row.equipment_code || ""} ${row.service_interval || row.component || ""}: ${row.status || ""}`})),
+          ...servicesOpen.slice(0,2).map(row => ({tone:"warn", label:"Servicio", text:`${row.equipment_code || ""} ${row.service_type || ""}: ${row.status || "ABIERTO"}`})),
+          ...spareShort.slice(0,2).map(row => ({tone:"bad", label:"Stock", text:`${row.equipment_code || ""} ${row.description || row.part_number || ""}: ${row.inventory_status || ""}`})),
+          ...tireCritical.slice(0,2).map(row => ({tone:"warn", label:"Llanta", text:`${row.equipment_code || ""} ${row.tire_code || ""}: ${row.control_status || ""}`})),
+        ],
+      };
+    }
+    function renderExecutiveBoard(){
+      const report = executiveAlerts();
+      $("execCards").innerHTML = report.cards.map(card => `<div class="exec-card ${card.tone === "bad" ? "bad" : (card.tone === "warn" ? "warn" : "")}" data-exec-tab="${esc(card.tab)}" data-exec-group="${esc(card.kpiGroup || "")}"><strong>${esc(card.value)}</strong><span>${esc(card.label)}</span><small>${esc(card.note)}</small></div>`).join("");
+      $("execAlerts").innerHTML = report.alerts.length
+        ? report.alerts.map(alert => `<div class="exec-alert ${alert.tone === "bad" ? "bad" : "warn"}"><b>${esc(alert.label)}</b><span>${esc(alert.text)}</span></div>`).join("")
+        : `<div class="exec-alert"><b>OK</b><span>Sin alertas criticas principales en el periodo actual.</span></div>`;
+      $("execUpdated").textContent = portal.updated_at || portal.generated_at ? `Actualizado ${portal.updated_at || portal.generated_at}` : "Alertas automaticas";
+      document.querySelectorAll("[data-exec-tab]").forEach(card => card.addEventListener("click", () => {
+        if(card.dataset.execGroup && $("kpiGroup")){
+          $("kpiGroup").value = card.dataset.execGroup;
+          renderDashboard();
+        }
+        activateTab(card.dataset.execTab);
+      }));
     }
     function renderSelectors(){
       const current = $("equipmentSelect").value;
@@ -9256,6 +9345,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
       ["prevExecOilVg100", "oil_hyd_vg100", "VG100"],
       ["prevExecAtf", "atf_liters", "ATF"],
     ];
+    const preventiveChecklistInputs = [
+      ["prevChkInspection", "inspection", "Inspeccion"],
+      ["prevChkFilters", "filters", "Filtros/refacciones"],
+      ["prevChkLubrication", "lubrication", "Lubricacion"],
+      ["prevChkElectrical", "electrical", "Revision electrica"],
+      ["prevChkTest", "test", "Prueba final"],
+      ["prevChkSupervisor", "supervisor", "Supervisor"],
+    ];
     function preventiveExecutionRows(){
       const payload = portal.preventive_execution || {};
       return Array.isArray(payload.records) ? payload.records : [];
@@ -9303,6 +9400,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .filter(item => item.value > 0)
         .map(item => `${item.label}: ${one(item.value)} L`)
         .join("; ");
+    }
+    function preventiveChecklistPayload(){
+      const checklist = {};
+      preventiveChecklistInputs.forEach(item => { checklist[item[1]] = Boolean($(item[0]).checked); });
+      return checklist;
+    }
+    function preventiveChecklistCount(row){
+      const checklist = row?.checklist || {};
+      return preventiveChecklistInputs.filter(item => Boolean(checklist[item[1]])).length;
     }
     function filteredPreventives(){
       const [start, end] = periodRange($("prPeriod").value, $("prBase").value);
@@ -9519,7 +9625,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecState").value = "ABIERTO";
       $("prevExecParts").value = "";
       preventiveOilInputs.forEach(item => { $(item[0]).value = "0"; });
+      preventiveChecklistInputs.forEach(item => { $(item[0]).checked = false; });
       updatePreventiveOilTotal();
+      $("prevExecEvidence").value = "";
       $("prevExecNotes").value = "";
       $("prevExecStatus").textContent = "";
     }
@@ -9543,6 +9651,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
         status: $("prevExecState").value,
         parts_used: $("prevExecParts").value.trim(),
         lubricants_used: "",
+        checklist: preventiveChecklistPayload(),
+        evidence_note: $("prevExecEvidence").value.trim(),
         notes: $("prevExecNotes").value.trim(),
       };
       preventiveOilInputs.forEach(item => { payload[item[1]] = captureNumber(item[0]); });
@@ -9563,7 +9673,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecState").value = row.status || "ABIERTO";
       $("prevExecParts").value = row.parts_used || "";
       preventiveOilInputs.forEach(item => { $(item[0]).value = formatCaptureNumber(row[item[1]]); });
+      preventiveChecklistInputs.forEach(item => { $(item[0]).checked = Boolean((row.checklist || {})[item[1]]); });
       updatePreventiveOilTotal();
+      $("prevExecEvidence").value = row.evidence_note || "";
       $("prevExecNotes").value = row.notes || "";
       $("prevExecStatus").textContent = `Editando ${row.id || ""}`;
       document.querySelector('[data-tab="ejecucionPreventivos"]')?.click();
@@ -9574,10 +9686,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const closed = rows.filter(isPreventiveClosed);
       $("prevExecOpenCount").textContent = `${open.length} abierto(s)`;
       $("prevExecClosedCount").textContent = `${closed.length} cerrado(s)`;
-      const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="8">Sin servicios preventivos abiertos.</td></tr>`;
-      $("prevExecOpenTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
-      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="8">Sin servicios cerrados desde esta pestaña.</td></tr>`;
-      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Fecha cierre</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Horometro</th><th>Refacciones</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
+      const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="9">Sin servicios preventivos abiertos.</td></tr>`;
+      $("prevExecOpenTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
+      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="9">Sin servicios cerrados desde esta pestaña.</td></tr>`;
+      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Fecha cierre</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Refacciones</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
       document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
         const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
         if(record) fillPreventiveExecutionForm(record);
@@ -9588,6 +9700,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const payload = preventiveExecutionPayload();
       if(close) payload.status = "CERRADO";
       if(!payload.equipment_code) return alert("Selecciona un equipo.");
+      if(close && Object.values(payload.checklist || {}).filter(Boolean).length < preventiveChecklistInputs.length && !confirm("El checklist de cierre no esta completo. ¿Cerrar servicio de todos modos?")) return;
       if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. ¿Guardar asi?")) return;
       const response = await fetch("/api/preventive-execution/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!response.ok) throw new Error(await apiError(response));
@@ -9598,6 +9711,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderServiceHistory();
       renderPreventives();
       renderBacklog();
+      renderExecutiveBoard();
       $("prevExecStatus").textContent = close ? "Servicio cerrado y enviado a Servicios realizados." : "Servicio guardado.";
       if(result.record) fillPreventiveExecutionForm(result.record);
     }
@@ -9615,6 +9729,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderServiceHistory();
       renderPreventives();
       renderBacklog();
+      renderExecutiveBoard();
       resetPreventiveExecutionForm();
       $("prevExecStatus").textContent = "Servicio eliminado.";
     }
@@ -9878,8 +9993,25 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
       return record;
     }
-    async function saveDailyCapture(){
+    function captureValidationWarnings(){
+      const warnings = [];
+      ["capDate","capEquipment","capComponent","capHi","capHf","capWorked"].forEach(id => $(id).classList.remove("input-warning"));
+      if(!$("capDate").value){ warnings.push("Falta fecha."); $("capDate").classList.add("input-warning"); }
+      if(!$("capEquipment").value){ warnings.push("Falta equipo."); $("capEquipment").classList.add("input-warning"); }
+      if(!$("capComponent").value){ warnings.push("Falta componente."); $("capComponent").classList.add("input-warning"); }
+      const hi = Number($("capHi").value || 0);
+      const hf = Number($("capHf").value || 0);
+      const worked = Number($("capWorked").value || 0);
+      if(hf && hi && hf < hi){ warnings.push("Horometro final menor al inicial."); $("capHf").classList.add("input-warning"); }
+      if(!worked && hf > hi){ warnings.push("Horas trabajadas en cero; revisa antes de guardar."); $("capWorked").classList.add("input-warning"); }
+      if(Number($("capMp").value || 0) + Number($("capMc").value || 0) > worked && worked > 0) warnings.push("Hrs MP + MC superan las horas trabajadas.");
+      $("capQuickAlerts").innerHTML = warnings.map(item => `<div class="quick-alert">${esc(item)}</div>`).join("");
+      return warnings;
+    }
+    async function saveDailyCapture(resetAfter=false){
       if(!hasApiKey(true)) return;
+      const warnings = captureValidationWarnings();
+      if(warnings.some(text => text.includes("Falta") || text.includes("menor")) && !confirm("Hay alertas de captura. ¿Guardar de todos modos?")) return;
       const record = capturePayload();
       $("capStatus").textContent = "Guardando...";
       const response = await fetch("/api/sync", {
@@ -9898,6 +10030,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderDashboard();
       renderBitacora();
       renderCaptureRecent();
+      renderExecutiveBoard();
+      if(resetAfter) resetCaptureForm();
     }
     function editDailyCapture(index){
       const row = currentCaptureRows[index];
@@ -10977,6 +11111,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderStats();
       renderSelectors();
       renderPortalSelectors();
+      renderExecutiveBoard();
       renderDashboard();
       renderPreventives();
       renderBacklog();
@@ -10997,10 +11132,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderMovements();
     }
     document.querySelectorAll(".tabs button").forEach(btn => btn.addEventListener("click", () => {
-      document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
-      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-      btn.classList.add("active"); $(btn.dataset.tab).classList.add("active");
-      $("stats").style.display = btn.dataset.tab === "dashboard" ? "" : "none";
+      activateTab(btn.dataset.tab);
     }));
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     ["kpiSimEnabled","kpiSimName","kpiSimMetaAvailability","kpiSimMetaUtilization","kpiSimMetaReliability","kpiSimMetaTmef","kpiSimMetaTmpr","kpiSimPeriod","kpiSimWorked","kpiSimMp","kpiSimMc","kpiSimStops","kpiSimMission"].forEach(id => {
@@ -11048,7 +11180,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["capOil15w40","capOilHco68","capOilSae30","capOil85w140","capAlmo","capCoolant","capOilVg100","capAtf"].forEach(id => $(id).addEventListener("input", updateCaptureOilTotal));
     $("capNewBtn").addEventListener("click", resetCaptureForm);
     $("capSaveBtn").addEventListener("click", () => saveDailyCapture().catch(showError));
+    $("capSaveNewBtn").addEventListener("click", () => saveDailyCapture(true).catch(showError));
     $("capRefreshBtn").addEventListener("click", () => load().catch(showError));
+    ["capDate","capEquipment","capComponent","capHi","capHf","capWorked","capMp","capMc"].forEach(id => $(id).addEventListener("input", captureValidationWarnings));
     $("dispSearch").addEventListener("input", renderDisponibilidad);
     $("dispStatus").addEventListener("change", renderDisponibilidad);
     $("renderDispBtn").addEventListener("click", renderDisponibilidad);
