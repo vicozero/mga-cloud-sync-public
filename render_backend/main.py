@@ -6433,6 +6433,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.97); border:1px solid rgba(215,224,234,.96); border-radius:12px; padding:16px; box-shadow:var(--shadow); }
     .panel::before { content:""; position:absolute; inset:0 0 auto; height:3px; background:linear-gradient(90deg,var(--blue2),var(--teal)); opacity:.86; }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
+    .dashboard-toolbar-stack { position:sticky; top:58px; z-index:9; display:grid; gap:10px; }
+    .dashboard-toolbar-stack .panel { margin:0; }
     .kpi-sim-toolbar { grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); align-items:end; border-color:#f6d365; background:#fffdf4; }
     .kpi-sim-toolbar::before { background:linear-gradient(90deg,#f59e0b,#facc15); }
     .kpi-sim-toolbar input[type="number"] { min-width:0; }
@@ -6497,7 +6499,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .sem-yellow { background:#f59e0b; }
     .sem-red { background:#ef4444; }
     .sem-gray { background:#94a3b8; }
-    .meeting-mode header, .meeting-mode .tabs, .meeting-mode #stats, .meeting-mode .dashboard-controls, .meeting-mode .kpi-sim-toolbar { display:none !important; }
+    .meeting-mode header, .meeting-mode .tabs, .meeting-mode #stats, .meeting-mode .dashboard-toolbar-stack, .meeting-mode .dashboard-controls, .meeting-mode .kpi-sim-toolbar { display:none !important; }
     .meeting-mode main { width:100%; max-width:1600px; padding:12px; }
     .meeting-mode .no-print { display:grid; }
     .meeting-mode #dashboard { gap:10px; }
@@ -6833,31 +6835,33 @@ WAREHOUSE_HTML = r"""<!doctype html>
     </nav>
     <section class="stats" id="stats"></section>
     <section id="dashboard" class="view active">
-      <div class="panel toolbar dashboard-controls">
-        <label>Grupo<select id="kpiGroup"></select></label>
-        <label>Desde<input id="kpiStart" type="date"></label>
-        <label>Hasta<input id="kpiEnd" type="date"></label>
-        <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
-        <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
-        <button class="btn secondary" id="kpiImageBtn">Descargar imagen</button>
-        <button class="btn secondary" id="kpiExcelBtn">Excel editable</button>
-        <button class="btn secondary" id="meetingModeBtn">Modo reunion</button>
-      </div>
-      <div class="panel toolbar kpi-sim-toolbar">
-        <label class="inline-check"><input id="kpiSimEnabled" type="checkbox"> Modo simulacion</label>
-        <label>Escenario<input id="kpiSimName" value="Escenario 1"></label>
-        <label>Meta disp %<input id="kpiSimMetaAvailability" type="number" step="0.1" value="85"></label>
-        <label>Meta util %<input id="kpiSimMetaUtilization" type="number" step="0.1" value="75"></label>
-        <label>Meta conf %<input id="kpiSimMetaReliability" type="number" step="0.1" value="80"></label>
-        <label>Meta TMEF h<input id="kpiSimMetaTmef" type="number" step="0.1" value="8"></label>
-        <label>Meta TMPR h<input id="kpiSimMetaTmpr" type="number" step="0.1" value="4"></label>
-        <label>Hrs periodo %<input id="kpiSimPeriod" type="number" step="1" value="100"></label>
-        <label>Hrs trab %<input id="kpiSimWorked" type="number" step="1" value="100"></label>
-        <label>Hrs MP %<input id="kpiSimMp" type="number" step="1" value="100"></label>
-        <label>Hrs MC %<input id="kpiSimMc" type="number" step="1" value="100"></label>
-        <label>Paradas %<input id="kpiSimStops" type="number" step="1" value="100"></label>
-        <label>Hrs mision<input id="kpiSimMission" type="number" step="0.1" value="24"></label>
-        <span class="muted kpi-sim-note">Solo cambia la vista y las descargas simuladas. No guarda datos reales.</span>
+      <div class="dashboard-toolbar-stack no-print">
+        <div class="panel toolbar dashboard-controls">
+          <label>Grupo<select id="kpiGroup"></select></label>
+          <label>Desde<input id="kpiStart" type="date"></label>
+          <label>Hasta<input id="kpiEnd" type="date"></label>
+          <button class="btn" id="renderKpiBtn">Actualizar KPI</button>
+          <button class="btn secondary" id="printKpiBtn">Imprimir PDF</button>
+          <button class="btn secondary" id="kpiImageBtn">Descargar imagen</button>
+          <button class="btn secondary" id="kpiExcelBtn">Excel editable</button>
+          <button class="btn secondary" id="meetingModeBtn">Modo reunion</button>
+        </div>
+        <div class="panel toolbar kpi-sim-toolbar">
+          <label class="inline-check"><input id="kpiSimEnabled" type="checkbox"> Modo simulacion</label>
+          <label>Escenario<input id="kpiSimName" value="Escenario 1"></label>
+          <label>Meta disp %<input id="kpiSimMetaAvailability" type="number" step="0.1" value="85"></label>
+          <label>Meta util %<input id="kpiSimMetaUtilization" type="number" step="0.1" value="75"></label>
+          <label>Meta conf %<input id="kpiSimMetaReliability" type="number" step="0.1" value="80"></label>
+          <label>Meta TMEF h<input id="kpiSimMetaTmef" type="number" step="0.1" value="8"></label>
+          <label>Meta TMPR h<input id="kpiSimMetaTmpr" type="number" step="0.1" value="4"></label>
+          <label>Hrs periodo %<input id="kpiSimPeriod" type="number" step="1" value="100"></label>
+          <label>Hrs trab %<input id="kpiSimWorked" type="number" step="1" value="100"></label>
+          <label>Hrs MP %<input id="kpiSimMp" type="number" step="1" value="100"></label>
+          <label>Hrs MC %<input id="kpiSimMc" type="number" step="1" value="100"></label>
+          <label>Paradas %<input id="kpiSimStops" type="number" step="1" value="100"></label>
+          <label>Hrs mision<input id="kpiSimMission" type="number" step="0.1" value="24"></label>
+          <span class="muted kpi-sim-note">Solo cambia la vista y las descargas simuladas. No guarda datos reales.</span>
+        </div>
       </div>
       <div class="panel no-print">
         <div class="subtle-title"><h3>Indicadores principales</h3><span class="muted" id="kpiMainSummaryNote"></span></div>
