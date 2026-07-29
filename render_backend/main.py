@@ -6863,25 +6863,51 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .print-only { display:none; }
     #epp { display:none !important; }
     .warehouse-page { background:#f5f8fd; color:#10244a; }
-    .warehouse-page .hero { position:sticky; top:0; z-index:30; height:76px; min-height:76px; padding:10px 22px; grid-template-columns:minmax(500px,1fr) 170px minmax(260px,340px); background:rgba(255,255,255,.96); box-shadow:0 10px 28px rgba(15,35,68,.08); }
+    .warehouse-page .hero { position:sticky; top:0; z-index:30; height:76px; min-height:76px; padding:10px 22px 10px 68px; grid-template-columns:minmax(390px,.85fr) minmax(360px,1fr) minmax(260px,340px); background:rgba(255,255,255,.97); box-shadow:0 10px 28px rgba(15,35,68,.08); }
     .warehouse-page .hero::before { height:0; }
     .warehouse-page .hero::after { opacity:.18; }
-    .warehouse-page .corner-logo { width:150px; height:54px; border:0; box-shadow:none; padding:0; }
+    .warehouse-page .corner-logo { width:112px; height:48px; border:0; box-shadow:none; padding:0; }
     .warehouse-page .brand { align-items:center; gap:20px; }
-    .warehouse-page header h1 { font-size:24px; color:#071f49; }
-    .warehouse-page header p { color:#64769a; font-weight:700; }
-    .warehouse-page .hero-visual { min-height:0; display:flex; align-items:center; justify-content:flex-end; gap:14px; }
-    .warehouse-page .ops-card { min-width:150px; min-height:44px; padding:8px 12px; grid-template-columns:auto; border-radius:16px; }
+    .warehouse-page header h1 { font-size:22px; color:#071f49; white-space:nowrap; }
+    .warehouse-page header p { color:#64769a; font-weight:700; white-space:nowrap; }
+    .warehouse-page .hero-visual { min-height:0; display:grid; grid-template-columns:128px minmax(220px,1fr); align-items:center; gap:10px; }
+    .warehouse-page .ops-card { min-width:128px; min-height:44px; padding:8px 12px; grid-template-columns:auto; border-radius:16px; }
     .warehouse-page .ops-card b { font-size:14px; }
     .warehouse-page .ops-card span { font-size:10px; }
     .warehouse-page .ops-graph, .warehouse-page .maintenance-video { display:none !important; }
     .warehouse-page .key-card { border-radius:16px; background:#f8fbff; }
     .warehouse-page main { width:100%; max-width:none; margin:0; padding:14px 24px 18px 252px; gap:14px; }
-    .warehouse-page .tabs { position:fixed; left:0; top:76px; bottom:0; width:228px; z-index:20; display:flex; flex-direction:column; flex-wrap:nowrap; overflow:auto; gap:4px; padding:20px 14px; border:0; border-radius:0; background:linear-gradient(180deg,#092250,#123e7b); box-shadow:18px 0 34px rgba(7,31,73,.16); }
+    .warehouse-page .tabs { position:fixed; left:0; top:76px; bottom:0; width:228px; z-index:20; display:flex; flex-direction:column; flex-wrap:nowrap; overflow:auto; gap:4px; padding:20px 14px; border:0; border-radius:0; background:linear-gradient(180deg,#092250,#123e7b); box-shadow:18px 0 34px rgba(7,31,73,.16); transition:transform .22s ease; }
     .warehouse-page .tabs::before { content:"OPERACION"; color:#b7c7e8; font-size:12px; font-weight:900; margin:0 8px 8px; letter-spacing:.05em; }
     .warehouse-page .tabs button { width:100%; text-align:left; color:#e9f1ff; background:transparent; border:1px solid transparent; border-radius:10px; padding:11px 12px; }
     .warehouse-page .tabs button:hover { background:rgba(255,255,255,.09); box-shadow:none; }
     .warehouse-page .tabs button.active { background:linear-gradient(135deg,#0b69ff,#0756d8); color:white; border-color:rgba(255,255,255,.18); box-shadow:0 10px 20px rgba(3,20,48,.25); }
+    .sidebar-toggle { position:fixed; left:16px; top:18px; z-index:50; width:38px; height:38px; border:1px solid #dbe5f2; border-radius:12px; background:white; color:#0b2f6f; box-shadow:0 10px 24px rgba(15,35,68,.12); cursor:pointer; font-size:20px; font-weight:900; line-height:1; }
+    .sidebar-toggle:hover { background:#eef6ff; color:#0b69ff; }
+    .sidebar-collapsed.warehouse-page .tabs { transform:translateX(-232px); }
+    .sidebar-collapsed.warehouse-page main { padding-left:24px; }
+    .sidebar-collapsed.warehouse-page .hero { padding-left:68px; }
+    .top-mine-anim { position:relative; height:52px; overflow:hidden; border:1px solid #dbe6f3; border-radius:16px; background:
+      radial-gradient(ellipse at 25% 25%, rgba(148,163,184,.22), transparent 30%),
+      linear-gradient(180deg,#f8fbff 0%,#edf4fb 56%,#dce7f3 100%); box-shadow:inset 0 1px 0 rgba(255,255,255,.9), 0 10px 22px rgba(15,35,68,.06); }
+    .top-mine-anim::before { content:""; position:absolute; left:0; right:0; bottom:0; height:16px; background:linear-gradient(180deg,rgba(148,163,184,.18),rgba(71,85,105,.22)), repeating-linear-gradient(90deg,rgba(15,23,42,.18) 0 24px,transparent 24px 44px); animation:mineGround 4s linear infinite; }
+    .top-mine-anim::after { content:""; position:absolute; inset:6px 0 auto; height:1px; opacity:.75; background:linear-gradient(90deg,transparent,#38bdf8,#14b8a6,transparent); animation:mineScan 3s ease-in-out infinite; }
+    .warehouse-scoop { position:absolute; left:7%; bottom:10px; width:132px; height:38px; filter:drop-shadow(0 9px 8px rgba(15,23,42,.28)); animation:warehouseScoopDrive 7.5s ease-in-out infinite; }
+    .warehouse-scoop .bucket { position:absolute; left:0; bottom:3px; width:46px; height:25px; background:linear-gradient(135deg,#fbbf24,#b45309); clip-path:polygon(0 38%,76% 10%,100% 56%,84% 100%,10% 100%); box-shadow:inset -8px -7px 0 rgba(120,53,15,.25); animation:warehouseBucket 7.5s ease-in-out infinite; transform-origin:right bottom; }
+    .warehouse-scoop .body { position:absolute; left:42px; bottom:10px; width:82px; height:29px; border-radius:10px 13px 7px 8px; background:linear-gradient(135deg,#f59e0b 0%,#facc15 48%,#b45309 100%); box-shadow:inset -13px -8px 0 rgba(120,53,15,.23); }
+    .warehouse-scoop .body::before { content:""; position:absolute; left:34px; top:-13px; width:30px; height:18px; border-radius:8px 8px 3px 3px; background:linear-gradient(135deg,#dff6ff,#0284c7); box-shadow:inset -7px -4px 0 rgba(3,105,161,.30); }
+    .warehouse-scoop .body::after { content:"ST"; position:absolute; right:10px; top:8px; color:#78350f; font-size:8px; font-weight:900; }
+    .warehouse-scoop .rear { position:absolute; right:0; bottom:12px; width:29px; height:22px; border-radius:5px 10px 8px 3px; background:linear-gradient(135deg,#fde047,#92400e); }
+    .warehouse-scoop .light { position:absolute; left:25px; top:6px; width:150px; height:34px; pointer-events:none; background:linear-gradient(90deg,rgba(255,255,255,.90),rgba(191,219,254,.26),transparent 70%); clip-path:polygon(0 42%,100% 0,100% 100%,0 65%); opacity:.52; mix-blend-mode:screen; animation:warehouseLight 7.5s ease-in-out infinite; }
+    .warehouse-scoop .wheel { position:absolute; bottom:0; width:25px; height:25px; border-radius:50%; background:radial-gradient(circle,#e5e7eb 0 18%,#111827 19% 48%,#64748b 49% 56%,#020617 57%); border:2px solid #020617; animation:wheelSpin .8s linear infinite; }
+    .warehouse-scoop .wheel::after { content:""; position:absolute; inset:5px; border-radius:50%; background:repeating-conic-gradient(from 0deg,rgba(255,255,255,.7) 0 14deg,transparent 14deg 34deg); opacity:.45; }
+    .warehouse-scoop .wheel.front { left:48px; }
+    .warehouse-scoop .wheel.back { right:14px; }
+    @keyframes warehouseScoopDrive { 0%,100% { transform:translateX(0) translateY(0); } 35% { transform:translateX(44%) translateY(-1px); } 70% { transform:translateX(18%) translateY(1px); } }
+    @keyframes warehouseBucket { 0%,100% { transform:rotate(-2deg); } 42% { transform:rotate(5deg); } 68% { transform:rotate(-5deg); } }
+    @keyframes warehouseLight { 0%,100% { opacity:.35; transform:translateX(-12px) skewX(-8deg); } 45% { opacity:.68; transform:translateX(18px) skewX(-4deg); } }
+    @keyframes mineGround { from { background-position:0 0,0 0; } to { background-position:0 0,-88px 0; } }
+    @keyframes mineScan { 0%,100% { transform:translateX(-45%); opacity:.25; } 50% { transform:translateX(45%); opacity:.95; } }
     .warehouse-page .view.active { display:grid; gap:14px; }
     .warehouse-page .panel { border-radius:16px; border-color:#dce6f3; box-shadow:0 12px 34px rgba(15,35,68,.08); }
     .warehouse-page .panel::before { height:0; }
@@ -6951,6 +6977,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </style>
 </head>
 <body class="warehouse-page">
+  <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Ocultar / mostrar menu" aria-label="Ocultar o mostrar barra lateral">☰</button>
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
@@ -6958,6 +6985,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
     </div>
     <div class="hero-visual" aria-hidden="true">
       <div class="ops-card"><span>Operacion</span><b>En vivo</b><i></i></div>
+      <div class="top-mine-anim" aria-label="Scooptram en operacion">
+        <div class="warehouse-scoop">
+          <div class="light"></div>
+          <div class="bucket"></div>
+          <div class="body"></div>
+          <div class="rear"></div>
+          <div class="wheel front"></div>
+          <div class="wheel back"></div>
+        </div>
+      </div>
     </div>
     <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
@@ -7964,6 +8001,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
     const AUTO_REFRESH_MS = 15000;
     const $ = (id) => document.getElementById(id);
     const apiKey = $("apiKey");
+    function applySidebarState(){
+      const collapsed = localStorage.getItem("mgaWarehouseSidebarCollapsed") === "1";
+      document.body.classList.toggle("sidebar-collapsed", collapsed);
+      const btn = $("sidebarToggle");
+      if(btn){
+        btn.textContent = collapsed ? "☰" : "‹";
+        btn.title = collapsed ? "Mostrar menu" : "Ocultar menu";
+      }
+    }
+    applySidebarState();
     apiKey.value = localStorage.getItem("mgaFilterApiKey") || "";
     if(apiKey.value.trim() === "X-MGA-API-Key"){
       apiKey.value = "";
@@ -9065,7 +9112,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return text.includes(target) || (pm && text.includes(pm));
     }
     function workOrderIsFilterRow(row){
-      const text = normalizedText([row.item_type,row.system,row.component,row.description,row.part_number,row.equivalent_part,row.donaldson_part].join(" "));
+      const text = normalizedText([row.item_type,row.type,row.system,row.component,row.description,row.descripcion,row.part_number,row.no_parte,row.part_no,row.equivalent_part,row.donaldson_part,row.donaldson].join(" "));
       return /FILTRO|FILTER|SEPARADOR|ELEMENTO|AIRE|COMBUSTIBLE|HIDRAUL|TRANSMISION|ACEITE MOTOR/.test(text);
     }
     function workOrderCleanPart(value){
@@ -9074,22 +9121,59 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return text;
     }
     function workOrderPreferredPart(row){
-      return workOrderCleanPart(row.part_number) || workOrderCleanPart(row.donaldson_part) || workOrderCleanPart(row.equivalent_part) || "";
+      return workOrderCleanPart(row.part_number) || workOrderCleanPart(row.no_parte) || workOrderCleanPart(row.part_no) || workOrderCleanPart(row.part) || workOrderCleanPart(row.donaldson_part) || workOrderCleanPart(row.donaldson) || workOrderCleanPart(row.equivalent_part) || "";
+    }
+    function workOrderFilterInterval(row){
+      return row.service_interval || row.service || row.interval || row.pm || row.gama || "";
+    }
+    function workOrderFilterDescription(row){
+      return row.description || row.descripcion || row.item_type || row.type || row.component || row.system || "Filtro";
     }
     function workOrderCatalogItemFromRow(row, source){
       const part = workOrderPreferredPart(row);
       return {
         part_number: part,
-        donaldson_part: workOrderCleanPart(row.donaldson_part),
+        donaldson_part: workOrderCleanPart(row.donaldson_part) || workOrderCleanPart(row.donaldson),
         equivalent_part: workOrderCleanPart(row.equivalent_part),
-        description: row.description || row.item_type || row.component || row.system || "Filtro",
+        description: workOrderFilterDescription(row),
         quantity: row.quantity || 1,
         unit: row.unit || "PZA",
         source,
         manual: row.manual_title || row.source_file || row.notes || row.service_interval || "",
-        service_interval: row.service_interval || "",
+        service_interval: workOrderFilterInterval(row),
+        equipment_code: row.equipment_code || row.equipment || row.code || "",
         from_catalog: true,
       };
+    }
+    function workOrderCompactText(value){
+      return normalizedText(value).replace(/[^A-Z0-9]/g, "");
+    }
+    function workOrderSelectedModelKeys(){
+      const model = $("woPlanModel")?.value || "";
+      const plan = workOrderMaintenancePlans[model] || {};
+      return [model, plan.name, String(plan.name || "").replace(/CATERPILLAR|CAMION|VOLTEO|RETROEXCAVADORA/gi, "")]
+        .map(workOrderCompactText)
+        .filter(key => key.length >= 4);
+    }
+    function workOrderEquipmentText(eq){
+      return [eq.code, eq.equipment_code, eq.description, eq.family, eq.model, eq.modelo, eq.type].join(" ");
+    }
+    function workOrderCandidateEquipment(code){
+      const all = [...(Array.isArray(data.equipment) ? data.equipment : []), ...allPortalEquipment()].filter(Boolean);
+      const selected = normalizedText(code);
+      const keys = workOrderSelectedModelKeys();
+      const exact = all.filter(eq => selected && normalizedText(eq.code || eq.equipment_code) === selected);
+      const modelMatches = all.filter(eq => {
+        const compact = workOrderCompactText(workOrderEquipmentText(eq));
+        return keys.some(key => compact.includes(key) || key.includes(compact));
+      });
+      const seen = new Set();
+      return [...exact, ...modelMatches].filter(eq => {
+        const key = normalizedText([eq.code || eq.equipment_code, eq.description, eq.family, eq.model].join("|"));
+        if(!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     }
     function workOrderFilterKey(value){
       const text = normalizedText(value);
@@ -9114,6 +9198,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       let score = 0;
       if(baseKey && candKey && baseKey === candKey) score += 80;
       if(baseKey === "FILTRO_ACEITE" && candKey === "FILTRO_ACEITE_MOTOR") score += 60;
+      if(baseKey === "FILTRO_ACEITE_MOTOR" && candKey === "FILTRO_ACEITE") score += 60;
       if(baseKey === "FILTRO_AIRE" && /FILTRO_AIRE_(PRIMARIO|SECUNDARIO)/.test(candKey)) score += 50;
       const words = baseText.split(/\s+/).filter(word => word.length > 3 && !["FILTRO","FILTER"].includes(word));
       score += words.filter(word => candText.includes(word)).length * 8;
@@ -9122,14 +9207,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return score;
     }
     function catalogItemsForEquipmentInterval(code, interval, filtersOnly=true, anyInterval=false){
-      if(!code) return [];
-      const eq = portalEquipment().find(item => normalizedText(item.code || item.equipment_code) === normalizedText(code)) || {};
-      const filterRows = ((eq && eq.filters) || [])
-        .filter(row => (anyInterval || workOrderIntervalMatches(row.service_interval, interval)) && (!filtersOnly || workOrderIsFilterRow(row)))
+      const equipmentRows = workOrderCandidateEquipment(code);
+      const filterRows = equipmentRows.flatMap(eq => ((eq && eq.filters) || []).map(row => ({...row, equipment_code: row.equipment_code || row.equipment || eq.code || eq.equipment_code || ""})))
+        .filter(row => (anyInterval || workOrderIntervalMatches(workOrderFilterInterval(row), interval)) && (!filtersOnly || workOrderIsFilterRow(row)))
         .map(row => workOrderCatalogItemFromRow(row, "Filtros por equipo"))
         .filter(item => !filtersOnly || item.part_number || item.donaldson_part || item.equivalent_part);
       const manualRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code)
-        .filter(row => (anyInterval || workOrderIntervalMatches(row.service_interval, interval)) && (!filtersOnly || workOrderIsFilterRow(row)))
+        .filter(row => (anyInterval || workOrderIntervalMatches(workOrderFilterInterval(row), interval)) && (!filtersOnly || workOrderIsFilterRow(row)))
         .map(row => workOrderCatalogItemFromRow(row, "Manual equipo"))
         .filter(item => !filtersOnly || item.part_number || item.donaldson_part || item.equivalent_part);
       const seen = new Set();
@@ -10220,7 +10304,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
         {value:"RESEMIN BOLTER 99 JMC-1387", label:"RESEMIN BOLTER 99 JMC-1387 - Jumbo empernador"},
       ];
       const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
-      const serviceEquipmentOptions = [...equipmentOptions];
+      const dataEquipmentOptions = (Array.isArray(data.equipment) ? data.equipment : []).map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
+      const workOrderEquipmentOptions = [...equipmentOptions];
+      dataEquipmentOptions.forEach(option => {
+        if(option.value && !workOrderEquipmentOptions.some(item => normalizedText(item.value) === normalizedText(option.value))) workOrderEquipmentOptions.push(option);
+      });
+      const serviceEquipmentOptions = [...workOrderEquipmentOptions];
       fixedSpecialEquipmentOptions.forEach(option => {
         if(!serviceEquipmentOptions.some(item => normalizedText(item.value) === normalizedText(option.value))) serviceEquipmentOptions.push(option);
       });
@@ -10233,7 +10322,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("specialSrvEquipment", serviceEquipmentOptions, "Selecciona");
       setOptions("specialPlanEquipment", serviceEquipmentOptions, "Selecciona");
       setOptions("woEquipment", serviceEquipmentOptions, "Selecciona");
-      setOptions("woPlanEquipment", equipmentOptions, "Selecciona");
+      setOptions("woPlanEquipment", workOrderEquipmentOptions, "Selecciona");
       setOptions("woFilterEquipment", serviceEquipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
       setOptions("spareEquipment", equipmentOptions, "Todos");
@@ -13610,6 +13699,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderMovements();
       renderWarehouseDashboard();
     }
+    $("sidebarToggle").addEventListener("click", () => {
+      const collapsed = !document.body.classList.contains("sidebar-collapsed");
+      localStorage.setItem("mgaWarehouseSidebarCollapsed", collapsed ? "1" : "0");
+      applySidebarState();
+    });
     document.querySelectorAll(".tabs button").forEach(btn => btn.addEventListener("click", () => {
       activateTab(btn.dataset.tab);
     }));
