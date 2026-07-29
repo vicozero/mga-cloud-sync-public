@@ -6596,6 +6596,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .capture-layout { grid-template-columns:minmax(0,1fr) minmax(560px,.9fr); }
     .capture-form-grid { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:10px; }
     .capture-section-title { grid-column:1 / -1; margin:4px 0 -2px; padding:8px 10px; border-left:4px solid var(--teal); border-radius:4px; background:#f0fdfa; color:#0f766e; font-size:12px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; }
+    .screen-hidden { display:none !important; }
     .capture-fluid { background:#f8fafc; border-radius:6px; padding:8px; margin:-2px; }
     .capture-actions { position:sticky; bottom:0; z-index:3; padding:10px 0 2px; background:linear-gradient(180deg,rgba(255,255,255,.82),#fff 30%); }
     .capture-actions .btn { min-height:40px; }
@@ -7349,14 +7350,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Equipo<select id="prevExecEquipment"></select></label>
             <label>Supervisor<input id="prevExecSupervisor" placeholder="Supervisor"></label>
             <label>Mecanico<input id="prevExecMechanic" placeholder="Mecanico"></label>
-            <label>Tipo servicio<select id="prevExecServiceType"><option value="PM1">PM1 - 250H</option><option value="PM2">PM2 - 500H</option><option value="PM3">PM3 - 750H</option><option value="PM4">PM4 - 1000H</option></select></label>
+            <label>Servicio a ejecutar<select id="prevExecServiceType"><option value="PM1">250H - PM1</option><option value="PM2">500H - PM2</option><option value="PM3">750H - PM3</option><option value="PM4">1000H - PM4</option></select></label>
             <label>Tipo de atributo<select id="prevExecAttribute"><option>GENERAL</option><option>MOTOR</option><option>ELECT</option><option>DIESEL</option><option>HIDRAULICO</option><option>TRANSMISION</option><option>LLANTAS</option><option>FRENOS</option><option>OTRO</option></select></label>
             <label>Horometro cierre<input id="prevExecMeter" type="number" step="0.1" min="0" value="0"></label>
             <label>Estatus<select id="prevExecState"><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
-            <label class="wide">Refacciones usadas<textarea id="prevExecParts" rows="3" placeholder="Ej. filtro aceite 1 pza; banda alternador 1 pza"></textarea></label>
-            <div class="capture-section-title">Plan preventivo por manual / filtros por equipo</div>
+            <label class="wide">Refacciones usadas / trabajo realizado<textarea id="prevExecParts" rows="3" placeholder="Captura solo lo realmente usado o realizado. Los filtros planeados saldran en el reporte."></textarea></label>
+            <div class="capture-section-title">Plan preventivo por manual</div>
             <div class="wide table-wrap"><table id="prevExecPlanTable"></table></div>
-            <div class="wide table-wrap"><table id="prevExecPlanPartsTable"></table></div>
+            <p class="wide muted">Los filtros y refacciones del plan no se muestran en pantalla; se incluyen automaticamente en el reporte de cierre.</p>
+            <div class="wide table-wrap screen-hidden"><table id="prevExecPlanPartsTable"></table></div>
             <div class="capture-section-title">Aceites y fluidos (litros)</div>
             <label class="capture-fluid">Aceite total<input id="prevExecOilTotal" type="number" step="0.1" min="0" value="0" readonly></label>
             <label class="capture-fluid">15W40<input id="prevExecOil15w40" type="number" step="0.1" min="0" value="0"></label>
@@ -8118,22 +8120,35 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function servicePrintHtml(record, title){
       const oils = typeof record.oils_used === "object" ? Object.entries(record.oils_used).map(([k,v]) => `${k}: ${v}`).join("; ") : (record.lubricants_used || record.oils_used || "");
+      const preventive = record.preventive_report || null;
+      const checklistText = typeof record.checklist === "object"
+        ? Object.entries(record.checklist).filter(([,v]) => v).map(([k]) => k).join(", ")
+        : (record.checklist || "");
       const rows = [
         ["Folio", record.folio || record.order_number || record.id || record.web_id || ""],
         ["Fecha", record.close_date || record.completed_date || record.service_date || ""],
         ["Equipo", `${record.equipment_code || ""} ${record.equipment_description || ""}`.trim()],
-        ["Servicio", [record.service_type, record.service_name, record.stage, record.service_interval].filter(Boolean).join(" / ")],
+        ["Servicio", preventive ? preventive.service_label : [record.service_type, record.service_name, record.stage, record.service_interval].filter(Boolean).join(" / ")],
         ["Componente", record.attribute_type || record.component || ""],
         ["Horometro", record.completed_meter || ""],
         ["Supervisor", record.supervisor || ""],
         ["Mecanico", record.mechanic || ""],
-        ["Refacciones", record.parts_used || record.filters_text || record.filters_used || ""],
+        ["Refacciones/trabajo realizado", record.parts_used || record.filters_text || record.filters_used || "Sin captura manual"],
         ["Lubricantes", oils],
-        ["Checklist", typeof record.checklist === "object" ? Object.entries(record.checklist).filter(([,v]) => v).map(([k]) => k).join(", ") : (record.checklist || "")],
+        ["Checklist", checklistText],
         ["Observaciones", record.notes || ""],
         ["Evidencia", record.evidence_note || ""],
       ];
-      return `<!doctype html><html><head><title>${esc(title)}</title><style>@page{size:letter;margin:.3in}body{font-family:Segoe UI,Arial,sans-serif;margin:0;color:#0f172a;font-size:10.5px}h1{color:#0b2f6f;margin:0 0 4px;font-size:20px}.meta{color:#64748b;margin-bottom:10px}.box{border:1px solid #cbd5e1;border-radius:8px;padding:9px;margin-bottom:10px}table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #e2e8f0;padding:5px 6px;vertical-align:top;line-height:1.2}td:first-child{width:150px;font-weight:700;color:#0b2f6f}.sign{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:32px}.line{border-top:1px solid #334155;text-align:center;padding-top:6px}</style></head><body><h1>${esc(title)}</h1><div class="meta">Portal MGA mantenimiento</div><div class="box"><table>${rows.map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></div><div class="sign"><div class="line">Mecanico</div><div class="line">Supervisor</div></div><script>window.onload=()=>window.print()<\\/script></body></html>`;
+      const planHtml = preventive ? `
+        <div class="box"><h2>Plan preventivo ejecutado</h2><table><thead><tr><th>Sistema</th><th>Componente</th><th>Actividad</th><th>Manual/fuente</th></tr></thead><tbody>
+          ${(preventive.plan_rows || []).map(row => `<tr><td>${esc(row.system || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.action || "")}</td><td>${esc(row.manual || "")}</td></tr>`).join("") || `<tr><td colspan="4">Sin plan cargado; se uso checklist base.</td></tr>`}
+        </tbody></table></div>
+        <div class="box"><h2>Filtros/refacciones consideradas para el servicio</h2><table><thead><tr><th>No. parte</th><th>Descripcion</th><th>Cant.</th><th>Unidad</th><th>Fuente</th></tr></thead><tbody>
+          ${(preventive.planned_parts || []).map(item => `<tr><td>${esc(item.part_number || "")}</td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td><td>${esc([item.source,item.manual].filter(Boolean).join(" / "))}</td></tr>`).join("") || `<tr><td colspan="5">Sin filtros/refacciones cargadas para este equipo e intervalo.</td></tr>`}
+        </tbody></table></div>
+        <div class="box next-service"><h2>Siguiente servicio marcado</h2><b>${esc((preventive.next_service || {}).label || "")}</b><span>${esc((preventive.next_service || {}).meter_text || "")}</span></div>
+      ` : "";
+      return `<!doctype html><html><head><title>${esc(title)}</title><style>@page{size:letter;margin:.3in}body{font-family:Segoe UI,Arial,sans-serif;margin:0;color:#0f172a;font-size:10.5px}h1{color:#0b2f6f;margin:0 0 4px;font-size:20px}h2{color:#0b2f6f;margin:0 0 7px;font-size:14px}.meta{color:#64748b;margin-bottom:10px}.box{border:1px solid #cbd5e1;border-radius:8px;padding:9px;margin-bottom:10px;break-inside:avoid}table{width:100%;border-collapse:collapse}th{background:#e8eef7;color:#0b2f6f;text-align:left;font-size:10px;text-transform:uppercase}th,td{border-bottom:1px solid #e2e8f0;padding:5px 6px;vertical-align:top;line-height:1.2}td:first-child{font-weight:700;color:#0b2f6f}.box>table>tbody>tr>td:first-child{width:150px}.next-service{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#f0fdfa;border-color:#14b8a6}.next-service b{font-size:18px;color:#0f766e}.next-service span{font-size:13px;color:#334155}.sign{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:32px}.line{border-top:1px solid #334155;text-align:center;padding-top:6px}</style></head><body><h1>${esc(title)}</h1><div class="meta">Portal MGA mantenimiento</div><div class="box"><table>${rows.map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></div>${planHtml}<div class="sign"><div class="line">Mecanico</div><div class="line">Supervisor</div></div><script>window.onload=()=>window.print()<\\/script></body></html>`;
     }
     function printServiceRecord(record, title){
       const win = window.open("", "_blank");
@@ -11249,6 +11264,28 @@ WAREHOUSE_HTML = r"""<!doctype html>
         `<tr><td></td><td><b>Total ${esc(report.group)}</b></td><td><b>${one(report.totals.period)}</b></td><td><b>${one(report.totals.mp)}</b></td><td><b>${one(report.totals.mc)}</b></td><td><b>${one(report.totals.worked)}</b></td><td><b>${num(report.totals.stops)}</b></td><td><b>${pct(report.totals.availability)}</b></td><td><b>${pct(report.totals.utilization)}</b></td><td><b>${pct(report.totals.reliability)}</b></td><td><b>${one(report.totals.tmef)}</b></td><td><b>${one(report.totals.tmpr)}</b></td><td></td></tr></tbody>`;
     }
     const preventiveServiceHours = {PM1:250, PM2:500, PM3:750, PM4:1000};
+    const preventiveServiceOrder = ["PM1", "PM2", "PM3", "PM4"];
+    const preventiveServiceStepHours = 250;
+    function preventiveServiceLabel(service){
+      const key = String(service || "PM1").toUpperCase();
+      const hours = preventiveServiceHours[key] || 250;
+      return `${hours}H - ${key}`;
+    }
+    function preventiveNextServiceKey(service){
+      const key = String(service || "PM1").toUpperCase();
+      const idx = preventiveServiceOrder.indexOf(key);
+      return preventiveServiceOrder[(idx >= 0 ? idx + 1 : 1) % preventiveServiceOrder.length] || "PM1";
+    }
+    function preventiveNextServiceInfo(record){
+      const nextKey = preventiveNextServiceKey(record.service_type);
+      const meter = Number(record.completed_meter || 0);
+      return {
+        key: nextKey,
+        label: preventiveServiceLabel(nextKey),
+        meter: meter > 0 ? meter + preventiveServiceStepHours : 0,
+        meter_text: meter > 0 ? `Programar al horometro ${one(meter + preventiveServiceStepHours)} (+${preventiveServiceStepHours} h de ciclo)` : "Programar despues de actualizar horometro",
+      };
+    }
     const preventiveClosedStates = new Set(["CERRADO","CERRADA","TERMINADO","TERMINADA","FINALIZADO","FINALIZADA"]);
     const preventiveOilInputs = [
       ["prevExecOil15w40", "oil_motor_15w40", "15W40"],
@@ -11290,6 +11327,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function preventiveManualRowsForSelection(){
       const code = $("prevExecEquipment")?.value || "";
       const interval = preventiveSelectedInterval();
+      return preventiveManualRowsFor(code, interval, $("prevExecServiceType")?.value || "PM1");
+    }
+    function preventiveManualRowsFor(code, interval, service="PM1"){
       if(!code) return [];
       const manualRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code)
         .filter(row => workOrderIntervalMatches(row.service_interval, interval));
@@ -11312,6 +11352,27 @@ WAREHOUSE_HTML = r"""<!doctype html>
         return true;
       }).slice(0, 30);
     }
+    function preventivePlannedPartsFor(record){
+      const service = String(record.service_type || "PM1").toUpperCase();
+      const interval = `${preventiveServiceHours[service] || 250}H`;
+      return catalogItemsForEquipmentInterval(record.equipment_code || "", interval, true);
+    }
+    function preventiveReportRecord(record){
+      const service = String(record.service_type || "PM1").toUpperCase();
+      const interval = `${preventiveServiceHours[service] || 250}H`;
+      const planRows = preventiveManualRowsFor(record.equipment_code || "", interval, service);
+      const plannedParts = preventivePlannedPartsFor(record);
+      return {
+        ...record,
+        preventive_report: {
+          service_label: preventiveServiceLabel(service),
+          interval,
+          plan_rows: planRows,
+          planned_parts: plannedParts,
+          next_service: preventiveNextServiceInfo(record),
+        },
+      };
+    }
     function renderPreventiveManualPlan(){
       if(!$("prevExecPlanTable")) return;
       const service = $("prevExecServiceType")?.value || "PM1";
@@ -11327,9 +11388,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecPlanPartsTable").innerHTML = `<thead><tr><th>No. parte</th><th>Filtro/refaccion del PM</th><th>Cant.</th><th>Unidad</th><th>Fuente/manual</th></tr></thead><tbody>` +
         (filterItems.map(item => `<tr><td><code>${esc(item.part_number || "")}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td><td>${esc([item.source,item.manual].filter(Boolean).join(" / "))}</td></tr>`).join("") || `<tr><td colspan="5">Sin filtros cargados para este equipo e intervalo. Se mantiene checklist base.</td></tr>`) +
         `</tbody>`;
-      if(!$("prevExecParts").value.trim() && filterItems.length){
-        $("prevExecParts").value = filterItems.map(workOrderPlanItemText).join("; ");
-      }
     }
     function preventiveManualActivitiesText(){
       const rows = preventiveManualRowsForSelection();
@@ -11798,10 +11856,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const closed = rows.filter(isPreventiveClosed);
       $("prevExecOpenCount").textContent = `${open.length} abierto(s)`;
       $("prevExecClosedCount").textContent = `${closed.length} cerrado(s)`;
-      const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="10">Sin servicios preventivos abiertos.</td></tr>`;
-      $("prevExecOpenTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
+      const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(preventiveServiceLabel(row.service_type))}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="10">Sin servicios preventivos abiertos.</td></tr>`;
+      $("prevExecOpenTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
       const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="10">Sin servicios cerrados desde esta pestaña.</td></tr>`;
-      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha cierre</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Refacciones</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
+      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha cierre</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Trabajo realizado</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
       document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
         const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
         if(record) fillPreventiveExecutionForm(record);
@@ -11826,6 +11884,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderBacklog();
       renderExecutiveBoard();
       $("prevExecStatus").textContent = close ? "Servicio cerrado y enviado a Servicios realizados." : "Servicio guardado.";
+      const reportRecord = {...payload, ...(result.record || {})};
       if(result.record) fillPreventiveExecutionForm(result.record);
       if(shouldDeductParts && payload.parts_used){
         const deducted = await deductServiceParts(payload.parts_used, {equipment_code:payload.equipment_code, service_interval:payload.service_type, reference:payload.folio || payload.id, created_by:payload.mechanic || payload.supervisor, notes:"Salida automatica por cierre preventivo"});
@@ -11833,6 +11892,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
           $("prevExecStatus").textContent += ` Refacciones descontadas: ${deducted.count}.`;
           await load();
         }
+      }
+      if(close){
+        printPreventiveExecution(reportRecord);
       }
     }
     async function deletePreventiveExecution(){
@@ -11853,10 +11915,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       resetPreventiveExecutionForm();
       $("prevExecStatus").textContent = "Servicio eliminado.";
     }
-    function printPreventiveExecution(){
-      const payload = preventiveExecutionPayload();
+    function printPreventiveExecution(record=null){
+      const payload = record || preventiveExecutionPayload();
       if(!payload.equipment_code) return alert("Selecciona o guarda un servicio preventivo.");
-      printServiceRecord(payload, `Servicio preventivo ${payload.folio || payload.service_type || ""}`);
+      printServiceRecord(preventiveReportRecord(payload), `Servicio preventivo ${payload.folio || preventiveServiceLabel(payload.service_type) || ""}`);
     }
     function specialServiceRows(){
       const payload = portal.special_services || {};
