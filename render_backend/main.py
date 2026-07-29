@@ -7348,9 +7348,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <p class="muted">Plan base editable para ejecutar servicios por horometro. Ajustable cuando se cargue el manual OEM exacto.</p>
         <div class="panel toolbar">
           <label>Equipo<select id="specialPlanEquipment"></select></label>
-          <label>Modelo<select id="specialPlanModel"><option value="BOLTER99">Bolter 99 Resemin</option><option value="DD311">Sandvik DD311</option></select></label>
-          <label>Intervalo<select id="specialPlanInterval"><option value="TURNO">Inspeccion turno</option><option value="50H">50H</option><option value="250H">250H</option><option value="500H">500H</option><option value="1000H">1000H</option></select></label>
+          <label>Modelo<select id="specialPlanModel"><option value="BOLTER99">Bolter 99 Resemin base</option><option value="BOLTER99_JMC915">Resemin Bolter 99 JMC-915</option><option value="BOLTER99_JMC1387">Resemin Bolter 99 JMC-1387</option><option value="DD311">Sandvik DD311</option><option value="DD31340">Sandvik DD313-40</option></select></label>
+          <label>Intervalo<select id="specialPlanInterval"><option value="TURNO">Inspeccion turno</option><option value="50H">50H</option><option value="250H">250H</option><option value="500H">500H</option><option value="750H">750H</option><option value="1000H">1000H</option></select></label>
           <button class="btn" id="specialPlanLoadBtn">Cargar a ejecucion</button>
+          <button class="btn secondary" id="specialPlanPrevBtn">Cargar a preventivo</button>
           <button class="btn secondary" id="specialPlanPrintBtn">Imprimir plan</button>
         </div>
         <div class="grid2">
@@ -9731,18 +9732,28 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const previousGroup = $("kpiGroup").value;
       $("kpiGroup").innerHTML = groups.map(g => `<option value="${esc(g.value)}">${esc(g.label)}</option>`).join("");
       $("kpiGroup").value = previousGroup && groups.some(g => g.value === previousGroup) ? previousGroup : groups[0]?.value || "";
+      const fixedSpecialEquipmentOptions = [
+        {value:"SANDVIK DD311", label:"SANDVIK DD311 - Jumbo perforador"},
+        {value:"SANDVIK DD313-40", label:"SANDVIK DD313-40 - Jumbo perforador"},
+        {value:"RESEMIN BOLTER 99 JMC-915", label:"RESEMIN BOLTER 99 JMC-915 - Jumbo empernador"},
+        {value:"RESEMIN BOLTER 99 JMC-1387", label:"RESEMIN BOLTER 99 JMC-1387 - Jumbo empernador"},
+      ];
       const equipmentOptions = portalEquipment().map(e => ({value:e.code || e.equipment_code, label:`${e.code || e.equipment_code} - ${e.description || e.family || ""}`}));
+      const serviceEquipmentOptions = [...equipmentOptions];
+      fixedSpecialEquipmentOptions.forEach(option => {
+        if(!serviceEquipmentOptions.some(item => normalizedText(item.value) === normalizedText(option.value))) serviceEquipmentOptions.push(option);
+      });
       setOptions("fichaEquipment", equipmentOptions, "Selecciona");
       if(!$("fichaEquipment").value && equipmentOptions.length) $("fichaEquipment").value = equipmentOptions[0].value;
       setOptions("prEquipment", equipmentOptions, "Todos");
-      setOptions("manualPrEquipment", equipmentOptions, "Selecciona");
+      setOptions("manualPrEquipment", serviceEquipmentOptions, "Selecciona");
       setOptions("srvEquipment", equipmentOptions, "Todos");
-      setOptions("prevExecEquipment", equipmentOptions, "Selecciona");
-      setOptions("specialSrvEquipment", equipmentOptions, "Selecciona");
-      setOptions("specialPlanEquipment", equipmentOptions, "Selecciona");
-      setOptions("woEquipment", equipmentOptions, "Selecciona");
-      setOptions("woPlanEquipment", equipmentOptions, "Selecciona");
-      setOptions("woFilterEquipment", equipmentOptions, "Todos");
+      setOptions("prevExecEquipment", serviceEquipmentOptions, "Selecciona");
+      setOptions("specialSrvEquipment", serviceEquipmentOptions, "Selecciona");
+      setOptions("specialPlanEquipment", serviceEquipmentOptions, "Selecciona");
+      setOptions("woEquipment", serviceEquipmentOptions, "Selecciona");
+      setOptions("woPlanEquipment", serviceEquipmentOptions, "Selecciona");
+      setOptions("woFilterEquipment", serviceEquipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
       setOptions("spareEquipment", equipmentOptions, "Todos");
       const auditModules = [...new Set((portal.audit_log || []).map(row => row.module).filter(Boolean))].sort();
@@ -11382,6 +11393,58 @@ WAREHOUSE_HTML = r"""<!doctype html>
         },
       },
     };
+    function cloneSpecialMaintenancePlan(baseKey, overrides={}){
+      const source = specialMaintenancePlans[baseKey] || specialMaintenancePlans.BOLTER99;
+      const copy = JSON.parse(JSON.stringify(source));
+      return {...copy, ...overrides, intervals: copy.intervals || {}};
+    }
+    specialMaintenancePlans.BOLTER99_JMC915 = cloneSpecialMaintenancePlan("BOLTER99", {
+      name:"Resemin Bolter 99 JMC-915",
+      component:"BOLTER 99 / JUMBO EMPERNADOR JMC-915",
+      note:"Resemin Bolter 99 serie JMC-915. Gama base por horometro; validar contra manual OEM y configuracion real del equipo.",
+    });
+    specialMaintenancePlans.BOLTER99_JMC1387 = cloneSpecialMaintenancePlan("BOLTER99", {
+      name:"Resemin Bolter 99 JMC-1387",
+      component:"BOLTER 99 / JUMBO EMPERNADOR JMC-1387",
+      note:"Resemin Bolter 99 serie JMC-1387/IMC-1387. Gama base por horometro; validar contra manual OEM y configuracion real del equipo.",
+    });
+    specialMaintenancePlans.DD31340 = cloneSpecialMaintenancePlan("DD311", {
+      name:"Sandvik DD313-40",
+      component:"JUMBO PERFORADOR DD313-40",
+      note:"Sandvik DD313-40. Gama base para jumbo perforador; validar contra manual OEM, serie y configuracion electrica/hidraulica real.",
+    });
+    Object.values(specialMaintenancePlans).forEach(plan => {
+      if(plan.intervals && !plan.intervals["750H"]){
+        plan.intervals["750H"] = {
+          service:"PREVENTIVO",
+          tasks:[
+            ["Gama PM3 750H","Ejecutar revision extendida de PM1 + PM2 y documentar parametros antes/despues."],
+            ["Sistema hidraulico","Revisar filtros, aceite, presiones, temperatura, bombas, valvulas, acumuladores, cilindros y fugas bajo carga."],
+            ["Perforadora / empernador","Inspeccionar shank, sellos, guias, acoples, mordazas, alimentador, centralizadores y desgaste operativo."],
+            ["Sistema electrico","Revisar tablero, protecciones, cableado, tierras, sensores, conectores y humedad/aislamiento visible."],
+            ["Estructura / boom","Inspeccionar fisuras, soldaduras, pasadores, bujes, pernos de fijacion, topes y holguras."],
+            ["Prueba y liberacion","Realizar prueba funcional de traslado, posicionamiento, perforacion/empernado y cierre por supervisor."],
+          ],
+          parts:["FILTRO ACEITE MOTOR 1 PZA","FILTRO HIDRAULICO RETORNO 1 PZA","FILTRO HIDRAULICO PRESION 1 PZA","FILTRO RESPIRADERO HIDRAULICO 1 PZA","ACEITE HIDRAULICO VG100 40 L","GRASA EP2 4 KG"],
+        };
+      }
+    });
+    function inferSpecialPlanModelFromEquipment(value){
+      const text = normalizedText(value);
+      if(text.includes("DD313") || text.includes("DD313-40")) return "DD31340";
+      if(text.includes("DD311")) return "DD311";
+      if(text.includes("JMC-915") || text.includes("JMC915")) return "BOLTER99_JMC915";
+      if(text.includes("JMC-1387") || text.includes("JMC1387") || text.includes("IMC-1387") || text.includes("IMC1387")) return "BOLTER99_JMC1387";
+      if(text.includes("BOLTER") || text.includes("RESEMIN")) return "BOLTER99";
+      return "";
+    }
+    function applySpecialPlanModelFromEquipment(){
+      const model = inferSpecialPlanModelFromEquipment($("specialPlanEquipment")?.value || "");
+      if(model && $("specialPlanModel")) $("specialPlanModel").value = model;
+    }
+    function specialIntervalToPreventiveService(interval){
+      return {"250H":"PM1","500H":"PM2","750H":"PM3","1000H":"PM4"}[interval] || "";
+    }
     function selectedSpecialPlan(){
       const model = $("specialPlanModel").value || "BOLTER99";
       const interval = $("specialPlanInterval").value || "TURNO";
@@ -11413,6 +11476,33 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("specialSrvFolio").value = "";
       updateSpecialServiceChecklistTemplate();
       $("specialSrvStatus").textContent = `Plan ${plan.name} ${interval} cargado a ejecucion.`;
+    }
+    function loadSpecialPlanToPreventive(){
+      const {plan, interval, step} = selectedSpecialPlan();
+      const pm = specialIntervalToPreventiveService(interval);
+      if(!pm) return alert("Para cargar a preventivo selecciona 250H, 500H, 750H o 1000H.");
+      const equipment = $("specialPlanEquipment").value || $("specialSrvEquipment").value || "";
+      const activities = step.tasks.map(([system, task]) => `${system}: ${task}`).join("\n");
+      const partsText = step.parts.join("; ");
+      if(equipment){
+        $("manualPrEquipment").value = equipment;
+        $("prevExecEquipment").value = equipment;
+      }
+      $("manualPrService").value = pm;
+      $("manualPrComponent").value = plan.component || "GENERAL";
+      $("manualPrState").value = "PROGRAMADO";
+      const hours = preventiveServiceHours[pm] || 250;
+      $("manualPrNext").value = String(Number($("manualPrLast").value || 0) + hours);
+      $("manualPrNotes").value = `${plan.name} ${interval}\n${plan.note}\n\nGama preventiva:\n${activities}`;
+      $("prevExecServiceType").value = pm;
+      $("prevExecAttribute").value = "HIDRAULICO";
+      if(!$("prevExecParts").value.trim()) $("prevExecParts").value = partsText;
+      $("prevExecNotes").value = `${plan.name} ${interval}\n${plan.note}\n\nActividades para mecanico:\n${activities}`;
+      updatePreventiveChecklistTemplate();
+      renderPreventiveManualPlan();
+      $("prevExecStatus").textContent = `Gama ${plan.name} ${interval} cargada como ${pm}.`;
+      $("manualPrStatus").textContent = `Gama ${plan.name} ${interval} lista para programar.`;
+      activateTab("ejecucionPreventivos");
     }
     function printSpecialPlan(){
       const {plan, interval, step} = selectedSpecialPlan();
@@ -13101,8 +13191,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("specialSrvPrintBtn").addEventListener("click", printSpecialService);
     $("specialSrvModule").addEventListener("change", () => { $("specialSrvFolio").value = ""; $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
     $("specialSrvType").addEventListener("change", () => { $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
-    ["specialPlanEquipment","specialPlanModel","specialPlanInterval"].forEach(id => $(id).addEventListener("change", renderSpecialMaintenancePlan));
+    $("specialPlanEquipment").addEventListener("change", () => { applySpecialPlanModelFromEquipment(); renderSpecialMaintenancePlan(); });
+    ["specialPlanModel","specialPlanInterval"].forEach(id => $(id).addEventListener("change", renderSpecialMaintenancePlan));
     $("specialPlanLoadBtn").addEventListener("click", loadSpecialPlanToService);
+    $("specialPlanPrevBtn").addEventListener("click", loadSpecialPlanToPreventive);
     $("specialPlanPrintBtn").addEventListener("click", printSpecialPlan);
     ["spareEquipment","spareStatus"].forEach(id => $(id).addEventListener("change", renderSpareParts));
     $("spareSearch").addEventListener("input", renderSpareParts);
