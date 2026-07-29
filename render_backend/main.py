@@ -7198,6 +7198,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn secondary" id="woNewBtn">Nueva OT</button>
             <button class="btn" id="woSaveBtn">Guardar OT</button>
             <button class="btn secondary" id="woCloseBtn">Cerrar OT</button>
+            <button class="btn secondary" id="woPrintBtn">Imprimir OT</button>
             <button class="btn danger" id="woDeleteBtn">Eliminar OT</button>
           </div>
         </div>
@@ -8924,6 +8925,106 @@ WAREHOUSE_HTML = r"""<!doctype html>
         checklist: step.tasks.map(([system, task]) => `${system}: ${task}`).join("\n"),
         notes: plan.note,
       }, `Plan OT ${plan.name} ${interval}`);
+    }
+    function workOrderLines(value){
+      const text = String(value || "").replace(/\r/g, "\n");
+      return text.split(/\n|;|•/).map(line => line.replace(/^[-\d.)\s]+/, "").trim()).filter(Boolean);
+    }
+    function workOrderPartsRows(value){
+      const lines = workOrderLines(value);
+      return lines.length ? lines.map(line => {
+        const match = line.match(/^(?:(PENDIENTE OEM|[A-Z0-9][A-Z0-9_.\-\/]+)\s+-\s+)?(.+?)(?:\s+(\d+(?:\.\d+)?)\s+(L|PZA|JGO|KG))?$/i);
+        return {
+          part: match?.[1] || "",
+          desc: match?.[2] || line,
+          qty: match?.[3] || "",
+          unit: match?.[4] || "",
+        };
+      }) : [];
+    }
+    function workOrderPrintHtml(record){
+      const title = record.folio ? `Orden de trabajo ${record.folio}` : "Orden de trabajo";
+      const descriptionLines = workOrderLines(record.description);
+      let activities = descriptionLines.filter(line => !/^Servicio|^Plan base|^Actividades:?$/i.test(line));
+      if(!activities.length) activities = ["Diagnosticar condicion reportada.", "Ejecutar trabajo indicado con bloqueo y seguridad.", "Registrar refacciones, lubricantes, evidencia y cierre."];
+      const parts = workOrderPartsRows(record.parts_used);
+      const lubricants = workOrderPartsRows(record.lubricants_used);
+      const priorityClass = ["URGENTE","ALTA"].includes(String(record.priority || "").toUpperCase()) ? "bad" : "warn";
+      const field = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${esc(value || "")}</b></div>`;
+      const fieldHtml = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${value || ""}</b></div>`;
+      const activityRows = activities.slice(0, 14).map((line, idx) => `<tr><td class="num">${idx + 1}</td><td>${esc(line)}</td><td class="check"></td></tr>`).join("");
+      const partRows = (parts.length ? parts : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 10).map(row => `<tr><td>${esc(row.part)}</td><td>${esc(row.desc)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
+      const oilRows = (lubricants.length ? lubricants : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 6).map(row => `<tr><td>${esc(row.desc || row.part)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
+      return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+        @page{size:letter;margin:0.38in}
+        *{box-sizing:border-box}
+        body{font-family:Segoe UI,Arial,sans-serif;color:#102033;margin:0;background:#fff;font-size:11px}
+        .page{width:100%;min-height:10.2in;border:1.5px solid #0b2f6f;padding:14px 16px 12px;position:relative}
+        .head{display:grid;grid-template-columns:112px 1fr 190px;gap:12px;align-items:center;border-bottom:3px solid #0b2f6f;padding-bottom:9px}
+        .logoBox{border:1px solid #d7e0ea;border-radius:10px;height:66px;display:flex;align-items:center;justify-content:center;background:#fff}
+        .logoBox img{max-width:92px;max-height:54px}
+        h1{margin:0;color:#0b2f6f;font-size:22px;letter-spacing:.04em;text-transform:uppercase}
+        .subtitle{color:#64748b;margin-top:3px;font-size:11px}
+        .folioBox{border:2px solid #0b2f6f;border-radius:10px;overflow:hidden;text-align:center}
+        .folioBox span{display:block;background:#0b2f6f;color:#fff;font-weight:800;padding:5px;text-transform:uppercase}
+        .folioBox b{display:block;font-size:18px;padding:9px 6px;color:#b91c1c}
+        .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:10px}
+        .field{border:1px solid #cbd5e1;border-radius:8px;padding:6px;background:#f8fafc;min-height:42px}
+        .field span{display:block;color:#475569;font-size:9px;text-transform:uppercase;font-weight:700}
+        .field b{display:block;color:#0f172a;font-size:12px;margin-top:2px;line-height:1.18}
+        .badge{display:inline-block;border-radius:999px;padding:3px 9px;color:#fff;font-weight:800}
+        .badge.bad{background:#b91c1c}.badge.warn{background:#b7791f}.badge.ok{background:#047857}
+        .section{margin-top:9px;border:1px solid #cbd5e1;border-radius:10px;overflow:hidden;break-inside:avoid}
+        .section h2{margin:0;background:#eaf3ff;color:#0b2f6f;font-size:12px;text-transform:uppercase;padding:6px 9px;border-bottom:1px solid #cbd5e1;letter-spacing:.03em}
+        .body{padding:8px 9px;line-height:1.35;min-height:38px;white-space:pre-wrap}
+        table{width:100%;border-collapse:collapse}
+        th{background:#f1f5f9;color:#0b2f6f;text-align:left;font-size:10px;text-transform:uppercase}
+        th,td{border:1px solid #d8e0ea;padding:5px 6px;vertical-align:top}
+        td.num{width:28px;text-align:center;font-weight:800;color:#0b2f6f}
+        td.check{width:54px;height:26px}
+        td.check:after{content:"";display:block;width:18px;height:18px;border:1.8px solid #334155;border-radius:3px;margin:auto}
+        .two{display:grid;grid-template-columns:1.35fr .85fr;gap:9px;margin-top:9px}
+        .safety{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px}
+        .safety div{border:1px solid #d8e0ea;border-radius:7px;padding:7px;min-height:33px}
+        .safety div:before{content:"☐ ";font-weight:800;color:#0b2f6f}
+        .sign{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:30px}
+        .line{border-top:1.6px solid #334155;text-align:center;padding-top:5px;font-weight:700;color:#0b2f6f}
+        .foot{position:absolute;left:16px;right:16px;bottom:7px;color:#64748b;font-size:9px;display:flex;justify-content:space-between;border-top:1px solid #e2e8f0;padding-top:4px}
+        @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.page{border-color:#0b2f6f}}
+      </style></head><body><div class="page">
+        <div class="head">
+          <div class="logoBox"><img src="/static/mga-corner-logo.jfif" alt="MGA"></div>
+          <div><h1>Orden de trabajo</h1><div class="subtitle">MGA Contratista Minera · Mantenimiento de equipo</div></div>
+          <div class="folioBox"><span>Folio OT</span><b>${esc(record.folio || "PENDIENTE")}</b></div>
+        </div>
+        <div class="grid">
+          ${field("Fecha", record.date || "")}
+          ${field("Equipo", `${record.equipment_code || ""} ${record.equipment_description || ""}`.trim())}
+          ${field("Origen", record.origin || "")}
+          ${fieldHtml("Prioridad", `<span class="badge ${priorityClass}">${esc(record.priority || "")}</span>`)}
+          ${field("Estatus", record.status || "")}
+          ${field("Responsable", record.responsible || "")}
+          ${field("Mecanico", record.mechanic || "")}
+          ${field("Supervisor", record.supervisor || "")}
+        </div>
+        <div class="section"><h2>Trabajo solicitado / condicion encontrada</h2><div class="body">${esc(record.description || "")}</div></div>
+        <div class="section"><h2>Actividades para el mecanico</h2><table><thead><tr><th>#</th><th>Actividad</th><th>OK</th></tr></thead><tbody>${activityRows}</tbody></table></div>
+        <div class="two">
+          <div class="section"><h2>Refacciones / filtros requeridos o usados</h2><table><thead><tr><th>No. parte</th><th>Descripcion</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>${partRows}</tbody></table></div>
+          <div class="section"><h2>Lubricantes / fluidos</h2><table><thead><tr><th>Fluido</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>${oilRows}</tbody></table></div>
+        </div>
+        <div class="section"><h2>Seguridad, pruebas y evidencia</h2><div class="safety"><div>Bloqueo / permiso aplicado</div><div>Prueba operativa realizada</div><div>Area limpia y equipo liberado</div></div><div class="body"><b>Accion / cierre:</b> ${esc(record.action || "")}\n<b>Evidencia:</b> ${esc(record.evidence_note || "")}</div></div>
+        <div class="sign"><div class="line">Mecanico</div><div class="line">Supervisor</div><div class="line">Operacion / recibe</div><div class="line">Planeacion</div></div>
+        <div class="foot"><span>Formato generado por Portal MGA mantenimiento</span><span>Tamano carta · ${esc(toIsoDate(new Date()))}</span></div>
+      </div><script>window.onload=function(){setTimeout(function(){window.focus();window.print();},350);};<\\/script></body></html>`;
+    }
+    function printWorkOrder(){
+      const payload = workOrderPayload(false);
+      if(!payload.equipment_code && !payload.description) return alert("Captura o selecciona una OT para imprimir.");
+      const win = window.open("", "_blank");
+      if(!win) return alert("Permite ventanas emergentes para imprimir.");
+      win.document.write(workOrderPrintHtml(payload));
+      win.document.close();
     }
     function newWorkOrder(prefill={}){
       currentWorkOrderRecord = null;
@@ -12973,6 +13074,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("woNewBtn").addEventListener("click", () => newWorkOrder());
     $("woSaveBtn").addEventListener("click", () => saveWorkOrder(false).catch(showError));
     $("woCloseBtn").addEventListener("click", () => saveWorkOrder(true).catch(showError));
+    $("woPrintBtn").addEventListener("click", printWorkOrder);
     $("woDeleteBtn").addEventListener("click", () => deleteWorkOrder().catch(showError));
     ["woPlanEquipment","woPlanModel","woPlanInterval"].forEach(id => $(id).addEventListener("change", renderWorkOrderPlan));
     $("woPlanLoadBtn").addEventListener("click", loadWorkOrderPlan);
