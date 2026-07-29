@@ -8896,9 +8896,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const description = (match ? match[1] : raw).trim();
       const quantity = match ? match[2] : "1";
       const unit = match ? match[3].toUpperCase() : "PZA";
-      const needsOemPart = /FILTRO|KIT/i.test(description);
       return {
-        part_number: needsOemPart ? "PENDIENTE OEM" : "",
+        part_number: "",
         description,
         quantity,
         unit,
@@ -8915,31 +8914,70 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = normalizedText([row.item_type,row.system,row.component,row.description,row.part_number,row.equivalent_part,row.donaldson_part].join(" "));
       return /FILTRO|FILTER|SEPARADOR|ELEMENTO|AIRE|COMBUSTIBLE|HIDRAUL|TRANSMISION|ACEITE MOTOR/.test(text);
     }
-    function catalogItemsForEquipmentInterval(code, interval, filtersOnly=true){
+    function workOrderCleanPart(value){
+      const text = String(value || "").trim();
+      if(!text || /^PENDIENTE/i.test(text)) return "";
+      return text;
+    }
+    function workOrderPreferredPart(row){
+      return workOrderCleanPart(row.part_number) || workOrderCleanPart(row.donaldson_part) || workOrderCleanPart(row.equivalent_part) || "";
+    }
+    function workOrderCatalogItemFromRow(row, source){
+      const part = workOrderPreferredPart(row);
+      return {
+        part_number: part,
+        donaldson_part: workOrderCleanPart(row.donaldson_part),
+        equivalent_part: workOrderCleanPart(row.equivalent_part),
+        description: row.description || row.item_type || row.component || row.system || "Filtro",
+        quantity: row.quantity || 1,
+        unit: row.unit || "PZA",
+        source,
+        manual: row.manual_title || row.source_file || row.notes || row.service_interval || "",
+        service_interval: row.service_interval || "",
+        from_catalog: true,
+      };
+    }
+    function workOrderFilterKey(value){
+      const text = normalizedText(value);
+      if(/SEPARADOR.*(DIESEL|COMBUST)|DIESEL.*SEPARADOR|COMBUST.*SEPARADOR|AGUA/.test(text)) return "SEPARADOR_DIESEL";
+      if(/(DIESEL|COMBUST)/.test(text)) return "FILTRO_DIESEL";
+      if(/AIRE.*SECUND|SECUND.*AIRE|SAFETY/.test(text)) return "FILTRO_AIRE_SECUNDARIO";
+      if(/AIRE.*PRIM|PRIM.*AIRE/.test(text)) return "FILTRO_AIRE_PRIMARIO";
+      if(/AIRE|ADMISION/.test(text)) return "FILTRO_AIRE";
+      if(/ACEITE.*MOTOR|MOTOR.*ACEITE|LUBE|LUBRICACION/.test(text)) return "FILTRO_ACEITE_MOTOR";
+      if(/ACEITE/.test(text)) return "FILTRO_ACEITE";
+      if(/HIDRAUL|HCO|HYD/.test(text)) return "FILTRO_HIDRAULICO";
+      if(/TRANSMISION|TRANS|CONVERTIDOR/.test(text)) return "FILTRO_TRANSMISION";
+      if(/RESPIRADERO|BREATHER/.test(text)) return "FILTRO_RESPIRADERO";
+      if(/KIT.*FILTRO|FILTRO.*KIT/.test(text)) return "KIT_FILTROS";
+      return "";
+    }
+    function workOrderFilterMatchScore(base, candidate, interval){
+      const baseText = normalizedText([base.description, base.part_number].join(" "));
+      const candText = normalizedText([candidate.description, candidate.part_number, candidate.donaldson_part, candidate.equivalent_part].join(" "));
+      const baseKey = workOrderFilterKey(baseText);
+      const candKey = workOrderFilterKey(candText);
+      let score = 0;
+      if(baseKey && candKey && baseKey === candKey) score += 80;
+      if(baseKey === "FILTRO_ACEITE" && candKey === "FILTRO_ACEITE_MOTOR") score += 60;
+      if(baseKey === "FILTRO_AIRE" && /FILTRO_AIRE_(PRIMARIO|SECUNDARIO)/.test(candKey)) score += 50;
+      const words = baseText.split(/\s+/).filter(word => word.length > 3 && !["FILTRO","FILTER"].includes(word));
+      score += words.filter(word => candText.includes(word)).length * 8;
+      if(workOrderIntervalMatches(candidate.service_interval, interval)) score += 20;
+      if(candidate.part_number || candidate.donaldson_part) score += 10;
+      return score;
+    }
+    function catalogItemsForEquipmentInterval(code, interval, filtersOnly=true, anyInterval=false){
       if(!code) return [];
       const eq = portalEquipment().find(item => normalizedText(item.code || item.equipment_code) === normalizedText(code)) || {};
       const filterRows = ((eq && eq.filters) || [])
-        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && (!filtersOnly || workOrderIsFilterRow(row)))
-        .map(row => ({
-          part_number: row.part_number || row.donaldson_part || row.equivalent_part || "PENDIENTE OEM",
-          description: row.description || row.item_type || "Filtro",
-          quantity: row.quantity || 1,
-          unit: row.unit || "PZA",
-          source: "Filtros por equipo",
-          manual: row.manual_title || row.source_file || row.service_interval || "",
-          from_catalog: true,
-        }));
+        .filter(row => (anyInterval || workOrderIntervalMatches(row.service_interval, interval)) && (!filtersOnly || workOrderIsFilterRow(row)))
+        .map(row => workOrderCatalogItemFromRow(row, "Filtros por equipo"))
+        .filter(item => !filtersOnly || item.part_number || item.donaldson_part || item.equivalent_part);
       const manualRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code)
-        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && (!filtersOnly || workOrderIsFilterRow(row)))
-        .map(row => ({
-          part_number: row.part_number || row.equivalent_part || "PENDIENTE OEM",
-          description: row.description || row.component || row.system || "Filtro",
-          quantity: row.quantity || 1,
-          unit: row.unit || "PZA",
-          source: "Manual equipo",
-          manual: row.manual_title || row.notes || row.service_interval || "",
-          from_catalog: true,
-        }));
+        .filter(row => (anyInterval || workOrderIntervalMatches(row.service_interval, interval)) && (!filtersOnly || workOrderIsFilterRow(row)))
+        .map(row => workOrderCatalogItemFromRow(row, "Manual equipo"))
+        .filter(item => !filtersOnly || item.part_number || item.donaldson_part || item.equivalent_part);
       const seen = new Set();
       return [...filterRows, ...manualRows].filter(item => {
         const key = normalizedText([item.part_number,item.description,item.quantity,item.unit].join("|"));
@@ -8953,6 +8991,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function workOrderCatalogFilterItems(interval){
       return catalogItemsForEquipmentInterval(workOrderSelectedEquipmentCode(), interval, true);
+    }
+    function workOrderAllCatalogFilterItems(){
+      return catalogItemsForEquipmentInterval(workOrderSelectedEquipmentCode(), "", true, true);
     }
     function workOrderSystemMatches(system, ...values){
       const text = normalizedText(values.filter(Boolean).join(" "));
@@ -8974,6 +9015,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const severe = ["750H","1000H"].includes(String(interval || "").toUpperCase());
       const common = [
         ["Motor - seguridad", "Bloquear equipo, aplicar tarjeta/permiso, esperar enfriamiento, limpiar el area del motor y verificar fugas activas antes de intervenir."],
+        ["Inspeccion motor diesel OEM", "Inspeccionar el motor diesel siguiendo la gama/manual del equipo: fugas externas, soportes, lineas de combustible, arneses, sensores, admision, escape, enfriamiento, lubricacion y condicion general antes de desmontar componentes."],
         ["Motor - aceite", "Revisar nivel, condicion, olor y posible contaminacion por diesel, refrigerante o particulas; cambiar aceite y filtro cuando aplique a la gama y registrar litros usados."],
         ["Motor - filtracion", "Cambiar o revisar filtros de aceite, filtros de combustible y separador de agua segun intervalo; lubricar empaques, llenar/purgar de acuerdo al fabricante y confirmar que no queden fugas."],
         ["Admision / aire", "Inspeccionar prefiltro, filtro primario/secundario, indicador de restriccion, ductos, abrazaderas y entrada de polvo; limpiar carcasa evitando contaminar la admision."],
@@ -8985,6 +9027,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Prueba motor", "Arrancar y verificar presion de aceite, temperatura, humo, ruidos, vibracion, codigos/alertas y respuesta de aceleracion; documentar parametros antes de liberar."],
       ];
       const truck = [
+        ["Inspeccion diesel camion", "Revisar sistema de combustible, mangueras, turbo, enfriador de carga, radiador, fan clutch/ventilador, freno de motor si aplica, codigos del ECM y condicion de emisiones antes de prueba de ruta."],
         ["Motor camion - postratamiento", "Si aplica por configuracion, revisar DEF, DPF/SCR, sensores, lineas, fugas de escape y codigos activos antes de liberar el camion."],
         ["Motor camion - prueba ruta", "Realizar prueba de ruta corta o prueba estacionaria con carga controlada; verificar temperatura, presion, potencia, humo y ausencia de fugas."],
       ];
@@ -8993,6 +9036,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Ambiente subterraneo", "Revisar admision y enfriamiento con enfoque en polvo, humedad y lodo; limpiar sin dirigir contaminante hacia filtros, alternador o conectores."],
       ];
       const heavy = [
+        ["Inspeccion diesel equipo pesado", "Revisar motor diesel bajo condiciones de mina: soportes, guardas, ventilador, enfriadores, turbo, admision, escape, lineas de combustible, fugas y alarmas del panel/ECM."],
         ["Motor equipo pesado", "Revisar soportes de motor, guardas, radiador, enfriadores, ventilador reversible si aplica y contaminacion por polvo/lodo en compartimiento."],
         ["Prueba bajo carga", "Probar respuesta del motor con el equipo en funcion, observando temperatura, presion, potencia, humo, vibracion y alarmas."],
       ];
@@ -9032,20 +9076,52 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(system === "HIDRAULICO") return `${step.title} - Servicio hidraulico`;
       return step.title;
     }
+    function workOrderItemPartLabel(item){
+      const part = workOrderCleanPart(item?.part_number);
+      const donaldson = workOrderCleanPart(item?.donaldson_part);
+      const equivalent = workOrderCleanPart(item?.equivalent_part);
+      if(part && donaldson && normalizedText(part) !== normalizedText(donaldson)) return `${part} / Donaldson ${donaldson}`;
+      if(part) return part;
+      if(donaldson) return `Donaldson ${donaldson}`;
+      if(equivalent) return equivalent;
+      return "";
+    }
     function workOrderPlanItems(step, interval, system="GENERAL"){
       const base = (step.items || step.parts || []).map(item => typeof item === "string" ? workOrderPlanItemFromText(item) : item);
       const catalog = workOrderCatalogFilterItems(interval);
+      const allCatalog = workOrderAllCatalogFilterItems();
       const filteredCatalog = catalog.filter(item => workOrderSystemMatches(system, item.description, item.part_number, item.source, item.manual));
       const source = filteredCatalog.length ? filteredCatalog : catalog;
       const filteredBase = base.filter(item => workOrderSystemMatches(system, item.description, item.part_number));
-      if(!source.length) return filteredBase.length ? filteredBase : base;
-      const baseNoFilters = filteredBase.filter(item => !/FILTRO|KIT/i.test(item.description || ""));
-      return [...source, ...baseNoFilters];
+      const baseSource = filteredBase.length ? filteredBase : base;
+      const resolvedBase = baseSource.map(item => {
+        if(!/FILTRO|KIT/i.test(item.description || "")) return item;
+        const candidates = allCatalog
+          .filter(candidate => workOrderSystemMatches(system, candidate.description, candidate.part_number, candidate.donaldson_part, candidate.source, candidate.manual))
+          .map(candidate => ({candidate, score: workOrderFilterMatchScore(item, candidate, interval)}))
+          .filter(entry => entry.score >= 45)
+          .sort((a,b) => b.score - a.score);
+        if(!candidates.length) return {...item, part_number: "", source: "Plan base", manual: "Sin filtro relacionado en Filtros por equipo"};
+        return {...candidates[0].candidate, quantity: item.quantity || candidates[0].candidate.quantity || 1, unit: item.unit || candidates[0].candidate.unit || "PZA", matched_from_plan: item.description};
+      });
+      const merged = [...source, ...resolvedBase.filter(item => !/FILTRO|KIT/i.test(item.description || "") || !source.some(src => {
+        const srcKey = workOrderFilterKey([src.description, src.part_number, src.donaldson_part].join(" "));
+        const itemKey = workOrderFilterKey([item.description, item.part_number, item.donaldson_part].join(" "));
+        return srcKey && itemKey && srcKey === itemKey;
+      }))];
+      const seen = new Set();
+      return merged.filter(item => {
+        const partKey = workOrderCleanPart(item.part_number) || workOrderCleanPart(item.donaldson_part) || normalizedText(item.description);
+        const key = normalizedText([partKey, item.description, item.quantity, item.unit].join("|"));
+        if(seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     }
     function workOrderPlanItemText(item){
-      const part = item.part_number && item.part_number !== "PENDIENTE OEM" ? `${item.part_number} - ` : "";
-      const pending = item.part_number === "PENDIENTE OEM" ? "PENDIENTE OEM - " : "";
-      return `${pending}${part}${item.description || ""} ${item.quantity || ""} ${item.unit || ""}`.trim();
+      const partLabel = workOrderItemPartLabel(item);
+      const part = partLabel ? `${partLabel} - ` : "";
+      return `${part}${item.description || ""} ${item.quantity || ""} ${item.unit || ""}`.trim();
     }
     function renderWorkOrderPlan(){
       if(!$("woPlanTable")) return;
@@ -9059,7 +9135,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         tasks.map(([area, task]) => `<tr><td><b>${esc(area)}</b></td><td>${esc(task)}</td></tr>`).join("") +
         `<tr><td><b>Nota</b></td><td>${esc(plan.note)}</td></tr></tbody>`;
       $("woPlanPartsTable").innerHTML = `<thead><tr><th>No. parte</th><th>Refaccion / filtro / insumo</th><th>Cant.</th><th>Unidad</th><th>Fuente / manual</th></tr></thead><tbody>` +
-        items.map(item => `<tr><td><code>${esc(item.part_number || "")}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td><td>${esc([item.source,item.manual].filter(Boolean).join(" / "))}</td></tr>`).join("") +
+        items.map(item => `<tr><td><code>${esc(workOrderItemPartLabel(item))}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td><td>${esc([item.source,item.manual].filter(Boolean).join(" / "))}</td></tr>`).join("") +
         `</tbody>`;
     }
     function loadWorkOrderPlan(){
@@ -9112,10 +9188,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function workOrderPartsRows(value){
       const lines = workOrderLines(value);
       return lines.length ? lines.map(line => {
-        const match = line.match(/^(?:(PENDIENTE OEM|[A-Z0-9][A-Z0-9_.\-\/]+)\s+-\s+)?(.+?)(?:\s+(\d+(?:\.\d+)?)\s+(L|PZA|JGO|KG))?$/i);
+        const cleanLine = String(line || "").replace(/^PENDIENTE\s+OEM\s+-\s+/i, "");
+        const match = cleanLine.match(/^(?:([A-Z0-9][A-Z0-9_.\-\/]+)\s+-\s+)?(.+?)(?:\s+(\d+(?:\.\d+)?)\s+(L|PZA|JGO|KG))?$/i);
         return {
           part: match?.[1] || "",
-          desc: match?.[2] || line,
+          desc: match?.[2] || cleanLine,
           qty: match?.[3] || "",
           unit: match?.[4] || "",
         };
