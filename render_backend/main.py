@@ -7212,7 +7212,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="panel toolbar">
           <label>Equipo<select id="woPlanEquipment"></select></label>
           <label>Modelo<select id="woPlanModel"><option value="R1600G">Caterpillar R1600G</option><option value="R1600H">Caterpillar R1600H</option><option value="ST1030">Epiroc ST-1030</option><option value="CAT416">Retroexcavadora CAT 416</option></select></label>
-          <label>Intervalo<select id="woPlanInterval"><option value="TURNO">Inspeccion turno</option><option value="250H">250H</option><option value="500H">500H</option><option value="1000H">1000H</option></select></label>
+          <label>Intervalo<select id="woPlanInterval"><option value="TURNO">Inspeccion turno</option><option value="250H">250H</option><option value="500H">500H</option><option value="750H">750H</option><option value="1000H">1000H</option></select></label>
           <button class="btn" id="woPlanLoadBtn">Cargar plan a OT</button>
           <button class="btn secondary" id="woPlanPrintBtn">Imprimir plan</button>
         </div>
@@ -8752,6 +8752,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           TURNO: {title: "Inspeccion turno R1600G", tasks: [["Seguridad","Revisar frenos, direccion, alarma reversa, luces, claxon, extintor y cinturon."],["Motor","Revisar fugas, nivel aceite, refrigerante, bandas, radiador y admision."],["Transmision/ejes","Revisar fugas, temperatura, cardanes, diferenciales y ruidos anormales."],["Hidraulico","Revisar nivel, fugas, cilindros, mangueras, implementos y bucket."],["Rodaje","Revisar llantas, birlos, cortes, presion/condicion y articulacion central."]], parts: ["ACEITE MOTOR 15W40 5 L","REFRIGERANTE 5 L","GRASA EP2 1 KG"]},
           "250H": {title: "Servicio 250H R1600G", tasks: [["Motor","Cambiar aceite motor y filtro segun condicion."],["Combustible","Drenar agua/sedimentos y revisar filtros."],["Hidraulico","Revisar filtros, respiraderos, fugas y presiones."],["Transmision/ejes","Revisar niveles y fugas en transmision, convertidor, diferenciales y mandos finales."],["Lubricacion","Engrasar articulacion central, bucket, cilindros, pasadores y cardanes."]], parts: ["ACEITE MOTOR 15W40 35 L","FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","GRASA EP2 3 KG"]},
           "500H": {title: "Servicio 500H R1600G", tasks: [["Motor","Servicio motor 500H; revisar admision, turbo, enfriamiento y soportes."],["Transmision","Cambiar/revisar filtros de transmision y verificar presiones."],["Hidraulico","Cambiar/revisar filtro retorno/presion; revisar cilindros y bomba."],["Frenos","Revisar sistema de frenos, acumuladores, fugas y desgaste."],["Estructura","Inspeccionar chasis, articulacion, bucket, soldaduras y fisuras."]], parts: ["FILTRO TRANSMISION 1 PZA","FILTRO HIDRAULICO RETORNO 1 PZA","ACEITE HIDRAULICO VG100 20 L","ACEITE TRANSMISION 30 L"]},
+          "750H": {title: "Servicio 750H R1600G", tasks: [["Motor","Repetir servicio motor, combustible y aire; revisar condicion por analisis/operacion."],["Hidraulico","Revisar filtros, presiones, temperatura, respiraderos y contaminacion."],["Transmision/ejes","Revisar niveles, fugas, filtros y condicion de aceite."],["Frenos/direccion","Prueba funcional de frenos, direccion y acumuladores."],["Estructura","Inspeccion de chasis, articulacion, bucket, pasadores y soldaduras."]], parts: ["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE MOTOR 15W40 35 L"]},
           "1000H": {title: "Servicio 1000H R1600G", tasks: [["Servicio mayor","Tomar analisis de aceites motor/transmision/hidraulico/ejes."],["Ejes/mandos","Cambio o inspeccion profunda de aceites en diferenciales y mandos finales."],["Hidraulico","Revision mayor de bomba, valvulas, acumuladores, cilindros y mangueras."],["Enfriamiento","Limpieza profunda de radiador/enfriadores y prueba de fugas."],["Liberacion","Prueba operativa con carga y cierre por supervisor."]], parts: ["KIT FILTROS 1000H 1 JGO","ACEITE 85W140 40 L","ACEITE HIDRAULICO VG100 80 L","REFRIGERANTE 20 L"]},
         },
       },
@@ -8764,6 +8765,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           TURNO: {title: "Inspeccion turno R1600H", tasks: [["Seguridad","Verificar frenos, direccion, luces, alarma, claxon, sistema contra incendio y bloqueo de articulacion."],["Motor","Revisar niveles, fugas, radiador, ventilador, admision y condicion de escape."],["Transmision","Revisar temperatura, fugas, cambios, convertidor y lineas."],["Hidraulico","Revisar implementos, cilindros, mangueras, acumuladores y articulacion."],["Llantas/bucket","Revisar llantas, birlos, cortes, cuchilla, bucket y pasadores."]], parts: ["ACEITE MOTOR 15W40 5 L","REFRIGERANTE 5 L","GRASA EP2 1 KG"]},
           "250H": {title: "Servicio 250H R1600H", tasks: [["Motor","Cambiar aceite motor y filtro; revisar fugas y soportes."],["Combustible","Cambiar/revisar filtros combustible y drenar separador."],["Aire","Limpiar/revisar filtros de aire, indicador de restriccion y admision."],["Lubricacion","Engrasar puntos principales, cardanes, bucket y articulacion."],["Diagnostico","Revisar codigos activos, presiones y parametros basicos."]], parts: ["ACEITE MOTOR 15W40 38 L","FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","GRASA EP2 3 KG"]},
           "500H": {title: "Servicio 500H R1600H", tasks: [["Transmision","Revisar/cambiar filtros de transmision y verificar presion."],["Hidraulico","Revisar filtros, respiradero, bomba, fugas y contaminacion."],["Frenos","Prueba de frenos y acumuladores; revisar desgaste y fugas."],["Enfriamiento","Lavar radiadores/enfriadores; revisar tapas, mangueras y abrazaderas."],["Estructural","Inspeccion de chasis, soldaduras, articulacion y protecciones."]], parts: ["FILTRO TRANSMISION 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE HIDRAULICO VG100 25 L","REFRIGERANTE 10 L"]},
+          "750H": {title: "Servicio 750H R1600H", tasks: [["Motor","Repetir servicio de motor, combustible y aire; revisar codigos y parametros."],["Hidraulico","Revisar filtros, respiradero, bomba, cilindros, acumuladores y contaminacion."],["Transmision","Revisar filtros, presiones, temperatura y condicion del aceite."],["Frenos","Prueba de frenos/acumuladores y revision de fugas."],["Estructura","Inspeccion de chasis, soldaduras, articulacion, bucket y protecciones."]], parts: ["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE MOTOR 15W40 38 L"]},
           "1000H": {title: "Servicio 1000H R1600H", tasks: [["Ejes/mandos","Cambiar aceites o muestrear diferenciales y mandos finales."],["Hidraulico","Servicio mayor hidraulico, acumuladores y valvulas."],["Motor","Ajustes/inspecciones mayores segun manual y analisis de aceite."],["Transmision","Muestreo y revision integral de transmision/convertidor."],["Liberacion","Prueba con carga, validacion de seguridad y cierre supervisor."]], parts: ["KIT FILTROS 1000H 1 JGO","ACEITE 85W140 45 L","ACEITE HIDRAULICO VG100 90 L","REFRIGERANTE 20 L"]},
         },
       },
@@ -8776,6 +8778,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           TURNO: {title: "Inspeccion turno Epiroc ST-1030", tasks: [["Seguridad","Revisar frenos SAHR/servicio, direccion, luces, alarma, extintor y paro de emergencia."],["Motor","Revisar niveles, fugas, refrigeracion, admision y escape."],["Hidraulico","Inspeccionar bombas, mangueras, cilindros, bucket y fugas."],["Transmision/ejes","Revisar convertidor, transmision, ejes, mandos y ruidos."],["Cabina/operacion","Revisar controles, indicadores, asiento, cristales y prueba funcional."]], parts: ["ACEITE MOTOR 15W40 5 L","REFRIGERANTE 5 L","GRASA EP2 1 KG"]},
           "250H": {title: "Servicio 250H Epiroc ST-1030", tasks: [["Motor","Cambio aceite motor y filtro; revisar fugas y parametros."],["Combustible","Servicio filtros combustible/separador de agua."],["Aire","Servicio filtro aire y restriccion de admision."],["Lubricacion","Engrasar articulacion, bucket, cardanes y puntos indicados."],["Electrico","Revisar bateria, alternador, arneses, sensores y codigos."]], parts: ["ACEITE MOTOR 15W40 32 L","FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","GRASA EP2 3 KG"]},
           "500H": {title: "Servicio 500H Epiroc ST-1030", tasks: [["Hidraulico","Cambio/revision filtros hidraulicos; verificar presiones y fugas."],["Transmision","Cambio/revision filtros transmision y convertidor."],["Frenos","Prueba de frenos, acumuladores y sistema SAHR."],["Enfriamiento","Limpieza de radiador/enfriadores y revision de mangueras."],["Estructura","Inspeccion NDT visual de chasis, articulacion y bucket."]], parts: ["FILTRO HIDRAULICO 1 PZA","FILTRO TRANSMISION 1 PZA","ACEITE HIDRAULICO VG100 25 L","ATF 20 L","REFRIGERANTE 10 L"]},
+          "750H": {title: "Servicio 750H Epiroc ST-1030", tasks: [["Motor","Repetir servicio motor, combustible y aire; revisar parametros y codigos."],["Hidraulico","Revisar/cambiar filtros segun condicion, presiones y fugas."],["Transmision","Revisar filtros, convertidor, temperatura y presiones."],["Frenos SAHR","Prueba de frenos, acumuladores y liberacion de emergencia."],["Estructura","Inspeccion de articulacion, bucket, chasis y puntos de fatiga."]], parts: ["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE MOTOR 15W40 32 L"]},
           "1000H": {title: "Servicio 1000H Epiroc ST-1030", tasks: [["Aceites","Muestreo/cambio de aceites en motor, transmision, hidraulico y ejes."],["Ejes","Revisar diferenciales, planetarios, mandos finales y respiraderos."],["Hidraulico","Revision mayor de bombas, valvulas, cilindros y acumuladores."],["Seguridad","Prueba completa de frenos, direccion, alarmas y parada de emergencia."],["Liberacion","Prueba operativa con carga y cierre documentado."]], parts: ["KIT FILTROS 1000H 1 JGO","ACEITE 85W140 40 L","ACEITE HIDRAULICO VG100 80 L","ATF 35 L"]},
         },
       },
@@ -8788,6 +8791,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           TURNO: {title: "Inspeccion turno CAT 416", tasks: [["Seguridad","Revisar luces, claxon, alarma reversa, freno estacionamiento, cinturones y extintor."],["Motor","Revisar aceite, refrigerante, fugas, bandas, radiador y admision."],["Hidraulico","Revisar nivel, fugas, estabilizadores, brazo, cucharon y mangueras."],["Transmision/ejes","Revisar niveles, fugas, direccion y frenos."],["Rodaje","Revisar llantas, birlos, presion/condicion y tren delantero."]], parts: ["ACEITE MOTOR 15W40 3 L","REFRIGERANTE 3 L","GRASA EP2 1 KG"]},
           "250H": {title: "Servicio 250H CAT 416", tasks: [["Motor","Cambiar aceite motor y filtro."],["Combustible","Cambiar/revisar filtro combustible y drenar separador."],["Aire","Limpiar/revisar filtro de aire e indicador de restriccion."],["Lubricacion","Engrasar puntos de cargador, retro, estabilizadores y direccion."],["Inspeccion","Revisar frenos, luces, fugas y aprietes generales."]], parts: ["ACEITE MOTOR 15W40 12 L","FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","GRASA EP2 2 KG"]},
           "500H": {title: "Servicio 500H CAT 416", tasks: [["Transmision","Revisar/cambiar filtro y aceite segun condicion."],["Hidraulico","Revisar filtro hidraulico, respiradero, fugas y presiones."],["Ejes","Revisar aceite ejes/diferenciales y mandos."],["Frenos","Prueba de frenos y estacionamiento."],["Estructura","Inspeccionar brazos, pasadores, bujes, cucharon y estabilizadores."]], parts: ["FILTRO HIDRAULICO 1 PZA","FILTRO TRANSMISION 1 PZA","ACEITE HIDRAULICO VG100 15 L","ATF 12 L"]},
+          "750H": {title: "Servicio 750H CAT 416", tasks: [["Motor","Repetir servicio motor, combustible y aire; revisar fugas y parametros."],["Hidraulico","Revisar filtros, mangueras, estabilizadores, brazo y presiones."],["Transmision/ejes","Revisar filtros, niveles, diferenciales y mandos."],["Frenos","Prueba de frenos de servicio y estacionamiento."],["Estructura","Inspeccionar bujes, pasadores, cucharon, cargador y retro."]], parts: ["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE MOTOR 15W40 12 L"]},
           "1000H": {title: "Servicio 1000H CAT 416", tasks: [["Servicio mayor","Muestreo/cambio de aceites motor, transmision, ejes e hidraulico."],["Enfriamiento","Limpieza y revision de sistema de enfriamiento completo."],["Hidraulico","Revision de bomba, valvulas, cilindros, mangueras y acoples."],["Estructura","Revision de bujes/pasadores, juego de brazo y chasis."],["Liberacion","Prueba funcional de cargador, retro, traslado y cierre supervisor."]], parts: ["KIT FILTROS 1000H 1 JGO","ACEITE 85W140 20 L","ACEITE HIDRAULICO VG100 45 L","REFRIGERANTE 12 L"]},
         },
       },
@@ -8798,19 +8802,43 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const plan = workOrderMaintenancePlans[model] || workOrderMaintenancePlans.R1600G;
       return {model, interval, plan, step: plan.intervals[interval] || plan.intervals.TURNO};
     }
+    function workOrderPlanItemFromText(text){
+      const raw = String(text || "").trim();
+      const match = raw.match(/^(.*?)(?:\s+(\d+(?:\.\d+)?)\s+(L|PZA|JGO|KG))$/i);
+      const description = (match ? match[1] : raw).trim();
+      const quantity = match ? match[2] : "1";
+      const unit = match ? match[3].toUpperCase() : "PZA";
+      const needsOemPart = /FILTRO|KIT/i.test(description);
+      return {
+        part_number: needsOemPart ? "PENDIENTE OEM" : "",
+        description,
+        quantity,
+        unit,
+      };
+    }
+    function workOrderPlanItems(step){
+      return (step.items || step.parts || []).map(item => typeof item === "string" ? workOrderPlanItemFromText(item) : item);
+    }
+    function workOrderPlanItemText(item){
+      const part = item.part_number && item.part_number !== "PENDIENTE OEM" ? `${item.part_number} - ` : "";
+      const pending = item.part_number === "PENDIENTE OEM" ? "PENDIENTE OEM - " : "";
+      return `${pending}${part}${item.description || ""} ${item.quantity || ""} ${item.unit || ""}`.trim();
+    }
     function renderWorkOrderPlan(){
       if(!$("woPlanTable")) return;
       const {plan, interval, step} = selectedWorkOrderPlan();
+      const items = workOrderPlanItems(step);
       $("woPlanStatus").textContent = `${plan.name} | ${interval}`;
       $("woPlanTable").innerHTML = `<thead><tr><th>Sistema</th><th>Actividad del plan OT</th></tr></thead><tbody>` +
         step.tasks.map(([system, task]) => `<tr><td><b>${esc(system)}</b></td><td>${esc(task)}</td></tr>`).join("") +
         `<tr><td><b>Nota</b></td><td>${esc(plan.note)}</td></tr></tbody>`;
-      $("woPlanPartsTable").innerHTML = `<thead><tr><th>Refaccion / insumo sugerido</th><th>Formato para descuento</th></tr></thead><tbody>` +
-        step.parts.map(part => `<tr><td>${esc(part)}</td><td><code>${esc(part)}</code></td></tr>`).join("") +
+      $("woPlanPartsTable").innerHTML = `<thead><tr><th>No. parte</th><th>Refaccion / filtro / insumo</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>` +
+        items.map(item => `<tr><td><code>${esc(item.part_number || "")}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td></tr>`).join("") +
         `</tbody>`;
     }
     function loadWorkOrderPlan(){
       const {plan, interval, step} = selectedWorkOrderPlan();
+      const itemLines = workOrderPlanItems(step).map(workOrderPlanItemText);
       const equipment = $("woPlanEquipment").value || $("woEquipment").value || "";
       if(equipment) $("woEquipment").value = equipment;
       $("woOrigin").value = plan.origin || "PREVENTIVO";
@@ -8818,13 +8846,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("woState").value = "ABIERTA";
       $("woDescription").value = `${step.title}\n${plan.note}\n\nActividades:\n` + step.tasks.map(([system, task]) => `- ${system}: ${task}`).join("\n");
       $("woAction").value = `Ejecutar plan ${interval}, registrar horometro real, evidencias, refacciones usadas y cierre por supervisor.`;
-      $("woParts").value = step.parts.join("; ");
-      $("woLubricants").value = step.parts.filter(part => /ACEITE|REFRIGERANTE|GRASA|ALMO|ATF|VG100|15W40|85W140/i.test(part)).join("; ");
+      $("woParts").value = itemLines.join("; ");
+      $("woLubricants").value = itemLines.filter(part => /ACEITE|REFRIGERANTE|GRASA|ALMO|ATF|VG100|15W40|85W140/i.test(part)).join("; ");
       $("woStatus").textContent = `Plan ${plan.name} ${interval} cargado a OT.`;
       activateTab("ordenesTrabajo");
     }
     function printWorkOrderPlan(){
       const {plan, interval, step} = selectedWorkOrderPlan();
+      const itemLines = workOrderPlanItems(step).map(workOrderPlanItemText);
       printServiceRecord({
         folio: `PLAN-OT-${interval}`,
         service_date: toIsoDate(new Date()),
@@ -8833,7 +8862,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         service_type: "Orden de trabajo",
         service_name: step.title,
         component: "MANTENIMIENTO",
-        parts_used: step.parts.join("; "),
+        parts_used: itemLines.join("; "),
         checklist: step.tasks.map(([system, task]) => `${system}: ${task}`).join("\n"),
         notes: plan.note,
       }, `Plan OT ${plan.name} ${interval}`);
