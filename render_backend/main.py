@@ -1655,6 +1655,7 @@ def normalize_preventive_execution_record(row: dict[str, Any]) -> dict[str, Any]
         "equipment_description": str(row.get("equipment_description") or "")[:220],
         "supervisor": str(row.get("supervisor") or "").strip()[:180],
         "mechanic": str(row.get("mechanic") or "").strip()[:180],
+        "folio": str(row.get("folio") or "").strip()[:80],
         "service_type": service_type,
         "service_hours": PREVENTIVE_SERVICE_HOURS.get(service_type, 0),
         "service_interval": f"{PREVENTIVE_SERVICE_HOURS.get(service_type, 0)}H" if PREVENTIVE_SERVICE_HOURS.get(service_type, 0) else "",
@@ -1716,7 +1717,7 @@ def preventive_record_to_service_history(row: dict[str, Any], equipment_lookup: 
         "completed_meter": row.get("completed_meter") or 0,
         "due_date": "",
         "status": "A TIEMPO",
-        "order_number": "",
+        "order_number": row.get("folio") or "",
         "document_name": "Registro web preventivo",
         "filters_text": row.get("parts_used") or "",
         "oils_used": oils_used or row.get("lubricants_used") or "",
@@ -7178,6 +7179,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="capture-form-grid">
             <div class="capture-section-title">Datos del servicio</div>
             <input id="prevExecId" type="hidden">
+            <label>Folio<input id="prevExecFolio" placeholder="Automatico" readonly></label>
             <label>Fecha servicio<input id="prevExecDate" type="date"></label>
             <label>Equipo<select id="prevExecEquipment"></select></label>
             <label>Supervisor<input id="prevExecSupervisor" placeholder="Supervisor"></label>
@@ -7198,12 +7200,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label class="capture-fluid">Hidraulico VG100<input id="prevExecOilVg100" type="number" step="0.1" min="0" value="0"></label>
             <label class="capture-fluid">ATF<input id="prevExecAtf" type="number" step="0.1" min="0" value="0"></label>
             <div class="capture-section-title">Checklist de cierre</div>
-            <label class="inline-check"><input id="prevChkInspection" type="checkbox"> Inspeccion realizada</label>
-            <label class="inline-check"><input id="prevChkFilters" type="checkbox"> Filtros/refacciones aplicadas</label>
-            <label class="inline-check"><input id="prevChkLubrication" type="checkbox"> Lubricacion registrada</label>
-            <label class="inline-check"><input id="prevChkElectrical" type="checkbox"> Revision electrica</label>
-            <label class="inline-check"><input id="prevChkTest" type="checkbox"> Prueba final</label>
-            <label class="inline-check"><input id="prevChkSupervisor" type="checkbox"> Validado por supervisor</label>
+            <label class="inline-check"><input id="prevChkInspection" type="checkbox"><span id="prevChkInspectionLabel">Inspeccion realizada</span></label>
+            <label class="inline-check"><input id="prevChkFilters" type="checkbox"><span id="prevChkFiltersLabel">Filtros/refacciones aplicadas</span></label>
+            <label class="inline-check"><input id="prevChkLubrication" type="checkbox"><span id="prevChkLubricationLabel">Lubricacion registrada</span></label>
+            <label class="inline-check"><input id="prevChkElectrical" type="checkbox"><span id="prevChkElectricalLabel">Revision electrica</span></label>
+            <label class="inline-check"><input id="prevChkTest" type="checkbox"><span id="prevChkTestLabel">Prueba final</span></label>
+            <label class="inline-check"><input id="prevChkSupervisor" type="checkbox"><span id="prevChkSupervisorLabel">Validado por supervisor</span></label>
             <label class="wide">Evidencia / firma<textarea id="prevExecEvidence" rows="2" placeholder="Folio, foto, firma o evidencia del cierre"></textarea></label>
             <label class="wide">Observaciones<textarea id="prevExecNotes" rows="3" placeholder="Trabajo realizado, pendientes o condicion encontrada"></textarea></label>
           </div>
@@ -7212,6 +7214,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn" id="prevExecSaveBtn">Guardar</button>
             <button class="btn secondary" id="prevExecCloseBtn">Cerrar servicio</button>
             <button class="btn danger" id="prevExecDeleteBtn">Eliminar</button>
+            <button class="btn secondary" id="prevExecPrintBtn">PDF / imprimir</button>
             <button class="btn secondary" id="prevExecViewHistoryBtn">Ver servicios realizados</button>
           </div>
         </div>
@@ -7232,6 +7235,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <p class="muted">Los servicios abiertos quedan en seguimiento. Al cerrarlos se reflejan en Servicios realizados.</p>
           <div class="capture-form-grid">
             <input id="specialSrvId" type="hidden">
+            <label>Folio<input id="specialSrvFolio" placeholder="Automatico" readonly></label>
             <label>Modulo<select id="specialSrvModule"><option value="COMPRESOR">Compresor</option><option value="PERFORADORA">Perforadora Jumbo</option></select></label>
             <label>Fecha<input id="specialSrvDate" type="date"></label>
             <label>Equipo<select id="specialSrvEquipment"></select></label>
@@ -7252,6 +7256,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn" id="specialSrvSaveBtn">Guardar</button>
             <button class="btn secondary" id="specialSrvCloseBtn">Cerrar servicio</button>
             <button class="btn danger" id="specialSrvDeleteBtn">Eliminar</button>
+            <button class="btn secondary" id="specialSrvPrintBtn">PDF / imprimir</button>
           </div>
         </div>
         <div class="panel">
@@ -7819,6 +7824,77 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function nowIso(){ return new Date().toISOString().slice(0, 19); }
     function recordId(prefix){ return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
+    function nextFolio(prefix, rows){
+      const year = new Date().getFullYear();
+      const pattern = new RegExp(`^${prefix}-${year}-(\\d+)$`, "i");
+      const max = (Array.isArray(rows) ? rows : []).reduce((acc, row) => {
+        const match = String(row.folio || row.order_number || "").match(pattern);
+        return match ? Math.max(acc, Number(match[1] || 0)) : acc;
+      }, 0);
+      return `${prefix}-${year}-${String(max + 1).padStart(4, "0")}`;
+    }
+    function parsePartsText(text){
+      return String(text || "")
+        .split(/[\n;]+/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .map(item => {
+          const match = item.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ.]+)?$/);
+          if(!match) return null;
+          return {
+            part_number: match[1].trim().toUpperCase(),
+            quantity: Number(String(match[2]).replace(",", ".")) || 0,
+            unit: (match[3] || "PZA").toUpperCase().replace(".", ""),
+          };
+        })
+        .filter(item => item && item.part_number && item.quantity > 0);
+    }
+    async function deductServiceParts(partsText, meta){
+      const parts = parsePartsText(partsText);
+      if(!parts.length) return {count:0};
+      for(const part of parts){
+        const payload = {
+          part_number: part.part_number,
+          description: part.part_number,
+          movement_type: "SALIDA",
+          quantity: part.quantity,
+          unit: part.unit,
+          equipment_code: meta.equipment_code || "",
+          service_interval: meta.service_interval || "",
+          reference: meta.reference || "",
+          created_by: meta.created_by || "",
+          notes: meta.notes || "Salida automatica por cierre de servicio",
+        };
+        const response = await fetch("/api/filter-inventory/movement", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+        if(!response.ok) throw new Error(await apiError(response));
+      }
+      return {count:parts.length};
+    }
+    function servicePrintHtml(record, title){
+      const oils = typeof record.oils_used === "object" ? Object.entries(record.oils_used).map(([k,v]) => `${k}: ${v}`).join("; ") : (record.lubricants_used || record.oils_used || "");
+      const rows = [
+        ["Folio", record.folio || record.order_number || record.id || record.web_id || ""],
+        ["Fecha", record.close_date || record.completed_date || record.service_date || ""],
+        ["Equipo", `${record.equipment_code || ""} ${record.equipment_description || ""}`.trim()],
+        ["Servicio", [record.service_type, record.service_name, record.stage, record.service_interval].filter(Boolean).join(" / ")],
+        ["Componente", record.attribute_type || record.component || ""],
+        ["Horometro", record.completed_meter || ""],
+        ["Supervisor", record.supervisor || ""],
+        ["Mecanico", record.mechanic || ""],
+        ["Refacciones", record.parts_used || record.filters_text || record.filters_used || ""],
+        ["Lubricantes", oils],
+        ["Checklist", typeof record.checklist === "object" ? Object.entries(record.checklist).filter(([,v]) => v).map(([k]) => k).join(", ") : (record.checklist || "")],
+        ["Observaciones", record.notes || ""],
+        ["Evidencia", record.evidence_note || ""],
+      ];
+      return `<!doctype html><html><head><title>${esc(title)}</title><style>body{font-family:Segoe UI,Arial,sans-serif;margin:28px;color:#0f172a}h1{color:#0b2f6f;margin:0 0 6px}.meta{color:#64748b;margin-bottom:18px}.box{border:1px solid #cbd5e1;border-radius:10px;padding:14px;margin-bottom:12px}table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #e2e8f0;padding:9px;vertical-align:top}td:first-child{width:170px;font-weight:700;color:#0b2f6f}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:55px}.line{border-top:1px solid #334155;text-align:center;padding-top:8px}</style></head><body><h1>${esc(title)}</h1><div class="meta">Portal MGA mantenimiento</div><div class="box"><table>${rows.map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></div><div class="sign"><div class="line">Mecanico</div><div class="line">Supervisor</div></div><script>window.onload=()=>window.print()<\\/script></body></html>`;
+    }
+    function printServiceRecord(record, title){
+      const win = window.open("", "_blank");
+      if(!win) return alert("Permite ventanas emergentes para imprimir.");
+      win.document.write(servicePrintHtml(record, title));
+      win.document.close();
+    }
     function normalizeState(value){
       return String(value || "ACTIVO").trim().toUpperCase();
     }
@@ -8324,29 +8400,44 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
       const overdue = preventives.filter(row => ["VENCIDO","URGENTE"].includes(String(row.status || "").toUpperCase()));
       const servicesOpen = preventiveExecutionRows().filter(row => !isPreventiveClosed(row) && String(row.status || "").toUpperCase() !== "CANCELADO");
+      const specialOpen = specialServiceRows().filter(row => !specialServiceClosed(row) && String(row.status || "").toUpperCase() !== "CANCELADO");
+      const staleOpen = [...servicesOpen, ...specialOpen].filter(row => {
+        const serviceDate = String(row.service_date || "").slice(0, 10);
+        if(!serviceDate) return false;
+        return (parseIsoDate(toIsoDate(new Date())) - parseIsoDate(serviceDate)) / 86400000 > 3;
+      });
       const openOrders = workOrderRows().filter(row => !workOrderClosed(row));
       const spareRows = (portal.parts_manuals && Array.isArray(portal.parts_manuals.rows)) ? portal.parts_manuals.rows : [];
       const spareShort = spareRows.filter(row => ["FALTANTE","SIN INVENTARIO"].includes(String(row.inventory_status || "").toUpperCase()));
+      const lowInventory = (data.inventory || []).filter(item => Number(item.minimum || 0) > 0 && Number(item.quantity || 0) <= Number(item.minimum || 0));
       const tireRows = (portal.tire_kpi && Array.isArray(portal.tire_kpi.rows)) ? portal.tire_kpi.rows : [];
       const tireCritical = tireRows.filter(row => ["CRITICA","PROXIMA"].includes(String(row.control_status || "").toUpperCase()));
       const captures = Array.isArray(portal.captures) ? portal.captures : [];
       const noDisponible = captures.filter(row => String(row.status || "").toUpperCase().includes("NO DISP")).slice(0, 50);
+      const today = toIsoDate(new Date());
+      const yesterday = toIsoDate(new Date(Date.now() - 86400000));
+      const capturedRecent = new Set(captures.filter(row => [today, yesterday].includes(String(row.work_date || "").slice(0,10))).map(row => normalizedText(row.equipment_code || row.equipment)));
+      const noCaptureRecent = portalEquipment().filter(eq => !capturedRecent.has(normalizedText(eq.code || eq.equipment_code)));
       const oilReport = oilRowsForRange($("kpiStart").value || (portal.period || {}).start || toIsoDate(new Date()), $("kpiEnd").value || (portal.period || {}).end || toIsoDate(new Date()));
       const oilLiters = Number(oilReport.totals.total_liters || 0);
       return {
         cards: [
           {label:"Preventivos vencidos", value:overdue.length, note:"PM vencido/urgente", tab:"preventivos", tone:overdue.length ? "bad" : "ok"},
-          {label:"Servicios abiertos", value:servicesOpen.length, note:"Pendientes de cierre", tab:"ejecucionPreventivos", tone:servicesOpen.length ? "warn" : "ok"},
+          {label:"Servicios abiertos", value:servicesOpen.length + specialOpen.length, note:`${staleOpen.length} con mas de 3 dias`, tab:"ejecucionPreventivos", tone:staleOpen.length ? "bad" : ((servicesOpen.length + specialOpen.length) ? "warn" : "ok")},
           {label:"OT abiertas", value:openOrders.length, note:"Ordenes en seguimiento", tab:"ordenesTrabajo", tone:openOrders.length ? "warn" : "ok"},
-          {label:"Refacciones faltantes", value:spareShort.length, note:"Faltante o sin inventario", tab:"refacciones", tone:spareShort.length ? "bad" : "ok"},
+          {label:"Stock bajo", value:spareShort.length + lowInventory.length, note:"Faltante, sin inventario o minimo", tab:"refacciones", tone:(spareShort.length + lowInventory.length) ? "bad" : "ok"},
           {label:"Llantas criticas", value:tireCritical.length, note:"Critica/proxima", tab:"llantasTrack", tone:tireCritical.length ? "warn" : "ok"},
-          {label:"No disponibles", value:noDisponible.length, note:"Capturas recientes", tab:"captura", tone:noDisponible.length ? "bad" : "ok"},
+          {label:"Sin captura reciente", value:noCaptureRecent.length, note:"Hoy/ayer sin captura", tab:"captura", tone:noCaptureRecent.length ? "warn" : "ok"},
         ],
         alerts: [
           ...overdue.slice(0,3).map(row => ({tone:"bad", label:"PM", text:`${row.equipment_code || ""} ${row.service_interval || row.component || ""}: ${row.status || ""}`})),
           ...servicesOpen.slice(0,2).map(row => ({tone:"warn", label:"Servicio", text:`${row.equipment_code || ""} ${row.service_type || ""}: ${row.status || "ABIERTO"}`})),
+          ...specialOpen.slice(0,2).map(row => ({tone:"warn", label:"Especial", text:`${row.equipment_code || ""} ${row.module || ""}: ${row.status || "ABIERTO"}`})),
+          ...staleOpen.slice(0,2).map(row => ({tone:"bad", label:"Cierre", text:`${row.equipment_code || ""} ${row.folio || row.id || ""}: abierto desde ${row.service_date || ""}`})),
+          ...noCaptureRecent.slice(0,3).map(row => ({tone:"warn", label:"Captura", text:`${row.code || row.equipment_code || ""}: sin captura reciente`})),
           ...openOrders.slice(0,3).map(row => ({tone:row.priority === "URGENTE" || row.priority === "ALTA" ? "bad" : "warn", label:"OT", text:`${row.folio || ""} ${row.equipment_code || ""}: ${row.description || ""}`})),
           ...spareShort.slice(0,2).map(row => ({tone:"bad", label:"Stock", text:`${row.equipment_code || ""} ${row.description || row.part_number || ""}: ${row.inventory_status || ""}`})),
+          ...lowInventory.slice(0,2).map(row => ({tone:"bad", label:"Minimo", text:`${row.part_number || ""} ${row.description || ""}: ${num(row.quantity)} disp.`})),
           ...tireCritical.slice(0,2).map(row => ({tone:"warn", label:"Llanta", text:`${row.equipment_code || ""} ${row.tire_code || ""}: ${row.control_status || ""}`})),
         ],
       };
@@ -10202,6 +10293,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
       ["prevChkTest", "test", "Prueba final"],
       ["prevChkSupervisor", "supervisor", "Supervisor"],
     ];
+    const preventiveChecklistTemplates = {
+      PM1:["Inspeccion visual y seguridad","Filtros/refacciones PM1 aplicadas","Lubricacion general","Revision electrica basica","Prueba funcional","Validado por supervisor"],
+      PM2:["Inspeccion PM2 completa","Filtros y refacciones PM2","Lubricacion y niveles","Revision electrica/hidraulica","Prueba final con horometro","Validado por supervisor"],
+      PM3:["Inspeccion PM3 profunda","Filtros/refacciones PM3 aplicadas","Lubricacion completa","Revision electrica y transmision","Prueba operativa","Validado por supervisor"],
+      PM4:["Servicio mayor PM4 inspeccion","Filtros/refacciones servicio mayor","Lubricacion completa y fluidos","Revision electrica/hidraulica mayor","Prueba final documentada","Validado por supervisor"],
+    };
+    function updatePreventiveChecklistTemplate(){
+      const service = $("prevExecServiceType").value || "PM1";
+      const labels = preventiveChecklistTemplates[service] || preventiveChecklistTemplates.PM1;
+      preventiveChecklistInputs.forEach((item, idx) => {
+        const label = $(`${item[0]}Label`);
+        if(label) label.textContent = labels[idx] || item[2];
+      });
+    }
     function preventiveExecutionRows(){
       const payload = portal.preventive_execution || {};
       return Array.isArray(payload.records) ? payload.records : [];
@@ -10570,6 +10675,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function resetPreventiveExecutionForm(){
       currentPreventiveExecutionRecord = null;
       $("prevExecId").value = "";
+      $("prevExecFolio").value = nextFolio("PREV", preventiveExecutionRows());
       $("prevExecDate").value = toIsoDate(new Date());
       if(!$("prevExecEquipment").value && $("prevExecEquipment").options.length > 1) $("prevExecEquipment").selectedIndex = 1;
       $("prevExecSupervisor").value = "";
@@ -10581,6 +10687,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecParts").value = "";
       preventiveOilInputs.forEach(item => { $(item[0]).value = "0"; });
       preventiveChecklistInputs.forEach(item => { $(item[0]).checked = false; });
+      updatePreventiveChecklistTemplate();
       updatePreventiveOilTotal();
       $("prevExecEvidence").value = "";
       $("prevExecNotes").value = "";
@@ -10595,6 +10702,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const equipment = portalEquipment().find(item => (item.code || item.equipment_code || "") === equipmentCode) || {};
       const payload = {
         id: $("prevExecId").value || "",
+        folio: $("prevExecFolio").value || nextFolio("PREV", preventiveExecutionRows()),
         service_date: $("prevExecDate").value || toIsoDate(new Date()),
         equipment_code: equipmentCode,
         equipment_description: equipment.description || equipment.family || "",
@@ -10618,11 +10726,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function fillPreventiveExecutionForm(row){
       currentPreventiveExecutionRecord = row || null;
       $("prevExecId").value = row.id || "";
+      $("prevExecFolio").value = row.folio || row.order_number || "";
       $("prevExecDate").value = row.service_date || row.close_date || toIsoDate(new Date());
       $("prevExecEquipment").value = row.equipment_code || "";
       $("prevExecSupervisor").value = row.supervisor || "";
       $("prevExecMechanic").value = row.mechanic || "";
       $("prevExecServiceType").value = row.service_type || "PM1";
+      updatePreventiveChecklistTemplate();
       $("prevExecAttribute").value = row.attribute_type || "GENERAL";
       $("prevExecMeter").value = Number(row.completed_meter || 0);
       $("prevExecState").value = row.status || "ABIERTO";
@@ -10641,10 +10751,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const closed = rows.filter(isPreventiveClosed);
       $("prevExecOpenCount").textContent = `${open.length} abierto(s)`;
       $("prevExecClosedCount").textContent = `${closed.length} cerrado(s)`;
-      const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="9">Sin servicios preventivos abiertos.</td></tr>`;
-      $("prevExecOpenTable").innerHTML = `<thead><tr><th>Fecha</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
-      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="9">Sin servicios cerrados desde esta pestaña.</td></tr>`;
-      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Fecha cierre</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Refacciones</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
+      const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="10">Sin servicios preventivos abiertos.</td></tr>`;
+      $("prevExecOpenTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
+      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="10">Sin servicios cerrados desde esta pestaña.</td></tr>`;
+      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha cierre</th><th>Equipo</th><th>PM</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Refacciones</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
       document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
         const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
         if(record) fillPreventiveExecutionForm(record);
@@ -10657,6 +10767,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!payload.equipment_code) return alert("Selecciona un equipo.");
       if(close && Object.values(payload.checklist || {}).filter(Boolean).length < preventiveChecklistInputs.length && !confirm("El checklist de cierre no esta completo. ¿Cerrar servicio de todos modos?")) return;
       if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. ¿Guardar asi?")) return;
+      const shouldDeductParts = close && !isPreventiveClosed(currentPreventiveExecutionRecord || {});
       const response = await fetch("/api/preventive-execution/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
@@ -10669,6 +10780,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderExecutiveBoard();
       $("prevExecStatus").textContent = close ? "Servicio cerrado y enviado a Servicios realizados." : "Servicio guardado.";
       if(result.record) fillPreventiveExecutionForm(result.record);
+      if(shouldDeductParts && payload.parts_used){
+        const deducted = await deductServiceParts(payload.parts_used, {equipment_code:payload.equipment_code, service_interval:payload.service_type, reference:payload.folio || payload.id, created_by:payload.mechanic || payload.supervisor, notes:"Salida automatica por cierre preventivo"});
+        if(deducted.count) {
+          $("prevExecStatus").textContent += ` Refacciones descontadas: ${deducted.count}.`;
+          await load();
+        }
+      }
     }
     async function deletePreventiveExecution(){
       if(!hasApiKey()) return;
@@ -10688,6 +10806,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       resetPreventiveExecutionForm();
       $("prevExecStatus").textContent = "Servicio eliminado.";
     }
+    function printPreventiveExecution(){
+      const payload = preventiveExecutionPayload();
+      if(!payload.equipment_code) return alert("Selecciona o guarda un servicio preventivo.");
+      printServiceRecord(payload, `Servicio preventivo ${payload.folio || payload.service_type || ""}`);
+    }
     function specialServiceRows(){
       const payload = portal.special_services || {};
       return Array.isArray(payload.records) ? payload.records : [];
@@ -10698,6 +10821,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function resetSpecialServiceForm(){
       currentSpecialServiceRecord = null;
       $("specialSrvId").value = "";
+      $("specialSrvFolio").value = nextFolio("COMP", specialServiceRows());
       $("specialSrvModule").value = "COMPRESOR";
       $("specialSrvDate").value = toIsoDate(new Date());
       if(!$("specialSrvEquipment").value && $("specialSrvEquipment").options.length > 1) $("specialSrvEquipment").selectedIndex = 1;
@@ -10706,7 +10830,30 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("specialSrvComponentMeter").value = "0";
       $("specialSrvType").value = "INSPECCION";
       $("specialSrvState").value = "ABIERTO";
+      updateSpecialServiceChecklistTemplate();
       $("specialSrvStatus").textContent = "";
+    }
+    function updateSpecialServiceChecklistTemplate(){
+      const module = $("specialSrvModule").value || "COMPRESOR";
+      const type = $("specialSrvType").value || "INSPECCION";
+      const prefix = module === "PERFORADORA" ? "PERF" : "COMP";
+      if(!$("specialSrvFolio").value) $("specialSrvFolio").value = nextFolio(prefix, specialServiceRows());
+      if(String($("specialSrvChecklist").value || "").trim()) return;
+      const compressor = {
+        INSPECCION:"Presion de trabajo OK; temperatura OK; fugas revisadas; bandas revisadas; enfriador/radiador limpio.",
+        PREVENTIVO:"Aceite/filtros segun plan; separador revisado; bandas ajustadas; fugas corregidas; prueba de presion.",
+        CORRECTIVO:"Falla identificada; refaccion aplicada; fuga/prueba corregida; prueba funcional.",
+        LUBRICACION:"Aceite aplicado; nivel verificado; fugas revisadas; prueba final.",
+        "CAMBIO COMPONENTE":"Componente retirado; componente instalado; torque/ajuste verificado; prueba final.",
+      };
+      const perforadora = {
+        INSPECCION:"Shank revisado; copas/brocas revisadas; mangueras revisadas; centralizador revisado; fugas hidraulicas revisadas.",
+        PREVENTIVO:"Lubricacion perforadora; shank/copa revisados; mangueras y abrazaderas; percusion/rotacion probada.",
+        CORRECTIVO:"Falla identificada; componente corregido; fugas corregidas; prueba de perforacion.",
+        LUBRICACION:"Lubricacion de perforadora; lineas revisadas; nivel/flujo verificado; prueba final.",
+        "CAMBIO COMPONENTE":"Componente retirado; componente instalado; alineacion/ajuste revisado; prueba de percusion/rotacion.",
+      };
+      $("specialSrvChecklist").value = (module === "PERFORADORA" ? perforadora : compressor)[type] || "";
     }
     function specialServicePayload(){
       const code = $("specialSrvEquipment").value || "";
@@ -10714,6 +10861,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const equipment = allPortalEquipment().find(item => String(item.code || item.equipment_code || "") === code) || {};
       return {
         id: $("specialSrvId").value || recordId("srv-esp"),
+        folio: $("specialSrvFolio").value || nextFolio($("specialSrvModule").value === "PERFORADORA" ? "PERF" : "COMP", specialServiceRows()),
         module: $("specialSrvModule").value || "COMPRESOR",
         service_date: $("specialSrvDate").value || toIsoDate(new Date()),
         equipment_code: code,
@@ -10748,8 +10896,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
         completed_meter: row.completed_meter || 0,
         due_date: row.service_date || "",
         status: "A TIEMPO",
-        order_number: "",
         document_name: "Servicio especial web",
+        order_number: row.folio || "",
         filters_used: row.parts_used || "",
         oils_used: row.lubricants_used || "",
         notes: [row.checklist, row.notes, row.mechanic ? `Mecanico: ${row.mechanic}` : "", row.supervisor ? `Supervisor: ${row.supervisor}` : ""].filter(Boolean).join(" | "),
@@ -10765,6 +10913,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function fillSpecialServiceForm(row){
       currentSpecialServiceRecord = row || null;
       $("specialSrvId").value = row.id || "";
+      $("specialSrvFolio").value = row.folio || "";
       $("specialSrvModule").value = row.module || "COMPRESOR";
       $("specialSrvDate").value = row.service_date || row.close_date || toIsoDate(new Date());
       $("specialSrvEquipment").value = row.equipment_code || "";
@@ -10799,8 +10948,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Compresor", specialServiceRows().filter(row => row.module === "COMPRESOR").length, "Servicios compresor"],
         ["Perforadora", specialServiceRows().filter(row => row.module === "PERFORADORA").length, "Servicios jumbo"],
       ].map(([label,value,note]) => `<article class="exec-card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`).join("");
-      $("specialSrvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Modulo</th><th>Equipo</th><th>Componente</th><th>Tipo</th><th>Horometro</th><th>Hrs comp.</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Refacciones</th><th>Lubricantes</th><th>Notas</th></tr></thead><tbody>` +
-        rows.map(row => `<tr data-special-srv="${esc(row.id || "")}"><td>${esc(row.service_date || "")}</td><td>${esc(row.module || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.service_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${one(row.component_meter || 0)}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill ${specialServiceClosed(row) ? "ok" : "warn"}">${esc(row.status || "")}</span></td><td>${esc(shortText(row.parts_used || "", 90))}</td><td>${esc(shortText(row.lubricants_used || "", 90))}</td><td>${esc(shortText(row.notes || row.checklist || "", 120))}</td></tr>`).join("") + `</tbody>`;
+      $("specialSrvTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Modulo</th><th>Equipo</th><th>Componente</th><th>Tipo</th><th>Horometro</th><th>Hrs comp.</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Refacciones</th><th>Lubricantes</th><th>Notas</th></tr></thead><tbody>` +
+        rows.map(row => `<tr data-special-srv="${esc(row.id || "")}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.module || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.service_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${one(row.component_meter || 0)}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill ${specialServiceClosed(row) ? "ok" : "warn"}">${esc(row.status || "")}</span></td><td>${esc(shortText(row.parts_used || "", 90))}</td><td>${esc(shortText(row.lubricants_used || "", 90))}</td><td>${esc(shortText(row.notes || row.checklist || "", 120))}</td></tr>`).join("") + `</tbody>`;
       document.querySelectorAll("[data-special-srv]").forEach(row => row.addEventListener("click", () => {
         const record = specialServiceRows().find(item => String(item.id || "") === String(row.dataset.specialSrv || ""));
         if(record) fillSpecialServiceForm(record);
@@ -10813,12 +10962,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
         payload.status = "CERRADO";
         payload.close_date = payload.service_date || toIsoDate(new Date());
       }
+      const shouldDeductParts = close && !specialServiceClosed(currentSpecialServiceRecord || {});
       const rows = specialServiceRows().filter(row => String(row.id || "") !== String(payload.id || ""));
       rows.push(payload);
       portal.special_services = {records: rows};
       syncSpecialServicesToHistory();
       await savePortalSnapshot();
       $("specialSrvStatus").textContent = close ? "Servicio cerrado y enviado a Servicios realizados." : "Servicio guardado.";
+      if(shouldDeductParts && payload.parts_used){
+        const deducted = await deductServiceParts(payload.parts_used, {equipment_code:payload.equipment_code, service_interval:payload.module, reference:payload.folio || payload.id, created_by:payload.mechanic || payload.supervisor, notes:"Salida automatica por cierre de servicio especial"});
+        if(deducted.count) {
+          $("specialSrvStatus").textContent += ` Refacciones descontadas: ${deducted.count}.`;
+          await load();
+        }
+      }
     }
     async function deleteSpecialService(){
       if(!hasApiKey()) return;
@@ -10830,6 +10987,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       await savePortalSnapshot();
       resetSpecialServiceForm();
       $("specialSrvStatus").textContent = "Servicio eliminado.";
+    }
+    function printSpecialService(){
+      const payload = specialServicePayload();
+      if(!payload.equipment_code) return alert("Selecciona o guarda un servicio especial.");
+      printServiceRecord(payload, `Servicio ${payload.module || ""} ${payload.folio || ""}`);
     }
     function renderSpareParts(){
       const payload = portal.parts_manuals || {rows: [], summary: {}};
@@ -12308,7 +12470,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("prevExecSaveBtn").addEventListener("click", () => savePreventiveExecution(false).catch(showError));
     $("prevExecCloseBtn").addEventListener("click", () => savePreventiveExecution(true).catch(showError));
     $("prevExecDeleteBtn").addEventListener("click", () => deletePreventiveExecution().catch(showError));
+    $("prevExecPrintBtn").addEventListener("click", printPreventiveExecution);
     $("prevExecViewHistoryBtn").addEventListener("click", () => document.querySelector('[data-tab="servicios"]')?.click());
+    $("prevExecServiceType").addEventListener("change", updatePreventiveChecklistTemplate);
     preventiveOilInputs.forEach(item => $(item[0]).addEventListener("input", updatePreventiveOilTotal));
     ["specialSrvFilterModule","specialSrvFilterState"].forEach(id => $(id).addEventListener("change", renderSpecialServices));
     $("specialSrvSearch").addEventListener("input", renderSpecialServices);
@@ -12317,6 +12481,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("specialSrvSaveBtn").addEventListener("click", () => saveSpecialService(false).catch(showError));
     $("specialSrvCloseBtn").addEventListener("click", () => saveSpecialService(true).catch(showError));
     $("specialSrvDeleteBtn").addEventListener("click", () => deleteSpecialService().catch(showError));
+    $("specialSrvPrintBtn").addEventListener("click", printSpecialService);
+    $("specialSrvModule").addEventListener("change", () => { $("specialSrvFolio").value = ""; $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
+    $("specialSrvType").addEventListener("change", () => { $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
     ["spareEquipment","spareStatus"].forEach(id => $(id).addEventListener("change", renderSpareParts));
     $("spareSearch").addEventListener("input", renderSpareParts);
     $("renderSpareBtn").addEventListener("click", renderSpareParts);
