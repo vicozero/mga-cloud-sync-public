@@ -7984,7 +7984,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Observaciones", record.notes || ""],
         ["Evidencia", record.evidence_note || ""],
       ];
-      return `<!doctype html><html><head><title>${esc(title)}</title><style>body{font-family:Segoe UI,Arial,sans-serif;margin:28px;color:#0f172a}h1{color:#0b2f6f;margin:0 0 6px}.meta{color:#64748b;margin-bottom:18px}.box{border:1px solid #cbd5e1;border-radius:10px;padding:14px;margin-bottom:12px}table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #e2e8f0;padding:9px;vertical-align:top}td:first-child{width:170px;font-weight:700;color:#0b2f6f}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:55px}.line{border-top:1px solid #334155;text-align:center;padding-top:8px}</style></head><body><h1>${esc(title)}</h1><div class="meta">Portal MGA mantenimiento</div><div class="box"><table>${rows.map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></div><div class="sign"><div class="line">Mecanico</div><div class="line">Supervisor</div></div><script>window.onload=()=>window.print()<\\/script></body></html>`;
+      return `<!doctype html><html><head><title>${esc(title)}</title><style>@page{size:letter;margin:.3in}body{font-family:Segoe UI,Arial,sans-serif;margin:0;color:#0f172a;font-size:10.5px}h1{color:#0b2f6f;margin:0 0 4px;font-size:20px}.meta{color:#64748b;margin-bottom:10px}.box{border:1px solid #cbd5e1;border-radius:8px;padding:9px;margin-bottom:10px}table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #e2e8f0;padding:5px 6px;vertical-align:top;line-height:1.2}td:first-child{width:150px;font-weight:700;color:#0b2f6f}.sign{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:32px}.line{border-top:1px solid #334155;text-align:center;padding-top:6px}</style></head><body><h1>${esc(title)}</h1><div class="meta">Portal MGA mantenimiento</div><div class="box"><table>${rows.map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></div><div class="sign"><div class="line">Mecanico</div><div class="line">Supervisor</div></div><script>window.onload=()=>window.print()<\\/script></body></html>`;
     }
     function printServiceRecord(record, title){
       const win = window.open("", "_blank");
@@ -9067,44 +9067,44 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const priorityClass = ["URGENTE","ALTA"].includes(String(record.priority || "").toUpperCase()) ? "bad" : "warn";
       const field = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${esc(value || "")}</b></div>`;
       const fieldHtml = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${value || ""}</b></div>`;
-      const activityRows = activities.slice(0, 14).map((line, idx) => `<tr><td class="num">${idx + 1}</td><td>${esc(line)}</td><td class="check"></td></tr>`).join("");
-      const partRows = (parts.length ? parts : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 10).map(row => `<tr><td>${esc(row.part)}</td><td>${esc(row.desc)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
-      const oilRows = (lubricants.length ? lubricants : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 6).map(row => `<tr><td>${esc(row.desc || row.part)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
+      const activityRows = activities.slice(0, 11).map((line, idx) => `<tr><td class="num">${idx + 1}</td><td>${esc(line)}</td><td class="check"></td></tr>`).join("");
+      const partRows = (parts.length ? parts : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 8).map(row => `<tr><td>${esc(row.part)}</td><td>${esc(row.desc)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
+      const oilRows = (lubricants.length ? lubricants : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 5).map(row => `<tr><td>${esc(row.desc || row.part)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
       return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
-        @page{size:letter;margin:0.38in}
+        @page{size:letter;margin:0.25in}
         *{box-sizing:border-box}
-        body{font-family:Segoe UI,Arial,sans-serif;color:#102033;margin:0;background:#fff;font-size:11px}
-        .page{width:100%;min-height:10.2in;border:1.5px solid #0b2f6f;padding:14px 16px 12px;position:relative}
-        .head{display:grid;grid-template-columns:112px 1fr 190px;gap:12px;align-items:center;border-bottom:3px solid #0b2f6f;padding-bottom:9px}
-        .logoBox{border:1px solid #d7e0ea;border-radius:10px;height:66px;display:flex;align-items:center;justify-content:center;background:#fff}
-        .logoBox img{max-width:92px;max-height:54px}
-        h1{margin:0;color:#0b2f6f;font-size:22px;letter-spacing:.04em;text-transform:uppercase}
-        .subtitle{color:#64748b;margin-top:3px;font-size:11px}
-        .folioBox{border:2px solid #0b2f6f;border-radius:10px;overflow:hidden;text-align:center}
-        .folioBox span{display:block;background:#0b2f6f;color:#fff;font-weight:800;padding:5px;text-transform:uppercase}
-        .folioBox b{display:block;font-size:18px;padding:9px 6px;color:#b91c1c}
-        .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:10px}
-        .field{border:1px solid #cbd5e1;border-radius:8px;padding:6px;background:#f8fafc;min-height:42px}
-        .field span{display:block;color:#475569;font-size:9px;text-transform:uppercase;font-weight:700}
-        .field b{display:block;color:#0f172a;font-size:12px;margin-top:2px;line-height:1.18}
-        .badge{display:inline-block;border-radius:999px;padding:3px 9px;color:#fff;font-weight:800}
+        body{font-family:Segoe UI,Arial,sans-serif;color:#102033;margin:0;background:#fff;font-size:10px}
+        .page{width:100%;border:1.2px solid #0b2f6f;padding:9px 11px 8px}
+        .head{display:grid;grid-template-columns:86px 1fr 160px;gap:9px;align-items:center;border-bottom:2px solid #0b2f6f;padding-bottom:6px}
+        .logoBox{border:1px solid #d7e0ea;border-radius:8px;height:48px;display:flex;align-items:center;justify-content:center;background:#fff}
+        .logoBox img{max-width:72px;max-height:38px}
+        h1{margin:0;color:#0b2f6f;font-size:18px;letter-spacing:.04em;text-transform:uppercase}
+        .subtitle{color:#64748b;margin-top:2px;font-size:9px}
+        .folioBox{border:1.5px solid #0b2f6f;border-radius:8px;overflow:hidden;text-align:center}
+        .folioBox span{display:block;background:#0b2f6f;color:#fff;font-weight:800;padding:3px;text-transform:uppercase}
+        .folioBox b{display:block;font-size:14px;padding:5px 4px;color:#b91c1c}
+        .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px}
+        .field{border:1px solid #cbd5e1;border-radius:6px;padding:4px 5px;background:#f8fafc;min-height:31px}
+        .field span{display:block;color:#475569;font-size:8px;text-transform:uppercase;font-weight:700}
+        .field b{display:block;color:#0f172a;font-size:10px;margin-top:1px;line-height:1.12}
+        .badge{display:inline-block;border-radius:999px;padding:2px 7px;color:#fff;font-weight:800}
         .badge.bad{background:#b91c1c}.badge.warn{background:#b7791f}.badge.ok{background:#047857}
-        .section{margin-top:9px;border:1px solid #cbd5e1;border-radius:10px;overflow:hidden;break-inside:avoid}
-        .section h2{margin:0;background:#eaf3ff;color:#0b2f6f;font-size:12px;text-transform:uppercase;padding:6px 9px;border-bottom:1px solid #cbd5e1;letter-spacing:.03em}
-        .body{padding:8px 9px;line-height:1.35;min-height:38px;white-space:pre-wrap}
+        .section{margin-top:6px;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;break-inside:avoid}
+        .section h2{margin:0;background:#eaf3ff;color:#0b2f6f;font-size:10px;text-transform:uppercase;padding:4px 7px;border-bottom:1px solid #cbd5e1;letter-spacing:.03em}
+        .body{padding:5px 7px;line-height:1.22;min-height:24px;white-space:pre-wrap}
         table{width:100%;border-collapse:collapse}
-        th{background:#f1f5f9;color:#0b2f6f;text-align:left;font-size:10px;text-transform:uppercase}
-        th,td{border:1px solid #d8e0ea;padding:5px 6px;vertical-align:top}
-        td.num{width:28px;text-align:center;font-weight:800;color:#0b2f6f}
-        td.check{width:54px;height:26px}
-        td.check:after{content:"";display:block;width:18px;height:18px;border:1.8px solid #334155;border-radius:3px;margin:auto}
-        .two{display:grid;grid-template-columns:1.35fr .85fr;gap:9px;margin-top:9px}
-        .safety{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px}
-        .safety div{border:1px solid #d8e0ea;border-radius:7px;padding:7px;min-height:33px}
+        th{background:#f1f5f9;color:#0b2f6f;text-align:left;font-size:8.5px;text-transform:uppercase}
+        th,td{border:1px solid #d8e0ea;padding:3px 5px;vertical-align:top;line-height:1.18}
+        td.num{width:23px;text-align:center;font-weight:800;color:#0b2f6f}
+        td.check{width:42px;height:20px}
+        td.check:after{content:"";display:block;width:14px;height:14px;border:1.4px solid #334155;border-radius:2px;margin:auto}
+        .two{display:grid;grid-template-columns:1.35fr .85fr;gap:7px;margin-top:6px}
+        .safety{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;padding:5px}
+        .safety div{border:1px solid #d8e0ea;border-radius:6px;padding:5px;min-height:24px}
         .safety div:before{content:"☐ ";font-weight:800;color:#0b2f6f}
-        .sign{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:30px}
-        .line{border-top:1.6px solid #334155;text-align:center;padding-top:5px;font-weight:700;color:#0b2f6f}
-        .foot{position:absolute;left:16px;right:16px;bottom:7px;color:#64748b;font-size:9px;display:flex;justify-content:space-between;border-top:1px solid #e2e8f0;padding-top:4px}
+        .sign{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}
+        .line{border-top:1.4px solid #334155;text-align:center;padding-top:4px;font-weight:700;color:#0b2f6f}
+        .foot{margin-top:6px;color:#64748b;font-size:8px;display:flex;justify-content:space-between;border-top:1px solid #e2e8f0;padding-top:3px}
         @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.page{border-color:#0b2f6f}}
       </style></head><body><div class="page">
         <div class="head">
