@@ -7264,6 +7264,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Horometro cierre<input id="prevExecMeter" type="number" step="0.1" min="0" value="0"></label>
             <label>Estatus<select id="prevExecState"><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
             <label class="wide">Refacciones usadas<textarea id="prevExecParts" rows="3" placeholder="Ej. filtro aceite 1 pza; banda alternador 1 pza"></textarea></label>
+            <div class="capture-section-title">Plan preventivo por manual / filtros por equipo</div>
+            <div class="wide table-wrap"><table id="prevExecPlanTable"></table></div>
+            <div class="wide table-wrap"><table id="prevExecPlanPartsTable"></table></div>
             <div class="capture-section-title">Aceites y fluidos (litros)</div>
             <label class="capture-fluid">Aceite total<input id="prevExecOilTotal" type="number" step="0.1" min="0" value="0" readonly></label>
             <label class="capture-fluid">15W40<input id="prevExecOil15w40" type="number" step="0.1" min="0" value="0"></label>
@@ -8827,15 +8830,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = normalizedText([row.item_type,row.system,row.component,row.description,row.part_number,row.equivalent_part,row.donaldson_part].join(" "));
       return /FILTRO|FILTER|SEPARADOR|ELEMENTO|AIRE|COMBUSTIBLE|HIDRAUL|TRANSMISION|ACEITE MOTOR/.test(text);
     }
-    function workOrderSelectedEquipmentCode(){
-      return $("woPlanEquipment")?.value || $("woEquipment")?.value || "";
-    }
-    function workOrderCatalogFilterItems(interval){
-      const code = workOrderSelectedEquipmentCode();
+    function catalogItemsForEquipmentInterval(code, interval, filtersOnly=true){
       if(!code) return [];
       const eq = portalEquipment().find(item => normalizedText(item.code || item.equipment_code) === normalizedText(code)) || {};
       const filterRows = ((eq && eq.filters) || [])
-        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && workOrderIsFilterRow(row))
+        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && (!filtersOnly || workOrderIsFilterRow(row)))
         .map(row => ({
           part_number: row.part_number || row.donaldson_part || row.equivalent_part || "PENDIENTE OEM",
           description: row.description || row.item_type || "Filtro",
@@ -8846,7 +8845,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           from_catalog: true,
         }));
       const manualRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code)
-        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && workOrderIsFilterRow(row))
+        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && (!filtersOnly || workOrderIsFilterRow(row)))
         .map(row => ({
           part_number: row.part_number || row.equivalent_part || "PENDIENTE OEM",
           description: row.description || row.component || row.system || "Filtro",
@@ -8863,6 +8862,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
         seen.add(key);
         return true;
       });
+    }
+    function workOrderSelectedEquipmentCode(){
+      return $("woPlanEquipment")?.value || $("woEquipment")?.value || "";
+    }
+    function workOrderCatalogFilterItems(interval){
+      return catalogItemsForEquipmentInterval(workOrderSelectedEquipmentCode(), interval, true);
     }
     function workOrderPlanItems(step, interval){
       const base = (step.items || step.parts || []).map(item => typeof item === "string" ? workOrderPlanItemFromText(item) : item);
@@ -10578,6 +10583,60 @@ WAREHOUSE_HTML = r"""<!doctype html>
         if(label) label.textContent = labels[idx] || item[2];
       });
     }
+    function preventiveSelectedInterval(){
+      const service = $("prevExecServiceType")?.value || "PM1";
+      const hours = preventiveServiceHours[service] || 250;
+      return `${hours}H`;
+    }
+    function preventiveManualRowsForSelection(){
+      const code = $("prevExecEquipment")?.value || "";
+      const interval = preventiveSelectedInterval();
+      if(!code) return [];
+      const manualRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code)
+        .filter(row => workOrderIntervalMatches(row.service_interval, interval));
+      const filterRows = catalogItemsForEquipmentInterval(code, interval, true);
+      const activityRows = manualRows.length ? manualRows : filterRows;
+      const seen = new Set();
+      return activityRows.map(row => {
+        const system = row.system || row.item_type || "Revision";
+        const component = row.component || row.description || "Componente";
+        const part = row.part_number || row.equivalent_part || "";
+        const manual = row.manual_title || row.manual || row.source || row.service_interval || "";
+        const action = workOrderIsFilterRow(row)
+          ? `Cambiar/revisar filtro o elemento: ${row.description || component}`
+          : `Revisar ${component}${row.description && row.description !== component ? ` - ${row.description}` : ""}`;
+        return {system, component, action, part, manual};
+      }).filter(row => {
+        const key = normalizedText([row.system,row.component,row.action,row.part,row.manual].join("|"));
+        if(seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 30);
+    }
+    function renderPreventiveManualPlan(){
+      if(!$("prevExecPlanTable")) return;
+      const service = $("prevExecServiceType")?.value || "PM1";
+      const interval = preventiveSelectedInterval();
+      const labels = preventiveChecklistTemplates[service] || preventiveChecklistTemplates.PM1;
+      const activities = preventiveManualRowsForSelection();
+      const filterItems = catalogItemsForEquipmentInterval($("prevExecEquipment")?.value || "", interval, true);
+      const baseActivities = labels.map(label => ({system: service, component: interval, action: label, part: "", manual: "Checklist base"}));
+      const rows = activities.length ? activities : baseActivities;
+      $("prevExecPlanTable").innerHTML = `<thead><tr><th>Sistema</th><th>Componente</th><th>Actividad de revision</th><th>Manual/fuente</th></tr></thead><tbody>` +
+        rows.map(row => `<tr><td>${esc(row.system || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.action || "")}</td><td>${esc(row.manual || "")}</td></tr>`).join("") +
+        `</tbody>`;
+      $("prevExecPlanPartsTable").innerHTML = `<thead><tr><th>No. parte</th><th>Filtro/refaccion del PM</th><th>Cant.</th><th>Unidad</th><th>Fuente/manual</th></tr></thead><tbody>` +
+        (filterItems.map(item => `<tr><td><code>${esc(item.part_number || "")}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td><td>${esc([item.source,item.manual].filter(Boolean).join(" / "))}</td></tr>`).join("") || `<tr><td colspan="5">Sin filtros cargados para este equipo e intervalo. Se mantiene checklist base.</td></tr>`) +
+        `</tbody>`;
+      if(!$("prevExecParts").value.trim() && filterItems.length){
+        $("prevExecParts").value = filterItems.map(workOrderPlanItemText).join("; ");
+      }
+    }
+    function preventiveManualActivitiesText(){
+      const rows = preventiveManualRowsForSelection();
+      if(!rows.length) return "";
+      return "Actividades por manual:\n" + rows.map(row => `- ${row.system || "Revision"} / ${row.component || "Componente"}: ${row.action || ""}${row.manual ? ` (${row.manual})` : ""}`).join("\n");
+    }
     function preventiveExecutionRows(){
       const payload = portal.preventive_execution || {};
       return Array.isArray(payload.records) ? payload.records : [];
@@ -10959,6 +11018,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       preventiveOilInputs.forEach(item => { $(item[0]).value = "0"; });
       preventiveChecklistInputs.forEach(item => { $(item[0]).checked = false; });
       updatePreventiveChecklistTemplate();
+      renderPreventiveManualPlan();
       updatePreventiveOilTotal();
       $("prevExecEvidence").value = "";
       $("prevExecNotes").value = "";
@@ -10971,6 +11031,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function preventiveExecutionPayload(){
       const equipmentCode = $("prevExecEquipment").value || "";
       const equipment = portalEquipment().find(item => (item.code || item.equipment_code || "") === equipmentCode) || {};
+      const manualActivities = preventiveManualActivitiesText();
       const payload = {
         id: $("prevExecId").value || "",
         folio: $("prevExecFolio").value || nextFolio("PREV", preventiveExecutionRows()),
@@ -10987,7 +11048,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         lubricants_used: "",
         checklist: preventiveChecklistPayload(),
         evidence_note: $("prevExecEvidence").value.trim(),
-        notes: $("prevExecNotes").value.trim(),
+        notes: $("prevExecNotes").value.trim() || manualActivities,
       };
       preventiveOilInputs.forEach(item => { payload[item[1]] = captureNumber(item[0]); });
       payload.oil_liters = preventiveOilTotal(payload);
@@ -11011,6 +11072,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       preventiveOilInputs.forEach(item => { $(item[0]).value = formatCaptureNumber(row[item[1]]); });
       preventiveChecklistInputs.forEach(item => { $(item[0]).checked = Boolean((row.checklist || {})[item[1]]); });
       updatePreventiveOilTotal();
+      renderPreventiveManualPlan();
       $("prevExecEvidence").value = row.evidence_note || "";
       $("prevExecNotes").value = row.notes || "";
       $("prevExecStatus").textContent = `Editando ${row.id || ""}`;
@@ -12924,7 +12986,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("prevExecDeleteBtn").addEventListener("click", () => deletePreventiveExecution().catch(showError));
     $("prevExecPrintBtn").addEventListener("click", printPreventiveExecution);
     $("prevExecViewHistoryBtn").addEventListener("click", () => document.querySelector('[data-tab="servicios"]')?.click());
-    $("prevExecServiceType").addEventListener("change", updatePreventiveChecklistTemplate);
+    $("prevExecEquipment").addEventListener("change", renderPreventiveManualPlan);
+    $("prevExecServiceType").addEventListener("change", () => { updatePreventiveChecklistTemplate(); renderPreventiveManualPlan(); });
     preventiveOilInputs.forEach(item => $(item[0]).addEventListener("input", updatePreventiveOilTotal));
     ["specialSrvFilterModule","specialSrvFilterState"].forEach(id => $(id).addEventListener("change", renderSpecialServices));
     $("specialSrvSearch").addEventListener("input", renderSpecialServices);
