@@ -6433,7 +6433,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.97); border:1px solid rgba(215,224,234,.96); border-radius:12px; padding:16px; box-shadow:var(--shadow); }
     .panel::before { content:""; position:absolute; inset:0 0 auto; height:3px; background:linear-gradient(90deg,var(--blue2),var(--teal)); opacity:.86; }
     .toolbar { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:10px; align-items:end; }
-    .dashboard-toolbar-stack { position:sticky; top:58px; z-index:9; display:grid; gap:10px; }
+    .dashboard-toolbar-stack { display:grid; gap:10px; }
     .dashboard-toolbar-stack .panel { margin:0; }
     .kpi-sim-toolbar { grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); align-items:end; border-color:#f6d365; background:#fffdf4; }
     .kpi-sim-toolbar::before { background:linear-gradient(90deg,#f59e0b,#facc15); }
@@ -6835,6 +6835,27 @@ WAREHOUSE_HTML = r"""<!doctype html>
     </nav>
     <section class="stats" id="stats"></section>
     <section id="dashboard" class="view active">
+      <div class="panel no-print">
+        <div class="subtle-title"><h3>Indicadores principales</h3><span class="muted" id="kpiMainSummaryNote"></span></div>
+        <div class="kpi-main-strip" id="kpiMainStrip"></div>
+      </div>
+      <div class="panel executive-board no-print">
+        <div class="subtle-title"><h3>Prioridad operativa</h3><span class="muted" id="execUpdated">Alertas automaticas</span></div>
+        <div class="exec-alert-grid" id="execCards"></div>
+        <div class="exec-alert-list" id="execAlerts"></div>
+      </div>
+      <div class="panel dashboard-command no-print">
+        <div class="subtle-title"><h3>Semaforo y Top 10 prioridades</h3><span class="muted" id="kpiCommandUpdated"></span></div>
+        <div class="kpi-command-grid">
+          <div>
+            <div class="subtle-title"><h3>Top 10 equipos a atender</h3><span class="muted">Riesgo calculado</span></div>
+            <div class="priority-list" id="kpiPriorityList"></div>
+          </div>
+          <div class="table-wrap">
+            <table id="kpiSemaphoreTable"></table>
+          </div>
+        </div>
+      </div>
       <div class="dashboard-toolbar-stack no-print">
         <div class="panel toolbar dashboard-controls">
           <label>Grupo<select id="kpiGroup"></select></label>
@@ -6861,27 +6882,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <label>Paradas %<input id="kpiSimStops" type="number" step="1" value="100"></label>
           <label>Hrs mision<input id="kpiSimMission" type="number" step="0.1" value="24"></label>
           <span class="muted kpi-sim-note">Solo cambia la vista y las descargas simuladas. No guarda datos reales.</span>
-        </div>
-      </div>
-      <div class="panel no-print">
-        <div class="subtle-title"><h3>Indicadores principales</h3><span class="muted" id="kpiMainSummaryNote"></span></div>
-        <div class="kpi-main-strip" id="kpiMainStrip"></div>
-      </div>
-      <div class="panel executive-board no-print">
-        <div class="subtle-title"><h3>Prioridad operativa</h3><span class="muted" id="execUpdated">Alertas automaticas</span></div>
-        <div class="exec-alert-grid" id="execCards"></div>
-        <div class="exec-alert-list" id="execAlerts"></div>
-      </div>
-      <div class="panel dashboard-command no-print">
-        <div class="subtle-title"><h3>Semaforo y Top 10 prioridades</h3><span class="muted" id="kpiCommandUpdated"></span></div>
-        <div class="kpi-command-grid">
-          <div>
-            <div class="subtle-title"><h3>Top 10 equipos a atender</h3><span class="muted">Riesgo calculado</span></div>
-            <div class="priority-list" id="kpiPriorityList"></div>
-          </div>
-          <div class="table-wrap">
-            <table id="kpiSemaphoreTable"></table>
-          </div>
         </div>
       </div>
       <div class="panel" id="kpiPrintArea">
