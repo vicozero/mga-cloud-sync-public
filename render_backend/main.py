@@ -9124,80 +9124,138 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function workOrderPrintHtml(record){
       const title = record.folio ? `Orden de trabajo ${record.folio}` : "Orden de trabajo";
       const descriptionLines = workOrderLines(record.description);
-      let activities = descriptionLines.filter(line => !/^Servicio|^Plan base|^Actividades:?$/i.test(line) && !/Validar contra manual OEM|Referencia: manual/i.test(line));
+      let activities = descriptionLines.filter(line => !/^Servicio|^Plan base|^Actividades/i.test(line) && !/Validar contra manual OEM|Referencia: manual/i.test(line));
       if(!activities.length) activities = ["Diagnosticar condicion reportada.", "Ejecutar trabajo indicado con bloqueo y seguridad.", "Registrar refacciones, lubricantes, evidencia y cierre."];
       const parts = workOrderPartsRows(record.parts_used);
       const lubricants = workOrderPartsRows(record.lubricants_used);
       const priorityClass = ["URGENTE","ALTA"].includes(String(record.priority || "").toUpperCase()) ? "bad" : "warn";
-      const field = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${esc(value || "")}</b></div>`;
-      const fieldHtml = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${value || ""}</b></div>`;
-      const activityRows = activities.map((line, idx) => `<tr><td class="num">${idx + 1}</td><td>${esc(line)}</td><td class="check"></td></tr>`).join("");
-      const partRows = (parts.length ? parts : [{part:"", desc:"", qty:"", unit:""}]).map(row => `<tr><td>${esc(row.part)}</td><td>${esc(row.desc)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
-      const oilRows = (lubricants.length ? lubricants : [{part:"", desc:"", qty:"", unit:""}]).map(row => `<tr><td>${esc(row.desc || row.part)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
+      const field = (icon, label, value) => `<div class="info"><div class="icon">${esc(icon)}</div><div class="label">${esc(label)}</div><div class="value">${esc(value || "")}</div></div>`;
+      const fieldHtml = (icon, label, value) => `<div class="info"><div class="icon">${esc(icon)}</div><div class="label">${esc(label)}</div><div class="value">${value || ""}</div></div>`;
+      const activityCell = (line) => {
+        const match = String(line || "").match(/^([^:]{2,55}):\s*(.+)$/);
+        if(!match) return esc(line);
+        return `<b>${esc(match[1])}</b><span>${esc(match[2])}</span>`;
+      };
+      const activityRows = activities.map((line, idx) => `<tr><td class="done"><i></i></td><td class="act"><b class="n">${idx + 1}.</b>${activityCell(line)}</td><td class="obs"></td></tr>`).join("");
+      const materialSeen = new Set();
+      const materialItems = [...parts, ...lubricants].map(row => {
+        const text = [row.part, row.desc, row.qty, row.unit].filter(Boolean).join(" ").trim();
+        const key = normalizedText(text);
+        if(!text || materialSeen.has(key)) return "";
+        materialSeen.add(key);
+        return `<li>${esc(text)}</li>`;
+      }).filter(Boolean);
+      const materialHtml = (materialItems.length ? materialItems : [
+        "<li>Juego de llaves y herramienta manual.</li>",
+        "<li>Grasa multiproposito y charola para derrames.</li>",
+        "<li>Trapos, limpiador y equipo de proteccion personal.</li>",
+      ]).join("");
+      const serviceType = record.origin === "PREVENTIVO" ? "Preventivo / Inspeccion" : (record.origin || "Mantenimiento / Inspeccion");
+      const equipmentName = `${record.equipment_code || ""} ${record.equipment_description || ""}`.trim();
+      const status = String(record.status || "").toUpperCase();
       return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
-        @page{size:letter;margin:0.25in}
+        @page{size:letter portrait;margin:0.18in}
         *{box-sizing:border-box}
-        body{font-family:Segoe UI,Arial,sans-serif;color:#102033;margin:0;background:#fff;font-size:10px}
-        .page{width:100%;border:1.2px solid #0b2f6f;padding:9px 11px 8px}
-        .head{display:grid;grid-template-columns:86px 1fr 160px;gap:9px;align-items:center;border-bottom:2px solid #0b2f6f;padding-bottom:6px}
-        .logoBox{border:1px solid #d7e0ea;border-radius:8px;height:48px;display:flex;align-items:center;justify-content:center;background:#fff}
-        .logoBox img{max-width:72px;max-height:38px}
-        h1{margin:0;color:#0b2f6f;font-size:18px;letter-spacing:.04em;text-transform:uppercase}
-        .subtitle{color:#64748b;margin-top:2px;font-size:9px}
-        .folioBox{border:1.5px solid #0b2f6f;border-radius:8px;overflow:hidden;text-align:center}
-        .folioBox span{display:block;background:#0b2f6f;color:#fff;font-weight:800;padding:3px;text-transform:uppercase}
-        .folioBox b{display:block;font-size:14px;padding:5px 4px;color:#b91c1c}
-        .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px}
-        .field{border:1px solid #cbd5e1;border-radius:6px;padding:4px 5px;background:#f8fafc;min-height:31px}
-        .field span{display:block;color:#475569;font-size:8px;text-transform:uppercase;font-weight:700}
-        .field b{display:block;color:#0f172a;font-size:10px;margin-top:1px;line-height:1.12}
-        .badge{display:inline-block;border-radius:999px;padding:2px 7px;color:#fff;font-weight:800}
-        .badge.bad{background:#b91c1c}.badge.warn{background:#b7791f}.badge.ok{background:#047857}
-        .section{margin-top:6px;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;break-inside:avoid}
+        html,body{margin:0;background:#fff}
+        body{font-family:Segoe UI,Arial,sans-serif;color:#111827;font-size:10.5px}
+        .page{position:relative;width:100%;min-height:10.63in;border:1.8px solid #111827;padding:0.12in 0.16in 0.14in;background:linear-gradient(135deg,#fff 0%,#fff 72%,#f6f8fb 100%);overflow:visible}
+        .page:before{content:"";position:absolute;left:0;right:0;top:0;height:8px;background:linear-gradient(90deg,#0b2f6f 0%,#0b2f6f 74%,#c8102e 74%,#c8102e 100%)}
+        .page:after{content:"";position:absolute;left:0;right:0;bottom:0;height:13px;background:linear-gradient(110deg,#c8102e 0%,#c8102e 27%,transparent 27%,transparent 73%,#0b2f6f 73%,#0b2f6f 100%)}
+        .head{display:grid;grid-template-columns:235px 1fr 130px;gap:12px;align-items:center;margin-top:10px;margin-bottom:8px;border-bottom:0;padding-bottom:0}
+        .logoBox{display:flex;gap:10px;align-items:center;border:0;border-radius:0;height:auto;background:transparent;justify-content:flex-start}
+        .logoBox img{width:86px;height:56px;object-fit:contain;border:1px solid #d8dee9;border-radius:8px;padding:5px;background:#fff}
+        .logoText b{display:block;font-size:30px;line-height:1;color:#0b2f6f;letter-spacing:.03em}
+        .logoText span{display:block;color:#c8102e;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-top:3px}
+        .titleBlock{text-align:center;border-left:6px solid #c8102e;padding-left:12px}
+        .titleBlock h1{margin:0;color:#111827;font-size:30px;line-height:1;text-transform:uppercase;letter-spacing:.04em;font-weight:900}
+        .titleBlock p{margin:7px 0 0;color:#475569;font-size:15px;font-weight:700}
+        .folioBox{height:58px;background:linear-gradient(135deg,#c8102e 0%,#c8102e 58%,#0b2f6f 58%,#0b2f6f 100%);clip-path:polygon(18% 0,100% 0,100% 100%,0 100%,0 32%);border:0;border-radius:0;position:relative}
+        .folioBox:after{content:"";position:absolute;right:12px;top:15px;width:72px;height:8px;background:repeating-linear-gradient(90deg,#fff 0 12px,transparent 12px 18px)}
+        .folioBox span,.folioBox b{display:none}
+        .grid{display:grid;grid-template-columns:1fr 1fr;border:2px solid #111827;border-radius:4px;overflow:hidden;margin-top:5px;gap:0}
+        .info{display:grid;grid-template-columns:52px 125px 1fr;min-height:39px;border-bottom:1px solid #111827}
+        .info:nth-last-child(-n+2){border-bottom:0}
+        .info:nth-child(odd){border-right:1px solid #111827}
+        .icon{background:#0b2f6f;color:#fff;font-weight:900;font-size:14px;display:flex;align-items:center;justify-content:center;border-right:1px solid #111827}
+        .label{display:flex;align-items:center;padding:0 12px;font-weight:800;font-size:13px}
+        .value{display:flex;align-items:center;padding:0 12px;font-weight:800;font-size:14px;color:#111827}
+        .badge{display:inline-flex;align-items:center;border-radius:3px;padding:4px 10px;color:#fff;font-weight:900;background:#0b2f6f;text-transform:uppercase}
+        .badge.bad{background:#c8102e}.badge.warn{background:#b7791f}.badge.ok{background:#047857}
+        .section{margin-top:10px;border:2px solid #111827;border-radius:6px;overflow:hidden;break-inside:avoid;background:#fff}
         .section.activities{break-inside:auto;overflow:visible}
-        .section h2{margin:0;background:#eaf3ff;color:#0b2f6f;font-size:10px;text-transform:uppercase;padding:4px 7px;border-bottom:1px solid #cbd5e1;letter-spacing:.03em}
-        .body{padding:5px 7px;line-height:1.22;min-height:24px;white-space:pre-wrap}
+        .section h2{display:flex;align-items:center;gap:10px;margin:0;background:linear-gradient(90deg,#0b2f6f,#0f4c9a);color:#fff;font-size:17px;text-transform:none;padding:8px 12px;font-weight:900;border-bottom:0;letter-spacing:0}
+        .section h2:before{content:"ACT";display:inline-flex;align-items:center;justify-content:center;width:32px;height:24px;border-radius:4px;background:#c8102e;color:#fff;font-size:11px}
+        .section.details h2:before{content:"EQ"}
+        .body{padding:8px 10px;line-height:1.28;min-height:38px;white-space:pre-wrap}
+        .equipData{display:grid;grid-template-columns:1fr 1fr;padding:0;white-space:normal}
+        .equipData div{display:grid;grid-template-columns:118px 1fr;gap:6px;border-bottom:1px solid #8b95a3;min-height:34px;padding:8px 10px}
+        .equipData div:nth-child(odd){border-right:1px solid #8b95a3}
+        .equipData div:nth-last-child(-n+2){border-bottom:0}
+        .equipData span{font-weight:900;color:#111827}.equipData b{font-weight:900;color:#0b2f6f}
         table{width:100%;border-collapse:collapse}
         thead{display:table-header-group}
-        th{background:#f1f5f9;color:#0b2f6f;text-align:left;font-size:8.5px;text-transform:uppercase}
-        th,td{border:1px solid #d8e0ea;padding:3px 5px;vertical-align:top;line-height:1.18}
+        th{background:#eef3fa;color:#111827;text-align:center;font-size:10px;text-transform:uppercase;font-weight:900}
+        th,td{border:1px solid #8b95a3;padding:6px 8px;vertical-align:top;line-height:1.25}
         tr{break-inside:avoid;page-break-inside:avoid}
-        td.num{width:23px;text-align:center;font-weight:800;color:#0b2f6f}
-        td.check{width:42px;height:20px}
-        td.check:after{content:"";display:block;width:14px;height:14px;border:1.4px solid #334155;border-radius:2px;margin:auto}
-        .two{display:grid;grid-template-columns:1.35fr .85fr;gap:7px;margin-top:6px}
-        .safety{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;padding:5px}
-        .safety div{border:1px solid #d8e0ea;border-radius:6px;padding:5px;min-height:24px}
+        .done{width:105px;text-align:center}.done i{display:block;width:18px;height:18px;border:2px solid #111827;margin:0 auto}
+        .act{width:52%;font-size:11px}.act .n{display:inline-block;margin-right:8px}.act b:not(.n){display:block;color:#0b2f6f;font-size:11px}.act span{display:block;margin-top:2px}
+        .obs{width:34%;height:31px}
+        .two{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;break-inside:avoid}
+        .mini{border:2px solid #111827;border-radius:6px;overflow:hidden;background:#fff}
+        .mini h3{margin:0;background:linear-gradient(90deg,#0b2f6f,#0f4c9a);color:#fff;padding:8px 12px;font-size:16px}
+        .mini h3 small{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:#c8102e;margin-right:8px;color:#fff}
+        .mini ul{margin:8px 18px 10px;padding-left:12px;font-size:12px;line-height:1.35}
+        .mini .note{padding:12px 14px;min-height:98px;font-size:12px;line-height:1.45;white-space:pre-wrap}
         .safety div:before{content:"☐ ";font-weight:800;color:#0b2f6f}
-        .sign{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}
-        .line{border-top:1.4px solid #334155;text-align:center;padding-top:4px;font-weight:700;color:#0b2f6f}
-        .foot{margin-top:6px;color:#64748b;font-size:8px;display:flex;justify-content:space-between;border-top:1px solid #e2e8f0;padding-top:3px}
-        @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.page{border-color:#0b2f6f}}
+        .close{margin-top:10px;border:2px solid #111827;border-radius:6px;overflow:hidden;break-inside:avoid}
+        .close h3{margin:0;background:#111827;color:#fff;padding:7px 12px;font-size:14px}
+        .closeGrid{display:grid;grid-template-columns:1.25fr 1.1fr .9fr .9fr .95fr}
+        .closeCell{border-right:1px solid #111827;min-height:72px;text-align:center;padding:8px 8px;font-weight:800}
+        .closeCell:last-child{border-right:0;text-align:left}
+        .signLine{height:31px;border-bottom:2px solid #111827;margin:10px 8px 4px}
+        .muted{font-weight:500;font-size:10px;color:#475569}
+        .statusLine{display:block;margin:4px 0}.statusLine i{display:inline-block;width:12px;height:12px;border:1.7px solid #111827;margin-right:6px;vertical-align:-2px}.statusLine.on i{background:#0b2f6f}
+        .foot{margin-top:8px;color:#64748b;font-size:8px;display:flex;justify-content:space-between}
+        @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.page{border-color:#111827}}
       </style></head><body><div class="page">
         <div class="head">
-          <div class="logoBox"><img src="/static/mga-corner-logo.jfif" alt="MGA"></div>
-          <div><h1>Orden de trabajo</h1><div class="subtitle">MGA Contratista Minera · Mantenimiento de equipo</div></div>
+          <div class="logoBox"><img src="/static/mga-corner-logo.jfif" alt="MGA"><div class="logoText"><b>MGA</b><span>Contratista Minera</span></div></div>
+          <div class="titleBlock"><h1>Orden de trabajo</h1><p>Servicio de mantenimiento / inspeccion</p></div>
           <div class="folioBox"><span>Folio OT</span><b>${esc(record.folio || "PENDIENTE")}</b></div>
         </div>
         <div class="grid">
-          ${field("Fecha", record.date || "")}
-          ${field("Equipo", `${record.equipment_code || ""} ${record.equipment_description || ""}`.trim())}
-          ${field("Origen", record.origin || "")}
-          ${fieldHtml("Prioridad", `<span class="badge ${priorityClass}">${esc(record.priority || "")}</span>`)}
-          ${field("Estatus", record.status || "")}
-          ${field("Responsable", record.responsible || "")}
-          ${field("Mecanico", record.mechanic || "")}
-          ${field("Supervisor", record.supervisor || "")}
+          ${field("OT", "No. OT:", record.folio || "PENDIENTE")}
+          ${field("AR", "Area:", record.area || "Mantenimiento Mina")}
+          ${field("FE", "Fecha:", record.date || "")}
+          ${field("TS", "Tipo de servicio:", serviceType)}
+          ${field("TU", "Turno:", record.shift || record.turn || "")}
+          ${fieldHtml("PR", "Prioridad:", `<span class="badge ${priorityClass}">${esc(record.priority || "")}</span>`)}
         </div>
-        <div class="section"><h2>Trabajo solicitado / condicion encontrada</h2><div class="body">${esc(record.description || "")}</div></div>
-        <div class="section activities"><h2>Actividades para el mecanico</h2><table><thead><tr><th>#</th><th>Actividad</th><th>OK</th></tr></thead><tbody>${activityRows}</tbody></table></div>
+        <div class="section details"><h2>Datos del equipo</h2><div class="body equipData">
+          <div><span>Equipo:</span><b>${esc(equipmentName || "")}</b></div>
+          <div><span>Serie:</span><b>${esc(record.serial || record.serial_number || "")}</b></div>
+          <div><span>Componente:</span><b>${esc(record.component || "Mantenimiento")}</b></div>
+          <div><span>Ubicacion:</span><b>${esc(record.location || "Interior mina")}</b></div>
+          <div><span>Horometro:</span><b>${esc(record.completed_meter || record.meter || record.horometer || "")}</b></div>
+          <div><span>Estatus OT:</span><b>${esc(record.status || "")}</b></div>
+        </div></div>
+        <div class="section activities"><h2>Actividades de la orden de trabajo</h2><table><thead><tr><th>Realizado</th><th>Actividad</th><th>Observaciones</th></tr></thead><tbody>${activityRows}</tbody></table></div>
         <div class="two">
-          <div class="section"><h2>Refacciones / filtros requeridos o usados</h2><table><thead><tr><th>No. parte</th><th>Descripcion</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>${partRows}</tbody></table></div>
-          <div class="section"><h2>Lubricantes / fluidos</h2><table><thead><tr><th>Fluido</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>${oilRows}</tbody></table></div>
+          <div class="mini"><h3><small>HM</small>Herramientas / materiales</h3><ul>${materialHtml}</ul></div>
+          <div class="mini"><h3><small>OB</small>Observaciones</h3><div class="note">${esc(record.action || record.evidence_note || "Registrar hallazgos, parametros medidos, refacciones usadas y condicion final del equipo antes de liberar.")}</div></div>
         </div>
-        <div class="section"><h2>Seguridad, pruebas y evidencia</h2><div class="safety"><div>Bloqueo / permiso aplicado</div><div>Prueba operativa realizada</div><div>Area limpia y equipo liberado</div></div><div class="body"><b>Accion / cierre:</b> ${esc(record.action || "")}\n<b>Evidencia:</b> ${esc(record.evidence_note || "")}</div></div>
-        <div class="sign"><div class="line">Mecanico</div><div class="line">Supervisor</div><div class="line">Operacion / recibe</div><div class="line">Planeacion</div></div>
-        <div class="foot"><span>Formato generado por Portal MGA mantenimiento</span><span>Tamano carta · ${esc(toIsoDate(new Date()))}</span></div>
+        <div class="close"><h3>Cierre de la orden</h3><div class="closeGrid">
+          <div class="closeCell">Tecnico responsable<div class="signLine"></div><div class="muted">${esc(record.mechanic || "Nombre y firma")}</div></div>
+          <div class="closeCell">Supervisor<div class="signLine"></div><div class="muted">${esc(record.supervisor || "Nombre y firma")}</div></div>
+          <div class="closeCell">Hora inicio<div class="signLine"></div><div class="muted">____:____ h</div></div>
+          <div class="closeCell">Hora termino<div class="signLine"></div><div class="muted">____:____ h</div></div>
+          <div class="closeCell">Estatus
+            <span class="statusLine ${status === "ABIERTA" ? "on" : ""}"><i></i>Abierta</span>
+            <span class="statusLine ${status === "EN PROCESO" ? "on" : ""}"><i></i>En proceso</span>
+            <span class="statusLine ${status === "CERRADA" ? "on" : ""}"><i></i>Cerrada</span>
+          </div>
+        </div></div>
+        <div class="foot"><span>Formato generado por Portal MGA mantenimiento</span><span>Tamano carta - ${esc(toIsoDate(new Date()))}</span></div>
       </div><script>window.onload=function(){setTimeout(function(){window.focus();window.print();},350);};<\\/script></body></html>`;
     }
     function printWorkOrder(){
