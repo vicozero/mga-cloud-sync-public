@@ -7337,6 +7337,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn secondary" id="specialSrvCloseBtn">Cerrar servicio</button>
             <button class="btn danger" id="specialSrvDeleteBtn">Eliminar</button>
             <button class="btn secondary" id="specialSrvPrintBtn">PDF / imprimir</button>
+            <button class="btn secondary" id="specialSrvPrintOtBtn">Imprimir OT</button>
           </div>
         </div>
         <div class="panel">
@@ -11739,6 +11740,37 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!payload.equipment_code) return alert("Selecciona o guarda un servicio especial.");
       printServiceRecord(payload, `Servicio ${payload.module || ""} ${payload.folio || ""}`);
     }
+    function printSpecialServiceWorkOrder(){
+      const payload = specialServicePayload();
+      if(!payload.equipment_code) return alert("Selecciona o guarda un servicio especial.");
+      const description = [
+        `Servicio especial ${payload.module || ""} / ${payload.service_type || ""}`,
+        payload.component ? `Componente: ${payload.component}` : "",
+        payload.checklist ? `Actividades para mecanico:\n${payload.checklist}` : "",
+        payload.notes ? `Observaciones:\n${payload.notes}` : "",
+      ].filter(Boolean).join("\n\n");
+      const record = {
+        folio: payload.folio || "",
+        date: payload.service_date || toIsoDate(new Date()),
+        equipment_code: payload.equipment_code || "",
+        equipment_description: payload.equipment_description || "",
+        origin: payload.module || "SERVICIO ESPECIAL",
+        priority: payload.service_type === "CORRECTIVO" ? "ALTA" : "MEDIA",
+        status: payload.status || "ABIERTO",
+        responsible: payload.supervisor || "",
+        mechanic: payload.mechanic || "",
+        supervisor: payload.supervisor || "",
+        description,
+        action: payload.status === "CERRADO" ? "Servicio especial ejecutado y cerrado." : "Ejecutar actividades del servicio especial, registrar evidencia, refacciones, lubricantes y cierre.",
+        parts_used: payload.parts_used || "",
+        lubricants_used: payload.lubricants_used || "",
+        evidence_note: payload.notes || "",
+      };
+      const win = window.open("", "_blank");
+      if(!win) return alert("Permite ventanas emergentes para imprimir.");
+      win.document.write(workOrderPrintHtml(record));
+      win.document.close();
+    }
     function renderSpareParts(){
       const payload = portal.parts_manuals || {rows: [], summary: {}};
       const selected = $("spareEquipment").value || "";
@@ -13233,6 +13265,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("specialSrvCloseBtn").addEventListener("click", () => saveSpecialService(true).catch(showError));
     $("specialSrvDeleteBtn").addEventListener("click", () => deleteSpecialService().catch(showError));
     $("specialSrvPrintBtn").addEventListener("click", printSpecialService);
+    $("specialSrvPrintOtBtn").addEventListener("click", printSpecialServiceWorkOrder);
     $("specialSrvModule").addEventListener("change", () => { $("specialSrvFolio").value = ""; $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
     $("specialSrvType").addEventListener("change", () => { $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
     $("specialPlanEquipment").addEventListener("change", () => { applySpecialPlanModelFromEquipment(); renderSpecialMaintenancePlan(); });
