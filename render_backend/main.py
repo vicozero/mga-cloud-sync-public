@@ -3778,6 +3778,219 @@ def availability_status_for_equipment_py(eq: dict[str, Any], status_map: dict[st
     return ""
 
 
+SPANISH_MONTHS = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
+
+
+AVAILABILITY_CATEGORY_NAMES = {
+    "BARRENACION": "BARRENACION",
+    "ANCLAJE": "ANCLAJE",
+    "SCOOP TRAM": "SCOOP TRAM",
+    "SCOOPTRAM": "SCOOP TRAM",
+    "RETROEXCAVADORAS": "RETROEXCAVADORAS",
+    "RETROEXCAVADORA": "RETROEXCAVADORAS",
+    "ACARREO": "ACARREO",
+    "VEHICULOS LIGEROS": "VEHICULOS LIGEROS",
+    "VEHÍCULOS LIGEROS": "VEHICULOS LIGEROS",
+    "JUMBO ANCLADOR": "JUMBO ANCLADOR",
+}
+
+
+AVAILABILITY_CONDITIONS = ["FUERA DE SERVICIO", "NO DISPONIBLE", "DISPONIBLE", "OPERATIVA", "STAND BY", "REPARACION"]
+
+
+def availability_import_date_from_text(text: str) -> str:
+    clean = text.replace("\x00", ":")
+    match = re.search(r"(\d{1,2})\s+de\s+([A-Za-zÁÉÍÓÚáéíóúñÑ]+)\s+de\s+(\d{4})", clean, flags=re.I)
+    if not match:
+        return date.today().isoformat()
+    day = int(match.group(1))
+    month = SPANISH_MONTHS.get(normalized_ascii(match.group(2)).lower(), 0)
+    year = int(match.group(3))
+    if not month:
+        return date.today().isoformat()
+    return date(year, month, day).isoformat()
+
+
+def availability_pdf_text(raw: bytes) -> str:
+    if fitz is None:
+        raise HTTPException(status_code=500, detail="El servidor no tiene lector PDF disponible.")
+    try:
+        doc = fitz.open(stream=raw, filetype="pdf")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo abrir el PDF: {exc}") from exc
+    chunks: list[str] = []
+    try:
+        for page in doc:
+            chunks.append(page.get_text("text") or "")
+    finally:
+        doc.close()
+    return "\n".join(chunks).replace("\x00", ":")
+
+
+def availability_clean_cell(value: Any) -> str:
+    text = str(value or "").replace("\x00", ":")
+    # PyMuPDF puede extraer algunas ligaduras del PDF con caracteres de control.
+    # En el reporte actual ocurre con "perfil" -> "pe\x91il".
+    text = text.replace("pe\x91il", "perfil").replace("PE\x91IL", "PERFIL").replace("Pe\x91il", "Perfil")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def parse_availability_pdf_rows(raw: bytes) -> tuple[str, list[dict[str, Any]]]:
+    text = availability_pdf_text(raw)
+    import_date = availability_import_date_from_text(text)
+    rows: list[dict[str, Any]] = []
+    current_category = ""
+    lines = [availability_clean_cell(line) for line in text.splitlines()]
+    lines = [line for line in lines if line]
+
+    def norm(value: str) -> str:
+        return re.sub(r"\s+", " ", normalized_ascii(value)).strip()
+
+    def is_category(value: str) -> bool:
+        return norm(value) in AVAILABILITY_CATEGORY_NAMES
+
+    def is_header(value: str) -> bool:
+        key = norm(value)
+        return (
+            key.startswith(("DISPONIBILIDAD", "PROYECTO", "DISPONIBLES", "OPERATIVOS", "FUERA SERV", "TOTAL", "PAGINA"))
+            or key in {"EQUIPO", "NO. ECO", "NO ECO", "CONDICION", "OBSERVACIONES"}
+            or re.fullmatch(r"\d+", key) is not None
+        )
+
+    def condition_from_line(value: str) -> str:
+        key = norm(value)
+        for candidate in AVAILABILITY_CONDITIONS:
+            if key == normalized_ascii(candidate):
+                return candidate
+        return ""
+
+    def is_eco(value: str) -> bool:
+        return re.fullmatch(r"[A-Z]{1,4}[-\s]?\d{1,4}", value.strip(), flags=re.I) is not None
+
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        line_norm = norm(line)
+        if line_norm in AVAILABILITY_CATEGORY_NAMES:
+            current_category = AVAILABILITY_CATEGORY_NAMES[line_norm]
+            idx += 1
+            continue
+        if is_header(line):
+            idx += 1
+            continue
+
+        # Formato extraido por PyMuPDF: equipo / no eco / condicion / observacion opcional.
+        if idx + 2 < len(lines) and is_eco(lines[idx + 1]) and condition_from_line(lines[idx + 2]):
+            equipment = line
+            eco = lines[idx + 1].upper().replace(" ", "-")
+            condition = condition_from_line(lines[idx + 2])
+            observations = ""
+            next_idx = idx + 3
+            next_line_starts_row = next_idx + 1 < len(lines) and is_eco(lines[next_idx + 1])
+            if next_idx < len(lines) and not next_line_starts_row and not is_category(lines[next_idx]) and not is_header(lines[next_idx]) and not is_eco(lines[next_idx]) and not condition_from_line(lines[next_idx]):
+                # Si la siguiente linea despues de esta observacion parece iniciar otro equipo, no consumir mas.
+                observations = lines[next_idx]
+                next_idx += 1
+            rows.append({
+                "category": current_category,
+                "equipment": equipment,
+                "eco": eco,
+                "condition": condition,
+                "observations": observations,
+                "highlight_observation": 1 if observations and condition != "DISPONIBLE" else 0,
+                "updated_date": import_date,
+                "updated_at": utc_now().isoformat(timespec="seconds"),
+                "source": "pdf_disponibilidad",
+            })
+            idx = next_idx
+            continue
+
+        # Formato extraido por pdfplumber: todo el renglon junto.
+        condition = ""
+        condition_pos = -1
+        for candidate in AVAILABILITY_CONDITIONS:
+            pos = line_norm.find(normalized_ascii(candidate))
+            if pos >= 0 and (condition_pos < 0 or pos < condition_pos):
+                condition = candidate
+                condition_pos = pos
+        if condition:
+            before = line[:condition_pos].strip()
+            after = line[condition_pos + len(condition):].strip()
+            eco_match = re.search(r"\b([A-Z]{1,4}[-\s]?\d{1,4})\b\s*$", before, flags=re.I)
+            if eco_match:
+                eco = eco_match.group(1).upper().replace(" ", "-")
+                equipment = before[: eco_match.start()].strip()
+                if equipment:
+                    rows.append({
+                        "category": current_category,
+                        "equipment": equipment,
+                        "eco": eco,
+                        "condition": condition,
+                        "observations": after,
+                        "highlight_observation": 1 if after and condition != "DISPONIBLE" else 0,
+                        "updated_date": import_date,
+                        "updated_at": utc_now().isoformat(timespec="seconds"),
+                        "source": "pdf_disponibilidad",
+                    })
+        idx += 1
+    return import_date, rows
+
+
+def availability_row_keys_py(row: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    for field_name in ("eco", "no_eco", "code", "equipment_code", "equipment", "description"):
+        key = normalized_ascii(row.get(field_name))
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def merge_availability_rows(existing: list[Any], imported: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    base = [row for row in existing if isinstance(row, dict)]
+    index: dict[str, int] = {}
+    for idx, row in enumerate(base):
+        for key in availability_row_keys_py(row):
+            index[key] = idx
+    added = 0
+    updated = 0
+    for row in imported:
+        matching_key = next((key for key in availability_row_keys_py(row) if key in index), "")
+        if matching_key:
+            current = base[index[matching_key]]
+            current.update({
+                "category": row.get("category") or current.get("category") or "",
+                "equipment": row.get("equipment") or current.get("equipment") or "",
+                "eco": row.get("eco") or current.get("eco") or "",
+                "condition": row.get("condition") or current.get("condition") or "",
+                "observations": row.get("observations") or "",
+                "highlight_observation": row.get("highlight_observation", 0),
+                "updated_date": row.get("updated_date") or "",
+                "updated_at": row.get("updated_at") or utc_now().isoformat(timespec="seconds"),
+                "source": row.get("source") or "pdf_disponibilidad",
+            })
+            updated += 1
+        else:
+            base.append(row)
+            for key in availability_row_keys_py(row):
+                index[key] = len(base) - 1
+            added += 1
+    return base, {"updated": updated, "added": added, "imported": len(imported)}
+
+
 def group_matches_py(eq: dict[str, Any], group: str) -> bool:
     key = normalized_ascii(group or "Todos")
     code = normalized_ascii(eq.get("code") or eq.get("equipment_code"))
@@ -7517,6 +7730,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
     </section>
     <section id="disponibilidad" class="view">
+      <div class="panel toolbar">
+        <label>Importar PDF disponibilidad<input id="dispImportFile" type="file" accept=".pdf,application/pdf"></label>
+        <button class="btn" id="dispImportBtn">Importar disponibilidad</button>
+        <span class="muted" id="dispImportStatus">Carga un PDF como el reporte de disponibilidad.</span>
+      </div>
       <div class="panel">
         <div class="subtle-title"><h3>Editar disponibilidad del dia</h3><span class="muted" id="dispEditStatus">Selecciona un equipo de la tabla.</span></div>
         <div class="capture-form-grid">
@@ -12933,6 +13151,29 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderExecutiveBoard();
       $("dispEditStatus").textContent = "Disponibilidad actualizada y reflejada en KPI.";
     }
+    async function importAvailabilityPdf(){
+      if(!hasApiKey()) return;
+      const file = $("dispImportFile").files[0];
+      if(!file) return alert("Selecciona el PDF de disponibilidad.");
+      if(!String(file.name || "").toLowerCase().endsWith(".pdf")) return alert("Selecciona un archivo PDF.");
+      $("dispImportStatus").textContent = "Importando disponibilidad...";
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch("/api/availability/import", {method:"POST", headers:headers(true), body:JSON.stringify({file_name:file.name, data:String(dataUrl)})});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(result.portal) portal = result.portal;
+      renderPortalSelectors();
+      resetAvailabilityEdit();
+      renderDisponibilidad();
+      renderDashboard();
+      renderExecutiveBoard();
+      $("dispImportStatus").textContent = `Importado: ${result.imported || 0} renglones, ${result.updated || 0} actualizados, ${result.added || 0} nuevos. Fecha ${result.date || ""}.`;
+    }
     function renderDisponibilidad(){
       const search = ($("dispSearch").value || "").toUpperCase();
       const status = $("dispStatus").value;
@@ -13971,6 +14212,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dispSearch").addEventListener("input", renderDisponibilidad);
     $("dispStatus").addEventListener("change", renderDisponibilidad);
     $("renderDispBtn").addEventListener("click", renderDisponibilidad);
+    $("dispImportBtn").addEventListener("click", () => importAvailabilityPdf().catch(showError));
     $("dispSaveBtn").addEventListener("click", () => saveAvailabilityEdit().catch(showError));
     $("dispClearBtn").addEventListener("click", resetAvailabilityEdit);
     $("reqProductSearch").addEventListener("input", renderReqProducts);
@@ -14876,6 +15118,56 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "parts_manuals": len((payload.get("parts_manuals") or {}).get("rows") or []) if isinstance(payload.get("parts_manuals"), dict) else 0,
         "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
+    }
+
+
+@app.post("/api/availability/import")
+async def import_availability_pdf(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Archivo invalido.")
+    file_name = str(payload.get("file_name") or "").strip()
+    data = str(payload.get("data") or "")
+    if not data:
+        raise HTTPException(status_code=400, detail="Archivo vacio.")
+    if "," in data:
+        data = data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="No se pudo decodificar el archivo.") from exc
+    if file_name and not file_name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Por ahora solo se acepta PDF de disponibilidad.")
+    import_date, imported_rows = parse_availability_pdf_rows(raw)
+    if not imported_rows:
+        raise HTTPException(status_code=400, detail="No se encontraron renglones de disponibilidad en el PDF.")
+    with SessionLocal() as session:
+        snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+        if snapshot is None:
+            snapshot = PortalSnapshot(name="default")
+            session.add(snapshot)
+            portal = portal_fallback_payload(session)
+        else:
+            loaded = json_loads(snapshot.payload_json)
+            portal = loaded if isinstance(loaded, dict) else portal_fallback_payload(session)
+        current_rows = portal.get("availability") if isinstance(portal.get("availability"), list) else []
+        merged, summary = merge_availability_rows(current_rows, imported_rows)
+        portal["availability"] = merged
+        portal["ok"] = True
+        portal["source"] = "cloud-portal"
+        portal["updated_at"] = utc_now().isoformat(timespec="seconds")
+        snapshot.updated_at = utc_now()
+        snapshot.payload_json = json_dumps(portal)
+        session.commit()
+    with SessionLocal() as session:
+        updated_portal = latest_portal_payload(session)
+    return {
+        "ok": True,
+        "file_name": file_name,
+        "date": import_date,
+        **summary,
+        "portal": updated_portal,
     }
 
 
