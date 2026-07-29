@@ -7324,6 +7324,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="exec-alert-grid" id="specialSrvSummary"></div>
         </div>
       </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Plan de mantenimiento especial</h3><span class="muted" id="specialPlanStatus">Bolter 99 Resemin / Sandvik DD311</span></div>
+        <p class="muted">Plan base editable para ejecutar servicios por horometro. Ajustable cuando se cargue el manual OEM exacto.</p>
+        <div class="panel toolbar">
+          <label>Equipo<select id="specialPlanEquipment"></select></label>
+          <label>Modelo<select id="specialPlanModel"><option value="BOLTER99">Bolter 99 Resemin</option><option value="DD311">Sandvik DD311</option></select></label>
+          <label>Intervalo<select id="specialPlanInterval"><option value="TURNO">Inspeccion turno</option><option value="50H">50H</option><option value="250H">250H</option><option value="500H">500H</option><option value="1000H">1000H</option></select></label>
+          <button class="btn" id="specialPlanLoadBtn">Cargar a ejecucion</button>
+          <button class="btn secondary" id="specialPlanPrintBtn">Imprimir plan</button>
+        </div>
+        <div class="grid2">
+          <div class="table-wrap"><table id="specialPlanTable"></table></div>
+          <div class="table-wrap"><table id="specialPlanPartsTable"></table></div>
+        </div>
+      </div>
       <div class="panel toolbar">
         <label>Modulo<select id="specialSrvFilterModule"><option value="">Todos</option><option value="COMPRESOR">Compresor</option><option value="PERFORADORA">Perforadora Jumbo</option></select></label>
         <label>Estatus<select id="specialSrvFilterState"><option value="">Todos</option><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
@@ -9424,6 +9439,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("prevExecEquipment", equipmentOptions, "Selecciona");
       setOptions("specialSrvEquipment", equipmentOptions, "Selecciona");
+      setOptions("specialPlanEquipment", equipmentOptions, "Selecciona");
       setOptions("woEquipment", equipmentOptions, "Selecciona");
       setOptions("woFilterEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
@@ -10878,6 +10894,183 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function specialServiceClosed(row){
       return preventiveClosedStates.has(String(row.status || "").toUpperCase());
     }
+    const specialMaintenancePlans = {
+      BOLTER99: {
+        name:"Bolter 99 Resemin",
+        module:"PERFORADORA",
+        component:"BOLTER / JUMBO EMPERNADOR",
+        note:"Modelo placa: Bolter 99 Resemin. Serie visible: IMC-1387. Plan base por horometro; validar contra manual OEM.",
+        intervals:{
+          TURNO:{
+            service:"INSPECCION",
+            tasks:[
+              ["Seguridad","Revisar paro de emergencia, alarma, luces, claxon, extintor y guardas."],
+              ["Sistema hidraulico","Inspeccionar fugas en mangueras, cilindros, bomba, manifold y conexiones."],
+              ["Perforadora / bolter","Revisar shank, acople, centralizador, mordazas, mangueras y lubricacion."],
+              ["Brazo / boom","Revisar pasadores, bujes, fisuras, holguras y topes mecanicos."],
+              ["Electrico","Revisar cableado visible, conectores, tablero, sensores y botoneras."],
+              ["Rodaje / traslado","Revisar llantas, frenos, direccion, niveles y ruidos anormales."],
+            ],
+            parts:["GRASA EP2 1 KG","ACEITE HIDRAULICO VG100 5 L","SPRAY LIMPIADOR CONTACTOS 1 PZA"],
+          },
+          "50H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Lubricacion","Engrasar articulaciones, boom, cilindros, mesa, pernos y puntos de pivote."],
+              ["Filtros / respiraderos","Revisar respiraderos hidraulicos y limpiar prefiltros."],
+              ["Torque / fijacion","Verificar torque de pernos criticos en brazo, base, perforadora y chasis."],
+              ["Hidraulico","Revisar temperatura, nivel, espuma, contaminacion y fugas bajo carga."],
+              ["Prueba operativa","Probar avance, rotacion, percusion, posicionamiento y funciones de empernado."],
+            ],
+            parts:["GRASA EP2 2 KG","FILTRO RESPIRADERO HIDRAULICO 1 PZA","ACEITE HIDRAULICO VG100 10 L"],
+          },
+          "250H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Aceite / filtros","Cambiar o revisar filtros hidraulicos segun condicion y diferencial."],
+              ["Perforadora","Inspeccionar desgaste de shank, sellos, guias, acoples y fugas internas."],
+              ["Empernador","Revisar magazine, mordazas, alimentador, torque de empernado y sensores."],
+              ["Electrico","Limpiar tablero, revisar relevadores/contactores, cables, tierras y conectores."],
+              ["Frenos / direccion","Inspeccionar frenos, direccion, cilindros y lineas."],
+            ],
+            parts:["FILTRO HIDRAULICO RETORNO 1 PZA","FILTRO HIDRAULICO PRESION 1 PZA","ACEITE HIDRAULICO VG100 20 L","GRASA EP2 3 KG"],
+          },
+          "500H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Sistema hidraulico","Muestreo de aceite, revisar bombas, presiones, valvulas y acumuladores."],
+              ["Perforadora / bolter","Servicio mayor de inspeccion a perforadora, mangueras y sellos."],
+              ["Estructura","Inspeccion de fisuras en boom, chasis, soldaduras y soportes."],
+              ["Electrico","Revision de aislamiento, tablero, cable de alimentacion y protecciones."],
+              ["Prueba final","Prueba bajo carga y registro de parametros."],
+            ],
+            parts:["KIT SELLOS PERFORADORA 1 PZA","FILTRO HIDRAULICO RETORNO 1 PZA","FILTRO HIDRAULICO PRESION 1 PZA","ACEITE HIDRAULICO VG100 40 L"],
+          },
+          "1000H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Servicio mayor","Inspeccion integral de sistema hidraulico, electrico, boom, chasis y perforadora."],
+              ["Aceite hidraulico","Cambio/filtrado segun analisis y condicion del aceite."],
+              ["Componentes criticos","Revisar bombas, motores hidraulicos, cilindros, acumuladores y valvulas."],
+              ["Estructural","Inspeccion detallada de soldaduras, pernos, bujes, pasadores y deformaciones."],
+              ["Certificacion interna","Prueba funcional completa y liberacion por supervisor."],
+            ],
+            parts:["ACEITE HIDRAULICO VG100 80 L","KIT FILTROS HIDRAULICOS 1 JGO","KIT SELLOS CILINDROS 1 JGO","GRASA EP2 5 KG"],
+          },
+        },
+      },
+      DD311: {
+        name:"Sandvik DD311",
+        module:"PERFORADORA",
+        component:"JUMBO PERFORADOR DD311",
+        note:"Placa Sandvik DD311: sistema electrico 440V/60Hz, serie visible L19B7103, fecha 05/2019. Plan base por horometro; validar contra manual OEM.",
+        intervals:{
+          TURNO:{
+            service:"INSPECCION",
+            tasks:[
+              ["Seguridad","Revisar paro de emergencia, protecciones, luces, alarma de traslado y extintor."],
+              ["Sistema electrico","Inspeccionar cable, enchufe, tablero, botoneras, tierra fisica y daños visibles."],
+              ["Perforadora","Revisar shank, centralizador, mangueras, fugas, lubricacion y estado de barras."],
+              ["Hidraulico","Revisar nivel, temperatura, fugas en bombas, cilindros, manifold y conexiones."],
+              ["Boom","Revisar articulaciones, pasadores, bujes, mangueras y fisuras."],
+              ["Traslado","Revisar frenos, direccion, llantas, traccion y ruidos anormales."],
+            ],
+            parts:["GRASA EP2 1 KG","ACEITE HIDRAULICO VG100 5 L","SPRAY LIMPIADOR CONTACTOS 1 PZA"],
+          },
+          "50H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Lubricacion","Engrasar boom, articulaciones, perforadora, mesa de avance y puntos indicados."],
+              ["Electrico","Limpiar tablero, revisar bornes, humedad, cableado y conectores."],
+              ["Perforacion","Revisar avance, rotacion, percusion, centralizador y soporte de perforadora."],
+              ["Hidraulico","Revisar presiones visibles, fugas, temperatura y condicion de mangueras."],
+              ["Prueba","Probar traslado, posicionamiento y perforacion sin carga anormal."],
+            ],
+            parts:["GRASA EP2 2 KG","FILTRO RESPIRADERO HIDRAULICO 1 PZA","ACEITE HIDRAULICO VG100 10 L"],
+          },
+          "250H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Filtros","Cambiar/revisar filtros hidraulicos y respiraderos segun condicion."],
+              ["Perforadora","Inspeccionar shank, sellos, acoples, fugas, guias y desgaste."],
+              ["Sistema electrico 440V","Revisar protecciones, contactores, cable, conexiones y tierras."],
+              ["Boom / chasis","Revisar pernos, bujes, pasadores, fisuras y soportes."],
+              ["Parametros","Registrar horometro, presiones, temperatura y observaciones."],
+            ],
+            parts:["FILTRO HIDRAULICO RETORNO 1 PZA","FILTRO HIDRAULICO PRESION 1 PZA","ACEITE HIDRAULICO VG100 20 L","GRASA EP2 3 KG"],
+          },
+          "500H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Hidraulico","Muestreo de aceite, revisar bombas, motores, valvulas, acumuladores y cilindros."],
+              ["Electrico","Revision profunda de tablero, cable de poder, protecciones, aislamiento y sensores."],
+              ["Perforadora","Servicio de inspeccion mayor, sellos, fugas internas y componentes de desgaste."],
+              ["Estructura","Inspeccion de soldaduras, bases, boom y chasis."],
+              ["Prueba final","Prueba de perforacion y traslado con parametros documentados."],
+            ],
+            parts:["KIT SELLOS PERFORADORA 1 PZA","KIT FILTROS HIDRAULICOS 1 JGO","ACEITE HIDRAULICO VG100 40 L","LIMPIADOR DIELECTRICO 1 PZA"],
+          },
+          "1000H":{
+            service:"PREVENTIVO",
+            tasks:[
+              ["Servicio mayor","Inspeccion completa hidraulica, electrica, estructural, perforadora y traslado."],
+              ["Aceite hidraulico","Cambio/filtrado segun analisis y condicion de aceite."],
+              ["Electrico 440V","Prueba de aislamiento, conexiones, protecciones y cable de alimentacion."],
+              ["Componentes criticos","Revisar bombas, motores, acumuladores, cilindros, valvulas y perforadora."],
+              ["Liberacion","Prueba integral y cierre por supervisor."],
+            ],
+            parts:["ACEITE HIDRAULICO VG100 80 L","KIT FILTROS HIDRAULICOS 1 JGO","KIT SELLOS CILINDROS 1 JGO","GRASA EP2 5 KG","LIMPIADOR DIELECTRICO 2 PZA"],
+          },
+        },
+      },
+    };
+    function selectedSpecialPlan(){
+      const model = $("specialPlanModel").value || "BOLTER99";
+      const interval = $("specialPlanInterval").value || "TURNO";
+      const plan = specialMaintenancePlans[model] || specialMaintenancePlans.BOLTER99;
+      return {model, interval, plan, step: plan.intervals[interval] || plan.intervals.TURNO};
+    }
+    function renderSpecialMaintenancePlan(){
+      if(!$("specialPlanTable")) return;
+      const {plan, interval, step} = selectedSpecialPlan();
+      $("specialPlanStatus").textContent = `${plan.name} | ${interval} | ${step.service}`;
+      $("specialPlanTable").innerHTML = `<thead><tr><th>Sistema</th><th>Actividad segun plan</th></tr></thead><tbody>` +
+        step.tasks.map(([system, task]) => `<tr><td><b>${esc(system)}</b></td><td>${esc(task)}</td></tr>`).join("") +
+        `<tr><td><b>Nota</b></td><td>${esc(plan.note)}</td></tr></tbody>`;
+      $("specialPlanPartsTable").innerHTML = `<thead><tr><th>Refaccion / insumo sugerido</th><th>Formato para descuento</th></tr></thead><tbody>` +
+        step.parts.map(part => `<tr><td>${esc(part)}</td><td><code>${esc(part)}</code></td></tr>`).join("") +
+        `</tbody>`;
+    }
+    function loadSpecialPlanToService(){
+      const {plan, interval, step} = selectedSpecialPlan();
+      const equipment = $("specialPlanEquipment").value || $("specialSrvEquipment").value || "";
+      if(equipment) $("specialSrvEquipment").value = equipment;
+      $("specialSrvModule").value = plan.module;
+      $("specialSrvType").value = step.service;
+      $("specialSrvComponent").value = plan.component;
+      $("specialSrvParts").value = step.parts.join("; ");
+      $("specialSrvChecklist").value = step.tasks.map(([system, task]) => `${system}: ${task}`).join("\\n");
+      $("specialSrvNotes").value = `${plan.note}\\nIntervalo: ${interval}. Cargado desde plan de mantenimiento especial.`;
+      $("specialSrvState").value = "ABIERTO";
+      $("specialSrvFolio").value = "";
+      updateSpecialServiceChecklistTemplate();
+      $("specialSrvStatus").textContent = `Plan ${plan.name} ${interval} cargado a ejecucion.`;
+    }
+    function printSpecialPlan(){
+      const {plan, interval, step} = selectedSpecialPlan();
+      printServiceRecord({
+        folio:`PLAN-${interval}`,
+        service_date:toIsoDate(new Date()),
+        equipment_code:$("specialPlanEquipment").value || "",
+        equipment_description:plan.name,
+        service_type:step.service,
+        service_name:`Plan ${interval}`,
+        component:plan.component,
+        parts_used:step.parts.join("; "),
+        checklist:step.tasks.map(([system, task]) => `${system}: ${task}`).join("\\n"),
+        notes:plan.note,
+      }, `Plan mantenimiento ${plan.name} ${interval}`);
+    }
     function resetSpecialServiceForm(){
       currentSpecialServiceRecord = null;
       $("specialSrvId").value = "";
@@ -11008,6 +11201,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         ["Compresor", specialServiceRows().filter(row => row.module === "COMPRESOR").length, "Servicios compresor"],
         ["Perforadora", specialServiceRows().filter(row => row.module === "PERFORADORA").length, "Servicios jumbo"],
       ].map(([label,value,note]) => `<article class="exec-card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`).join("");
+      renderSpecialMaintenancePlan();
       $("specialSrvTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Modulo</th><th>Equipo</th><th>Componente</th><th>Tipo</th><th>Horometro</th><th>Hrs comp.</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Refacciones</th><th>Lubricantes</th><th>Notas</th></tr></thead><tbody>` +
         rows.map(row => `<tr data-special-srv="${esc(row.id || "")}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.module || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.service_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${one(row.component_meter || 0)}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill ${specialServiceClosed(row) ? "ok" : "warn"}">${esc(row.status || "")}</span></td><td>${esc(shortText(row.parts_used || "", 90))}</td><td>${esc(shortText(row.lubricants_used || "", 90))}</td><td>${esc(shortText(row.notes || row.checklist || "", 120))}</td></tr>`).join("") + `</tbody>`;
       document.querySelectorAll("[data-special-srv]").forEach(row => row.addEventListener("click", () => {
@@ -12544,6 +12738,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("specialSrvPrintBtn").addEventListener("click", printSpecialService);
     $("specialSrvModule").addEventListener("change", () => { $("specialSrvFolio").value = ""; $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
     $("specialSrvType").addEventListener("change", () => { $("specialSrvChecklist").value = ""; updateSpecialServiceChecklistTemplate(); });
+    ["specialPlanEquipment","specialPlanModel","specialPlanInterval"].forEach(id => $(id).addEventListener("change", renderSpecialMaintenancePlan));
+    $("specialPlanLoadBtn").addEventListener("click", loadSpecialPlanToService);
+    $("specialPlanPrintBtn").addEventListener("click", printSpecialPlan);
     ["spareEquipment","spareStatus"].forEach(id => $(id).addEventListener("change", renderSpareParts));
     $("spareSearch").addEventListener("input", renderSpareParts);
     $("renderSpareBtn").addEventListener("click", renderSpareParts);
