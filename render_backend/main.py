@@ -11437,6 +11437,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const hours = preventiveIntervalHours(value);
       return Object.entries(preventiveServiceHours).find(([, h]) => h === hours)?.[0] || "";
     }
+    function preventiveNeedsReprogramming(row){
+      const status = String(row.status || "").toUpperCase();
+      return row.source !== "manual_web" && status === "VENCIDO" && Number(row.hours_remaining || 0) < 0;
+    }
+    function preventiveDisplayDate(row){
+      if(preventiveNeedsReprogramming(row)) return "REPROGRAMAR";
+      return row.projected_date || "";
+    }
+    function preventiveCalendarDate(row){
+      return preventiveNeedsReprogramming(row) ? "" : (row.projected_date || "");
+    }
+    function preventiveSortKey(row){
+      if(preventiveNeedsReprogramming(row)) return `0000-${String(Math.abs(Number(row.hours_remaining || 0))).padStart(10,"0")}`;
+      return `1000-${row.projected_date || "9999-12-31"}`;
+    }
     async function saveManualPreventive(){
       if(!hasApiKey()) return;
       const payload = manualPreventivePayload();
@@ -11467,7 +11482,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const eqOk = !selected || row.equipment_code === selected;
         const text = [row.equipment_code,row.equipment_description,row.component,row.meter_type,row.status].join(" ").toUpperCase();
         return dateOk && eqOk && (!search || text.includes(search));
-      }).sort((a,b) => String(a.projected_date || "").localeCompare(String(b.projected_date || "")) || String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")));
+      }).sort((a,b) => preventiveSortKey(a).localeCompare(preventiveSortKey(b)) || String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")));
       return {start, end, rows};
     }
     function renderPreventives(){
@@ -11478,18 +11493,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(period.startsWith("a")){
         const months = Array.from({length:12}, (_, idx) => {
           const month = idx + 1;
-          const count = result.rows.filter(r => String(r.projected_date || "").slice(5,7) === String(month).padStart(2,"0")).length;
+          const count = result.rows.filter(r => String(preventiveCalendarDate(r) || "").slice(5,7) === String(month).padStart(2,"0")).length;
           return `<div class="schedule-cell"><strong>${["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][idx]}</strong><em>${count} servicios</em></div>`;
         });
         $("prCalendar").innerHTML = months.join("");
       } else {
         $("prCalendar").innerHTML = dateList(result.start, result.end, 35).map(day => {
-          const chips = result.rows.filter(r => r.projected_date === day).slice(0,3).map(r => `<span class="schedule-chip ${r.status === "VENCIDO" ? "late" : (r.status === "URGENTE" ? "near" : "")}">${esc(r.equipment_code)} ${esc(r.component)}</span>`).join("");
+          const chips = result.rows.filter(r => preventiveCalendarDate(r) === day).slice(0,3).map(r => `<span class="schedule-chip ${r.status === "VENCIDO" ? "late" : (r.status === "URGENTE" ? "near" : "")}">${esc(r.equipment_code)} ${esc(r.component)}</span>`).join("");
           return `<div class="schedule-cell"><strong>${esc(day.slice(8,10))}</strong><em>${esc(day.slice(5,7))}</em>${chips}</div>`;
         }).join("");
       }
       $("prTable").innerHTML = `<thead><tr><th>Origen</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
-        result.rows.map(row => `<tr data-pr-id="${esc(row.id || "")}" class="${row.source === "manual_web" ? "manual-row" : ""}"><td>${row.source === "manual_web" ? "Manual" : "Auto"}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(row.projected_date || "")}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
+        result.rows.map(row => `<tr data-pr-id="${esc(row.id || "")}" class="${row.source === "manual_web" ? "manual-row" : ""}"><td>${row.source === "manual_web" ? "Manual" : "Auto"}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(preventiveDisplayDate(row))}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
         `</tbody>`;
       document.querySelectorAll("[data-pr-id]").forEach(tr => tr.addEventListener("click", () => {
         const id = tr.dataset.prId || "";
