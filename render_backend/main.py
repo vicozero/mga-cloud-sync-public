@@ -7214,6 +7214,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <label>Equipo<select id="woPlanEquipment"></select></label>
           <label>Modelo<select id="woPlanModel"><option value="R1600G">Caterpillar R1600G</option><option value="R1600H">Caterpillar R1600H</option><option value="ST1030">Epiroc ST-1030</option><option value="CAT416">Retroexcavadora CAT 416</option></select></label>
           <label>Intervalo<select id="woPlanInterval"><option value="TURNO">Inspeccion turno</option><option value="250H">250H</option><option value="500H">500H</option><option value="750H">750H</option><option value="1000H">1000H</option></select></label>
+          <label>Sistema<select id="woPlanSystem"><option value="GENERAL">Plan completo</option><option value="MOTOR">Servicio motor</option><option value="HIDRAULICO">Servicio hidraulico</option></select></label>
           <button class="btn" id="woPlanLoadBtn">Cargar plan a OT</button>
           <button class="btn secondary" id="woPlanPrintBtn">Imprimir plan</button>
         </div>
@@ -8804,8 +8805,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function selectedWorkOrderPlan(){
       const model = $("woPlanModel")?.value || "R1600G";
       const interval = $("woPlanInterval")?.value || "TURNO";
+      const system = $("woPlanSystem")?.value || "GENERAL";
       const plan = workOrderMaintenancePlans[model] || workOrderMaintenancePlans.R1600G;
-      return {model, interval, plan, step: plan.intervals[interval] || plan.intervals.TURNO};
+      return {model, interval, system, plan, step: plan.intervals[interval] || plan.intervals.TURNO};
     }
     function workOrderPlanItemFromText(text){
       const raw = String(text || "").trim();
@@ -8871,12 +8873,39 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function workOrderCatalogFilterItems(interval){
       return catalogItemsForEquipmentInterval(workOrderSelectedEquipmentCode(), interval, true);
     }
-    function workOrderPlanItems(step, interval){
+    function workOrderSystemMatches(system, ...values){
+      const text = normalizedText(values.filter(Boolean).join(" "));
+      if(system === "MOTOR") return /MOTOR|DIESEL|COMBUST|AIRE|ADMISION|ACEITE MOTOR|15W40|REFRIGERANTE|ENFRIAMIENTO|TURBO|BANDA/.test(text);
+      if(system === "HIDRAULICO") return /HIDRAUL|HCO|VG100|BOMBA|VALVULA|CILINDRO|MANGUERA|ACUMULADOR|RESPIRADERO|FUGA|IMPLEMENTO|BOOM|BUCKET|GRASA|LUBRIC/.test(text);
+      return true;
+    }
+    function workOrderPlanTasks(step, system){
+      const tasks = (step.tasks || []).filter(([area, task]) => workOrderSystemMatches(system, area, task));
+      if(tasks.length) return tasks;
+      if(system === "MOTOR") return [
+        ["Motor","Revisar fugas, niveles, aceite, filtros, admision, combustible, refrigeracion, bandas y parametros de operacion."],
+        ["Prueba motor","Arrancar, verificar presion/temperatura, humo, ruido, codigos y liberacion funcional."],
+      ];
+      if(system === "HIDRAULICO") return [
+        ["Hidraulico","Revisar fugas, nivel, filtros, respiraderos, bomba, valvulas, cilindros, mangueras, presiones y temperatura."],
+        ["Prueba hidraulica","Probar implementos/boom/bucket bajo carga, verificar respuesta, ruidos, calentamiento y liberacion funcional."],
+      ];
+      return step.tasks || [];
+    }
+    function workOrderPlanTitle(step, system){
+      if(system === "MOTOR") return `${step.title} - Servicio motor`;
+      if(system === "HIDRAULICO") return `${step.title} - Servicio hidraulico`;
+      return step.title;
+    }
+    function workOrderPlanItems(step, interval, system="GENERAL"){
       const base = (step.items || step.parts || []).map(item => typeof item === "string" ? workOrderPlanItemFromText(item) : item);
       const catalog = workOrderCatalogFilterItems(interval);
-      if(!catalog.length) return base;
-      const baseNoFilters = base.filter(item => !/FILTRO|KIT/i.test(item.description || ""));
-      return [...catalog, ...baseNoFilters];
+      const filteredCatalog = catalog.filter(item => workOrderSystemMatches(system, item.description, item.part_number, item.source, item.manual));
+      const source = filteredCatalog.length ? filteredCatalog : catalog;
+      const filteredBase = base.filter(item => workOrderSystemMatches(system, item.description, item.part_number));
+      if(!source.length) return filteredBase.length ? filteredBase : base;
+      const baseNoFilters = filteredBase.filter(item => !/FILTRO|KIT/i.test(item.description || ""));
+      return [...source, ...baseNoFilters];
     }
     function workOrderPlanItemText(item){
       const part = item.part_number && item.part_number !== "PENDIENTE OEM" ? `${item.part_number} - ` : "";
@@ -8885,45 +8914,49 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function renderWorkOrderPlan(){
       if(!$("woPlanTable")) return;
-      const {plan, interval, step} = selectedWorkOrderPlan();
-      const items = workOrderPlanItems(step, interval);
+      const {plan, interval, system, step} = selectedWorkOrderPlan();
+      const tasks = workOrderPlanTasks(step, system);
+      const items = workOrderPlanItems(step, interval, system);
       const catalogCount = items.filter(item => item.from_catalog).length;
-      $("woPlanStatus").textContent = `${plan.name} | ${interval}${catalogCount ? ` | ${catalogCount} filtro(s) del equipo` : ""}`;
+      const systemLabel = system === "MOTOR" ? "Motor" : (system === "HIDRAULICO" ? "Hidraulico" : "Completo");
+      $("woPlanStatus").textContent = `${plan.name} | ${interval} | ${systemLabel}${catalogCount ? ` | ${catalogCount} filtro(s) del equipo` : ""}`;
       $("woPlanTable").innerHTML = `<thead><tr><th>Sistema</th><th>Actividad del plan OT</th></tr></thead><tbody>` +
-        step.tasks.map(([system, task]) => `<tr><td><b>${esc(system)}</b></td><td>${esc(task)}</td></tr>`).join("") +
+        tasks.map(([area, task]) => `<tr><td><b>${esc(area)}</b></td><td>${esc(task)}</td></tr>`).join("") +
         `<tr><td><b>Nota</b></td><td>${esc(plan.note)}</td></tr></tbody>`;
       $("woPlanPartsTable").innerHTML = `<thead><tr><th>No. parte</th><th>Refaccion / filtro / insumo</th><th>Cant.</th><th>Unidad</th><th>Fuente / manual</th></tr></thead><tbody>` +
         items.map(item => `<tr><td><code>${esc(item.part_number || "")}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td><td>${esc([item.source,item.manual].filter(Boolean).join(" / "))}</td></tr>`).join("") +
         `</tbody>`;
     }
     function loadWorkOrderPlan(){
-      const {plan, interval, step} = selectedWorkOrderPlan();
-      const itemLines = workOrderPlanItems(step, interval).map(workOrderPlanItemText);
+      const {plan, interval, system, step} = selectedWorkOrderPlan();
+      const tasks = workOrderPlanTasks(step, system);
+      const itemLines = workOrderPlanItems(step, interval, system).map(workOrderPlanItemText);
       const equipment = $("woPlanEquipment").value || $("woEquipment").value || "";
       if(equipment) $("woEquipment").value = equipment;
       $("woOrigin").value = plan.origin || "PREVENTIVO";
       $("woPriority").value = plan.priority || "MEDIA";
       $("woState").value = "ABIERTA";
-      $("woDescription").value = `${step.title}\n${plan.note}\n\nActividades:\n` + step.tasks.map(([system, task]) => `- ${system}: ${task}`).join("\n");
-      $("woAction").value = `Ejecutar plan ${interval}, registrar horometro real, evidencias, refacciones usadas y cierre por supervisor.`;
+      $("woDescription").value = `${workOrderPlanTitle(step, system)}\n${plan.note}\n\nActividades para mecanico:\n` + tasks.map(([area, task]) => `- ${area}: ${task}`).join("\n");
+      $("woAction").value = `Ejecutar plan ${interval} ${system === "GENERAL" ? "completo" : system.toLowerCase()}, registrar horometro real, evidencias, refacciones usadas y cierre por supervisor.`;
       $("woParts").value = itemLines.join("; ");
       $("woLubricants").value = itemLines.filter(part => /ACEITE|REFRIGERANTE|GRASA|ALMO|ATF|VG100|15W40|85W140/i.test(part)).join("; ");
-      $("woStatus").textContent = `Plan ${plan.name} ${interval} cargado a OT.`;
+      $("woStatus").textContent = `Plan ${plan.name} ${interval} ${system === "GENERAL" ? "" : system.toLowerCase()} cargado a OT.`;
       activateTab("ordenesTrabajo");
     }
     function printWorkOrderPlan(){
-      const {plan, interval, step} = selectedWorkOrderPlan();
-      const itemLines = workOrderPlanItems(step, interval).map(workOrderPlanItemText);
+      const {plan, interval, system, step} = selectedWorkOrderPlan();
+      const tasks = workOrderPlanTasks(step, system);
+      const itemLines = workOrderPlanItems(step, interval, system).map(workOrderPlanItemText);
       printServiceRecord({
         folio: `PLAN-OT-${interval}`,
         service_date: toIsoDate(new Date()),
         equipment_code: $("woPlanEquipment").value || "",
         equipment_description: plan.name,
         service_type: "Orden de trabajo",
-        service_name: step.title,
-        component: "MANTENIMIENTO",
+        service_name: workOrderPlanTitle(step, system),
+        component: system === "GENERAL" ? "MANTENIMIENTO" : system,
         parts_used: itemLines.join("; "),
-        checklist: step.tasks.map(([system, task]) => `${system}: ${task}`).join("\n"),
+        checklist: tasks.map(([area, task]) => `${area}: ${task}`).join("\n"),
         notes: plan.note,
       }, `Plan OT ${plan.name} ${interval}`);
     }
@@ -13166,7 +13199,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("woCloseBtn").addEventListener("click", () => saveWorkOrder(true).catch(showError));
     $("woPrintBtn").addEventListener("click", printWorkOrder);
     $("woDeleteBtn").addEventListener("click", () => deleteWorkOrder().catch(showError));
-    ["woPlanEquipment","woPlanModel","woPlanInterval"].forEach(id => $(id).addEventListener("change", renderWorkOrderPlan));
+    ["woPlanEquipment","woPlanModel","woPlanInterval","woPlanSystem"].forEach(id => $(id).addEventListener("change", renderWorkOrderPlan));
     $("woPlanLoadBtn").addEventListener("click", loadWorkOrderPlan);
     $("woPlanPrintBtn").addEventListener("click", printWorkOrderPlan);
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
