@@ -7515,6 +7515,23 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
     </section>
     <section id="disponibilidad" class="view">
+      <div class="panel">
+        <div class="subtle-title"><h3>Editar disponibilidad del dia</h3><span class="muted" id="dispEditStatus">Selecciona un equipo de la tabla.</span></div>
+        <div class="capture-form-grid">
+          <input id="dispEditIndex" type="hidden">
+          <label>Categoria<input id="dispEditCategory" readonly></label>
+          <label>Equipo<input id="dispEditEquipment" readonly></label>
+          <label>No ECO<input id="dispEditEco" readonly></label>
+          <label>Fecha actualizacion<input id="dispEditDate" type="date"></label>
+          <label>Condicion<select id="dispEditCondition"><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>NO DISPONIBLE</option><option>OPERATIVA</option><option>STAND BY</option><option>REPARACION</option></select></label>
+          <label>Resaltar obs.<select id="dispEditHighlight"><option value="0">No</option><option value="1">Si</option></select></label>
+          <label class="wide">Observaciones<textarea id="dispEditObservations" rows="2" placeholder="Motivo, trabajo pendiente o comentario de operacion"></textarea></label>
+        </div>
+        <div class="req-actions capture-actions">
+          <button class="btn" id="dispSaveBtn">Guardar disponibilidad</button>
+          <button class="btn secondary" id="dispClearBtn">Limpiar</button>
+        </div>
+      </div>
       <div class="panel toolbar">
         <label>Categoria / equipo<input id="dispSearch" placeholder="Buscar"></label>
         <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
@@ -12809,22 +12826,72 @@ WAREHOUSE_HTML = r"""<!doctype html>
       }
       return null;
     }
+    function resetAvailabilityEdit(){
+      $("dispEditIndex").value = "";
+      $("dispEditCategory").value = "";
+      $("dispEditEquipment").value = "";
+      $("dispEditEco").value = "";
+      $("dispEditDate").value = toIsoDate(new Date());
+      $("dispEditCondition").value = "DISPONIBLE";
+      $("dispEditHighlight").value = "0";
+      $("dispEditObservations").value = "";
+      $("dispEditStatus").textContent = "Selecciona un equipo de la tabla.";
+    }
+    function editAvailabilityRow(index){
+      const row = (portal.availability || [])[index];
+      if(!row) return;
+      $("dispEditIndex").value = String(index);
+      $("dispEditCategory").value = row.category || "";
+      $("dispEditEquipment").value = row.equipment || "";
+      $("dispEditEco").value = row.eco || "";
+      $("dispEditDate").value = row.updated_date || row.work_date || toIsoDate(new Date());
+      $("dispEditCondition").value = row.condition || "DISPONIBLE";
+      $("dispEditHighlight").value = String(Number(row.highlight_observation || 0));
+      $("dispEditObservations").value = row.observations || "";
+      $("dispEditStatus").textContent = `Editando ${row.eco || row.equipment || ""}`;
+    }
+    async function saveAvailabilityEdit(){
+      if(!hasApiKey()) return;
+      const index = Number($("dispEditIndex").value);
+      if(!Number.isInteger(index) || index < 0 || !(portal.availability || [])[index]) return alert("Selecciona primero un equipo de la tabla.");
+      const row = portal.availability[index];
+      portal.availability[index] = {
+        ...row,
+        condition: $("dispEditCondition").value || "DISPONIBLE",
+        observations: $("dispEditObservations").value.trim(),
+        highlight_observation: Number($("dispEditHighlight").value || 0),
+        updated_date: $("dispEditDate").value || toIsoDate(new Date()),
+        updated_at: nowIso(),
+        source: row.source || "web_disponibilidad",
+      };
+      $("dispEditStatus").textContent = "Guardando disponibilidad...";
+      await savePortalSnapshot();
+      renderDisponibilidad();
+      renderDashboard();
+      renderExecutiveBoard();
+      $("dispEditStatus").textContent = "Disponibilidad actualizada y reflejada en KPI.";
+    }
     function renderDisponibilidad(){
       const search = ($("dispSearch").value || "").toUpperCase();
       const status = $("dispStatus").value;
       const hfLookup = availabilityLastHfLookup();
       const kpiLookup = availabilityKpiLookup();
-      const rows = (portal.availability || []).filter(row => {
+      const rows = (portal.availability || []).map((row, index) => ({...row, __index:index})).filter(row => {
         const text = [row.category,row.equipment,row.eco,row.condition,row.observations].join(" ").toUpperCase();
         return (!status || String(row.condition || "").toUpperCase().includes(status)) && (!search || text.includes(search));
       });
-      $("dispTable").innerHTML = `<thead><tr><th>Categoria</th><th>Equipo</th><th>No ECO</th><th>Ultimo HF</th><th>% Disp</th><th>% Util</th><th>Condicion</th><th>Observaciones</th></tr></thead><tbody>` +
+      $("dispTable").innerHTML = `<thead><tr><th>Categoria</th><th>Equipo</th><th>No ECO</th><th>Ultimo HF</th><th>% Disp</th><th>% Util</th><th>Condicion</th><th>Observaciones</th><th>Accion</th></tr></thead><tbody>` +
         rows.map(row => {
           const hf = availabilityValueForRow(row, hfLookup);
           const kpi = availabilityValueForRow(row, kpiLookup) || {};
-          return `<tr><td>${esc(row.category)}</td><td>${esc(row.equipment)}</td><td>${esc(row.eco)}</td><td>${esc(meterText(hf?.hf))}</td><td>${esc(kpi.availability || "")}</td><td>${esc(kpi.utilization || "")}</td><td class="condition-cell ${conditionClass(row.condition)}">${esc(row.condition)}</td><td class="${Number(row.highlight_observation || 0) ? "highlight" : ""}">${esc(row.observations)}</td></tr>`;
+          return `<tr data-disp-row="${esc(row.__index)}" style="cursor:pointer"><td>${esc(row.category)}</td><td>${esc(row.equipment)}</td><td>${esc(row.eco)}</td><td>${esc(meterText(hf?.hf))}</td><td>${esc(kpi.availability || "")}</td><td>${esc(kpi.utilization || "")}</td><td class="condition-cell ${conditionClass(row.condition)}">${esc(row.condition)}</td><td class="${Number(row.highlight_observation || 0) ? "highlight" : ""}">${esc(row.observations)}</td><td><button type="button" class="btn secondary small" data-disp-edit="${esc(row.__index)}">Editar</button></td></tr>`;
         }).join("") +
         `</tbody>`;
+      document.querySelectorAll("[data-disp-row]").forEach(row => row.addEventListener("click", event => {
+        if(event.target && event.target.closest("button")) return;
+        editAvailabilityRow(Number(row.dataset.dispRow));
+      }));
+      document.querySelectorAll("[data-disp-edit]").forEach(button => button.addEventListener("click", () => editAvailabilityRow(Number(button.dataset.dispEdit))));
     }
     function reqFormData(){
       return {
@@ -13842,6 +13909,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("dispSearch").addEventListener("input", renderDisponibilidad);
     $("dispStatus").addEventListener("change", renderDisponibilidad);
     $("renderDispBtn").addEventListener("click", renderDisponibilidad);
+    $("dispSaveBtn").addEventListener("click", () => saveAvailabilityEdit().catch(showError));
+    $("dispClearBtn").addEventListener("click", resetAvailabilityEdit);
     $("reqProductSearch").addEventListener("input", renderReqProducts);
     $("reqNewBtn").addEventListener("click", () => newRequisition());
     $("reqSaveBtn").addEventListener("click", () => saveReq().catch(showError));
@@ -13930,6 +13999,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("importResult").textContent = JSON.stringify(payload, null, 2);
       if(r.ok) await load();
     });
+    resetAvailabilityEdit();
     activateTab("inventario");
     load().catch(showError);
     setInterval(() => {
