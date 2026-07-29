@@ -7195,7 +7195,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
-      <div><h1>Almacen de Filtros</h1><p>Control de inventario, movimientos, kardex e importacion Excel</p></div>
+      <div><h1>Mantenimiento MGA</h1><p>Control de mantenimiento, KPI, inventario, movimientos y disponibilidad</p></div>
     </div>
     <div class="hero-visual" aria-hidden="true">
       <div class="ops-card"><span>Operacion</span><b>En vivo</b><i></i></div>
