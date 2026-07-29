@@ -8960,8 +8960,62 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(system === "HIDRAULICO") return /HIDRAUL|HCO|VG100|BOMBA|VALVULA|CILINDRO|MANGUERA|ACUMULADOR|RESPIRADERO|FUGA|IMPLEMENTO|BOOM|BUCKET|GRASA|LUBRIC|VOLTEO|PTO|CAJA/.test(text);
       return true;
     }
-    function workOrderPlanTasks(step, system){
+    function mergeWorkOrderTasks(primary, additions){
+      const seen = new Set();
+      return [...(primary || []), ...(additions || [])].filter(([area, task]) => {
+        const key = normalizedText(`${area || ""}|${task || ""}`);
+        if(seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+    function workOrderMotorManualTasks(plan, interval){
+      const name = normalizedText(plan?.name || "");
+      const severe = ["750H","1000H"].includes(String(interval || "").toUpperCase());
+      const common = [
+        ["Motor - seguridad", "Bloquear equipo, aplicar tarjeta/permiso, esperar enfriamiento, limpiar el area del motor y verificar fugas activas antes de intervenir."],
+        ["Motor - aceite", "Revisar nivel, condicion, olor y posible contaminacion por diesel, refrigerante o particulas; cambiar aceite y filtro cuando aplique a la gama y registrar litros usados."],
+        ["Motor - filtracion", "Cambiar o revisar filtros de aceite, filtros de combustible y separador de agua segun intervalo; lubricar empaques, llenar/purgar de acuerdo al fabricante y confirmar que no queden fugas."],
+        ["Admision / aire", "Inspeccionar prefiltro, filtro primario/secundario, indicador de restriccion, ductos, abrazaderas y entrada de polvo; limpiar carcasa evitando contaminar la admision."],
+        ["Enfriamiento", "Revisar nivel y concentracion de refrigerante, radiador/enfriadores, tapa, mangueras, abrazaderas, ventilador, poleas y banda; limpiar panal y comprobar temperatura estable."],
+        ["Combustible", "Drenar agua/sedimentos del separador, revisar lineas de alimentacion/retorno, bomba, soportes, fugas y condicion del tanque; purgar aire si se intervino el sistema."],
+        ["Bandas / accesorios", "Revisar tension, desgaste, grietas y alineacion de bandas; inspeccionar alternador, compresor, poleas, tensor, bases y soportes del motor."],
+        ["Escape / turbo", "Revisar multiple, escape, flexibles, abrazaderas, turbo, juego visible, silbidos, humo anormal, protecciones termicas y fugas de gases."],
+        ["Arranque / carga", "Revisar baterias, bornes, tierras, alternador, motor de arranque, arneses del motor, sensores visibles y proteccion contra rozamiento o humedad."],
+        ["Prueba motor", "Arrancar y verificar presion de aceite, temperatura, humo, ruidos, vibracion, codigos/alertas y respuesta de aceleracion; documentar parametros antes de liberar."],
+      ];
+      const truck = [
+        ["Motor camion - postratamiento", "Si aplica por configuracion, revisar DEF, DPF/SCR, sensores, lineas, fugas de escape y codigos activos antes de liberar el camion."],
+        ["Motor camion - prueba ruta", "Realizar prueba de ruta corta o prueba estacionaria con carga controlada; verificar temperatura, presion, potencia, humo y ausencia de fugas."],
+      ];
+      const jumbo = [
+        ["Powerpack / motor auxiliar", "Revisar motor o powerpack si aplica, enfriamiento, filtros, soportes, acoples, protecciones, boton de paro y respuesta de arranque/parada."],
+        ["Ambiente subterraneo", "Revisar admision y enfriamiento con enfoque en polvo, humedad y lodo; limpiar sin dirigir contaminante hacia filtros, alternador o conectores."],
+      ];
+      const heavy = [
+        ["Motor equipo pesado", "Revisar soportes de motor, guardas, radiador, enfriadores, ventilador reversible si aplica y contaminacion por polvo/lodo en compartimiento."],
+        ["Prueba bajo carga", "Probar respuesta del motor con el equipo en funcion, observando temperatura, presion, potencia, humo, vibracion y alarmas."],
+      ];
+      const extra = name.includes("FREIGHTLINER") ? truck : (name.includes("SANDVIK") || name.includes("RESEMIN") || name.includes("BOLTER") || name.includes("DD3") ? jumbo : heavy);
+      return [...common, ...extra, ...(severe ? [
+        ["Muestreo / tendencia", "Tomar muestra de aceite si la gama lo requiere; registrar horometro, condicion del aceite, rellenos realizados y observaciones para tendencia."],
+        ["Liberacion supervisor", "Confirmar que no existan fugas despues de la prueba, limpiar el area, retirar bloqueo y obtener firma de supervisor/operacion."]
+      ] : [])];
+    }
+    function workOrderHydraulicManualTasks(plan, interval){
+      const severe = ["750H","1000H"].includes(String(interval || "").toUpperCase());
+      return [
+        ["Hidraulico - seguridad", "Liberar presion residual, bloquear implementos/boom/bucket, limpiar conexiones antes de abrir lineas y proteger el area contra contaminacion."],
+        ["Hidraulico - filtracion", "Revisar o cambiar filtros, respiraderos y sellos segun intervalo; inspeccionar indicador de restriccion y confirmar ausencia de fugas despues del arranque."],
+        ["Hidraulico - inspeccion", "Revisar nivel, temperatura, color/olor del aceite, bombas, valvulas, cilindros, mangueras, abrazaderas, rozamientos, acoples y acumuladores."],
+        ["Hidraulico - prueba", "Probar funciones bajo carga, respuesta de mandos, tiempos de ciclo, ruidos, calentamiento y deriva de cilindros; registrar anomalias para seguimiento."],
+        ...(severe ? [["Muestreo hidraulico", "Tomar muestra o revisar contaminacion si aplica; documentar condicion, horas del aceite, rellenos y recomendacion de cambio/filtrado."]] : []),
+      ];
+    }
+    function workOrderPlanTasks(step, system, plan=null, interval=""){
       const tasks = (step.tasks || []).filter(([area, task]) => workOrderSystemMatches(system, area, task));
+      if(system === "MOTOR") return mergeWorkOrderTasks(tasks, workOrderMotorManualTasks(plan, interval));
+      if(system === "HIDRAULICO") return mergeWorkOrderTasks(tasks, workOrderHydraulicManualTasks(plan, interval));
       if(tasks.length) return tasks;
       if(system === "MOTOR") return [
         ["Motor","Revisar fugas, niveles, aceite, filtros, admision, combustible, refrigeracion, bandas y parametros de operacion."],
@@ -8996,7 +9050,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function renderWorkOrderPlan(){
       if(!$("woPlanTable")) return;
       const {plan, interval, system, step} = selectedWorkOrderPlan();
-      const tasks = workOrderPlanTasks(step, system);
+      const tasks = workOrderPlanTasks(step, system, plan, interval);
       const items = workOrderPlanItems(step, interval, system);
       const catalogCount = items.filter(item => item.from_catalog).length;
       const systemLabel = system === "MOTOR" ? "Motor" : (system === "HIDRAULICO" ? "Hidraulico" : "Completo");
@@ -9010,7 +9064,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function loadWorkOrderPlan(){
       const {plan, interval, system, step} = selectedWorkOrderPlan();
-      const tasks = workOrderPlanTasks(step, system);
+      const tasks = workOrderPlanTasks(step, system, plan, interval);
       const itemLines = workOrderPlanItems(step, interval, system).map(workOrderPlanItemText);
       const equipment = $("woPlanEquipment").value || $("woEquipment").value || "";
       if(equipment) $("woEquipment").value = equipment;
@@ -9026,20 +9080,30 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function printWorkOrderPlan(){
       const {plan, interval, system, step} = selectedWorkOrderPlan();
-      const tasks = workOrderPlanTasks(step, system);
+      const tasks = workOrderPlanTasks(step, system, plan, interval);
       const itemLines = workOrderPlanItems(step, interval, system).map(workOrderPlanItemText);
-      printServiceRecord({
+      const record = {
         folio: `PLAN-OT-${interval}`,
-        service_date: toIsoDate(new Date()),
+        date: toIsoDate(new Date()),
         equipment_code: $("woPlanEquipment").value || "",
         equipment_description: plan.name,
-        service_type: "Orden de trabajo",
-        service_name: workOrderPlanTitle(step, system),
+        origin: "PREVENTIVO",
+        priority: plan.priority || "MEDIA",
+        status: "PLAN",
+        responsible: "",
+        mechanic: "",
+        supervisor: "",
         component: system === "GENERAL" ? "MANTENIMIENTO" : system,
+        description: `${workOrderPlanTitle(step, system)}\n${plan.note}\n\nActividades para mecanico:\n` + tasks.map(([area, task]) => `- ${area}: ${task}`).join("\n"),
+        action: `Ejecutar plan ${interval} ${system === "GENERAL" ? "completo" : system.toLowerCase()}, registrar horometro real, evidencias, refacciones usadas y cierre por supervisor.`,
         parts_used: itemLines.join("; "),
-        checklist: tasks.map(([area, task]) => `${area}: ${task}`).join("\n"),
-        notes: plan.note,
-      }, `Plan OT ${plan.name} ${interval}`);
+        lubricants_used: itemLines.filter(part => /ACEITE|REFRIGERANTE|GRASA|ALMO|ATF|VG100|15W40|85W140/i.test(part)).join("; "),
+        evidence_note: "",
+      };
+      const win = window.open("", "_blank");
+      if(!win) return alert("Permite ventanas emergentes para imprimir.");
+      win.document.write(workOrderPrintHtml(record));
+      win.document.close();
     }
     function workOrderLines(value){
       const text = String(value || "").replace(/\r/g, "\n");
@@ -9060,16 +9124,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function workOrderPrintHtml(record){
       const title = record.folio ? `Orden de trabajo ${record.folio}` : "Orden de trabajo";
       const descriptionLines = workOrderLines(record.description);
-      let activities = descriptionLines.filter(line => !/^Servicio|^Plan base|^Actividades:?$/i.test(line));
+      let activities = descriptionLines.filter(line => !/^Servicio|^Plan base|^Actividades:?$/i.test(line) && !/Validar contra manual OEM|Referencia: manual/i.test(line));
       if(!activities.length) activities = ["Diagnosticar condicion reportada.", "Ejecutar trabajo indicado con bloqueo y seguridad.", "Registrar refacciones, lubricantes, evidencia y cierre."];
       const parts = workOrderPartsRows(record.parts_used);
       const lubricants = workOrderPartsRows(record.lubricants_used);
       const priorityClass = ["URGENTE","ALTA"].includes(String(record.priority || "").toUpperCase()) ? "bad" : "warn";
       const field = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${esc(value || "")}</b></div>`;
       const fieldHtml = (label, value) => `<div class="field"><span>${esc(label)}</span><b>${value || ""}</b></div>`;
-      const activityRows = activities.slice(0, 11).map((line, idx) => `<tr><td class="num">${idx + 1}</td><td>${esc(line)}</td><td class="check"></td></tr>`).join("");
-      const partRows = (parts.length ? parts : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 8).map(row => `<tr><td>${esc(row.part)}</td><td>${esc(row.desc)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
-      const oilRows = (lubricants.length ? lubricants : [{part:"", desc:"", qty:"", unit:""}]).slice(0, 5).map(row => `<tr><td>${esc(row.desc || row.part)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
+      const activityRows = activities.map((line, idx) => `<tr><td class="num">${idx + 1}</td><td>${esc(line)}</td><td class="check"></td></tr>`).join("");
+      const partRows = (parts.length ? parts : [{part:"", desc:"", qty:"", unit:""}]).map(row => `<tr><td>${esc(row.part)}</td><td>${esc(row.desc)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
+      const oilRows = (lubricants.length ? lubricants : [{part:"", desc:"", qty:"", unit:""}]).map(row => `<tr><td>${esc(row.desc || row.part)}</td><td>${esc(row.qty)}</td><td>${esc(row.unit)}</td></tr>`).join("");
       return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
         @page{size:letter;margin:0.25in}
         *{box-sizing:border-box}
@@ -9090,11 +9154,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .badge{display:inline-block;border-radius:999px;padding:2px 7px;color:#fff;font-weight:800}
         .badge.bad{background:#b91c1c}.badge.warn{background:#b7791f}.badge.ok{background:#047857}
         .section{margin-top:6px;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;break-inside:avoid}
+        .section.activities{break-inside:auto;overflow:visible}
         .section h2{margin:0;background:#eaf3ff;color:#0b2f6f;font-size:10px;text-transform:uppercase;padding:4px 7px;border-bottom:1px solid #cbd5e1;letter-spacing:.03em}
         .body{padding:5px 7px;line-height:1.22;min-height:24px;white-space:pre-wrap}
         table{width:100%;border-collapse:collapse}
+        thead{display:table-header-group}
         th{background:#f1f5f9;color:#0b2f6f;text-align:left;font-size:8.5px;text-transform:uppercase}
         th,td{border:1px solid #d8e0ea;padding:3px 5px;vertical-align:top;line-height:1.18}
+        tr{break-inside:avoid;page-break-inside:avoid}
         td.num{width:23px;text-align:center;font-weight:800;color:#0b2f6f}
         td.check{width:42px;height:20px}
         td.check:after{content:"";display:block;width:14px;height:14px;border:1.4px solid #334155;border-radius:2px;margin:auto}
@@ -9123,7 +9190,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           ${field("Supervisor", record.supervisor || "")}
         </div>
         <div class="section"><h2>Trabajo solicitado / condicion encontrada</h2><div class="body">${esc(record.description || "")}</div></div>
-        <div class="section"><h2>Actividades para el mecanico</h2><table><thead><tr><th>#</th><th>Actividad</th><th>OK</th></tr></thead><tbody>${activityRows}</tbody></table></div>
+        <div class="section activities"><h2>Actividades para el mecanico</h2><table><thead><tr><th>#</th><th>Actividad</th><th>OK</th></tr></thead><tbody>${activityRows}</tbody></table></div>
         <div class="two">
           <div class="section"><h2>Refacciones / filtros requeridos o usados</h2><table><thead><tr><th>No. parte</th><th>Descripcion</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>${partRows}</tbody></table></div>
           <div class="section"><h2>Lubricantes / fluidos</h2><table><thead><tr><th>Fluido</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>${oilRows}</tbody></table></div>
