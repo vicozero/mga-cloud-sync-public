@@ -8816,8 +8816,60 @@ WAREHOUSE_HTML = r"""<!doctype html>
         unit,
       };
     }
-    function workOrderPlanItems(step){
-      return (step.items || step.parts || []).map(item => typeof item === "string" ? workOrderPlanItemFromText(item) : item);
+    function workOrderIntervalMatches(value, interval){
+      const text = normalizedText(value).replace(/\s/g, "");
+      const target = normalizedText(interval).replace(/\s/g, "");
+      if(!text || !target || target === "TURNO") return false;
+      const pm = {"250H":"PM1","500H":"PM2","750H":"PM3","1000H":"PM4"}[target];
+      return text.includes(target) || (pm && text.includes(pm));
+    }
+    function workOrderIsFilterRow(row){
+      const text = normalizedText([row.item_type,row.system,row.component,row.description,row.part_number,row.equivalent_part,row.donaldson_part].join(" "));
+      return /FILTRO|FILTER|SEPARADOR|ELEMENTO|AIRE|COMBUSTIBLE|HIDRAUL|TRANSMISION|ACEITE MOTOR/.test(text);
+    }
+    function workOrderSelectedEquipmentCode(){
+      return $("woPlanEquipment")?.value || $("woEquipment")?.value || "";
+    }
+    function workOrderCatalogFilterItems(interval){
+      const code = workOrderSelectedEquipmentCode();
+      if(!code) return [];
+      const eq = portalEquipment().find(item => normalizedText(item.code || item.equipment_code) === normalizedText(code)) || {};
+      const filterRows = ((eq && eq.filters) || [])
+        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && workOrderIsFilterRow(row))
+        .map(row => ({
+          part_number: row.part_number || row.donaldson_part || row.equivalent_part || "PENDIENTE OEM",
+          description: row.description || row.item_type || "Filtro",
+          quantity: row.quantity || 1,
+          unit: row.unit || "PZA",
+          source: "Filtros por equipo",
+          manual: row.manual_title || row.source_file || row.service_interval || "",
+          from_catalog: true,
+        }));
+      const manualRows = rowsForEquipment((portal.parts_manuals || {}).rows || [], code)
+        .filter(row => workOrderIntervalMatches(row.service_interval, interval) && workOrderIsFilterRow(row))
+        .map(row => ({
+          part_number: row.part_number || row.equivalent_part || "PENDIENTE OEM",
+          description: row.description || row.component || row.system || "Filtro",
+          quantity: row.quantity || 1,
+          unit: row.unit || "PZA",
+          source: "Manual equipo",
+          manual: row.manual_title || row.notes || row.service_interval || "",
+          from_catalog: true,
+        }));
+      const seen = new Set();
+      return [...filterRows, ...manualRows].filter(item => {
+        const key = normalizedText([item.part_number,item.description,item.quantity,item.unit].join("|"));
+        if(seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+    function workOrderPlanItems(step, interval){
+      const base = (step.items || step.parts || []).map(item => typeof item === "string" ? workOrderPlanItemFromText(item) : item);
+      const catalog = workOrderCatalogFilterItems(interval);
+      if(!catalog.length) return base;
+      const baseNoFilters = base.filter(item => !/FILTRO|KIT/i.test(item.description || ""));
+      return [...catalog, ...baseNoFilters];
     }
     function workOrderPlanItemText(item){
       const part = item.part_number && item.part_number !== "PENDIENTE OEM" ? `${item.part_number} - ` : "";
@@ -8827,18 +8879,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function renderWorkOrderPlan(){
       if(!$("woPlanTable")) return;
       const {plan, interval, step} = selectedWorkOrderPlan();
-      const items = workOrderPlanItems(step);
-      $("woPlanStatus").textContent = `${plan.name} | ${interval}`;
+      const items = workOrderPlanItems(step, interval);
+      const catalogCount = items.filter(item => item.from_catalog).length;
+      $("woPlanStatus").textContent = `${plan.name} | ${interval}${catalogCount ? ` | ${catalogCount} filtro(s) del equipo` : ""}`;
       $("woPlanTable").innerHTML = `<thead><tr><th>Sistema</th><th>Actividad del plan OT</th></tr></thead><tbody>` +
         step.tasks.map(([system, task]) => `<tr><td><b>${esc(system)}</b></td><td>${esc(task)}</td></tr>`).join("") +
         `<tr><td><b>Nota</b></td><td>${esc(plan.note)}</td></tr></tbody>`;
-      $("woPlanPartsTable").innerHTML = `<thead><tr><th>No. parte</th><th>Refaccion / filtro / insumo</th><th>Cant.</th><th>Unidad</th></tr></thead><tbody>` +
-        items.map(item => `<tr><td><code>${esc(item.part_number || "")}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td></tr>`).join("") +
+      $("woPlanPartsTable").innerHTML = `<thead><tr><th>No. parte</th><th>Refaccion / filtro / insumo</th><th>Cant.</th><th>Unidad</th><th>Fuente / manual</th></tr></thead><tbody>` +
+        items.map(item => `<tr><td><code>${esc(item.part_number || "")}</code></td><td>${esc(item.description || "")}</td><td>${esc(item.quantity || "")}</td><td>${esc(item.unit || "")}</td><td>${esc([item.source,item.manual].filter(Boolean).join(" / "))}</td></tr>`).join("") +
         `</tbody>`;
     }
     function loadWorkOrderPlan(){
       const {plan, interval, step} = selectedWorkOrderPlan();
-      const itemLines = workOrderPlanItems(step).map(workOrderPlanItemText);
+      const itemLines = workOrderPlanItems(step, interval).map(workOrderPlanItemText);
       const equipment = $("woPlanEquipment").value || $("woEquipment").value || "";
       if(equipment) $("woEquipment").value = equipment;
       $("woOrigin").value = plan.origin || "PREVENTIVO";
@@ -8853,7 +8906,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function printWorkOrderPlan(){
       const {plan, interval, step} = selectedWorkOrderPlan();
-      const itemLines = workOrderPlanItems(step).map(workOrderPlanItemText);
+      const itemLines = workOrderPlanItems(step, interval).map(workOrderPlanItemText);
       printServiceRecord({
         folio: `PLAN-OT-${interval}`,
         service_date: toIsoDate(new Date()),
