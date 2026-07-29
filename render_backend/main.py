@@ -6862,6 +6862,76 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .subtle-title h3 { margin:0; color:var(--blue); }
     .print-only { display:none; }
     #epp { display:none !important; }
+    .warehouse-page { background:#f5f8fd; color:#10244a; }
+    .warehouse-page .hero { position:sticky; top:0; z-index:30; height:76px; min-height:76px; padding:10px 22px; grid-template-columns:minmax(500px,1fr) 170px minmax(260px,340px); background:rgba(255,255,255,.96); box-shadow:0 10px 28px rgba(15,35,68,.08); }
+    .warehouse-page .hero::before { height:0; }
+    .warehouse-page .hero::after { opacity:.18; }
+    .warehouse-page .corner-logo { width:150px; height:54px; border:0; box-shadow:none; padding:0; }
+    .warehouse-page .brand { align-items:center; gap:20px; }
+    .warehouse-page header h1 { font-size:24px; color:#071f49; }
+    .warehouse-page header p { color:#64769a; font-weight:700; }
+    .warehouse-page .hero-visual { min-height:0; display:flex; align-items:center; justify-content:flex-end; gap:14px; }
+    .warehouse-page .ops-card { min-width:150px; min-height:44px; padding:8px 12px; grid-template-columns:auto; border-radius:16px; }
+    .warehouse-page .ops-card b { font-size:14px; }
+    .warehouse-page .ops-card span { font-size:10px; }
+    .warehouse-page .ops-graph, .warehouse-page .maintenance-video { display:none !important; }
+    .warehouse-page .key-card { border-radius:16px; background:#f8fbff; }
+    .warehouse-page main { width:100%; max-width:none; margin:0; padding:14px 24px 18px 252px; gap:14px; }
+    .warehouse-page .tabs { position:fixed; left:0; top:76px; bottom:0; width:228px; z-index:20; display:flex; flex-direction:column; flex-wrap:nowrap; overflow:auto; gap:4px; padding:20px 14px; border:0; border-radius:0; background:linear-gradient(180deg,#092250,#123e7b); box-shadow:18px 0 34px rgba(7,31,73,.16); }
+    .warehouse-page .tabs::before { content:"OPERACION"; color:#b7c7e8; font-size:12px; font-weight:900; margin:0 8px 8px; letter-spacing:.05em; }
+    .warehouse-page .tabs button { width:100%; text-align:left; color:#e9f1ff; background:transparent; border:1px solid transparent; border-radius:10px; padding:11px 12px; }
+    .warehouse-page .tabs button:hover { background:rgba(255,255,255,.09); box-shadow:none; }
+    .warehouse-page .tabs button.active { background:linear-gradient(135deg,#0b69ff,#0756d8); color:white; border-color:rgba(255,255,255,.18); box-shadow:0 10px 20px rgba(3,20,48,.25); }
+    .warehouse-page .view.active { display:grid; gap:14px; }
+    .warehouse-page .panel { border-radius:16px; border-color:#dce6f3; box-shadow:0 12px 34px rgba(15,35,68,.08); }
+    .warehouse-page .panel::before { height:0; }
+    .warehouse-dashboard { display:grid; gap:14px; }
+    .warehouse-titlebar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:2px 4px; }
+    .warehouse-titlebar h2 { margin:0; color:#071f49; font-size:26px; }
+    .warehouse-titlebar p { margin:4px 0 0; color:#64769a; font-size:13px; font-weight:700; }
+    .warehouse-titlebar .warehouse-breadcrumb { color:#0b69ff; font-size:12px; font-weight:900; }
+    .warehouse-kpis { display:grid; grid-template-columns:repeat(5,minmax(160px,1fr)); gap:12px; }
+    .warehouse-kpi { position:relative; overflow:hidden; display:grid; grid-template-columns:58px 1fr; gap:12px; align-items:center; min-height:94px; padding:17px; border:1px solid #dce6f3; border-radius:16px; background:#fff; box-shadow:0 12px 28px rgba(15,35,68,.07); }
+    .warehouse-kpi::after { content:""; position:absolute; inset:auto -40px -55px auto; width:120px; height:120px; border-radius:50%; background:rgba(11,105,255,.08); }
+    .warehouse-kpi-icon { width:50px; height:50px; display:grid; place-items:center; border-radius:14px; color:white; font-size:24px; font-weight:900; background:linear-gradient(135deg,#0b69ff,#3b82f6); box-shadow:0 14px 26px rgba(11,105,255,.24); }
+    .warehouse-kpi.good .warehouse-kpi-icon { background:linear-gradient(135deg,#00a86b,#16c784); box-shadow:0 14px 26px rgba(0,168,107,.22); }
+    .warehouse-kpi.warn .warehouse-kpi-icon { background:linear-gradient(135deg,#f59e0b,#ffb703); box-shadow:0 14px 26px rgba(245,158,11,.22); }
+    .warehouse-kpi.bad .warehouse-kpi-icon { background:linear-gradient(135deg,#ef233c,#dc2626); box-shadow:0 14px 26px rgba(220,38,38,.22); }
+    .warehouse-kpi.money .warehouse-kpi-icon { background:linear-gradient(135deg,#0891b2,#14b8a6); box-shadow:0 14px 26px rgba(20,184,166,.22); }
+    .warehouse-kpi strong { display:block; color:#071f49; font-size:26px; line-height:1; }
+    .warehouse-kpi span { display:block; margin-top:5px; color:#1d376b; font-size:12px; font-weight:900; text-transform:uppercase; }
+    .warehouse-kpi small { display:block; margin-top:5px; color:#64769a; font-size:12px; }
+    .warehouse-quick { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:0; padding:12px; border:1px solid #dce6f3; border-radius:16px; background:white; box-shadow:0 12px 28px rgba(15,35,68,.06); }
+    .warehouse-quick button { display:flex; align-items:center; justify-content:center; gap:12px; min-height:52px; border:0; border-right:1px solid #e4ebf5; background:white; color:#10244a; font-weight:900; cursor:pointer; }
+    .warehouse-quick button:last-child { border-right:0; }
+    .warehouse-quick button b { display:grid; place-items:center; width:34px; height:34px; border-radius:10px; color:white; background:#0b69ff; font-size:17px; }
+    .warehouse-quick button:hover { color:#0b69ff; background:#f8fbff; }
+    .warehouse-grid { display:grid; grid-template-columns:1.25fr .9fr; gap:14px; }
+    .warehouse-bottom { display:grid; grid-template-columns:1fr 1fr .95fr; gap:14px; }
+    .warehouse-category-grid { display:grid; grid-template-columns:repeat(5,minmax(100px,1fr)); gap:10px; }
+    .warehouse-category { padding:14px 10px; border:1px solid #e2eaf5; border-radius:14px; background:#fff; text-align:center; }
+    .warehouse-category b { display:block; color:#0b69ff; font-size:15px; margin-bottom:4px; }
+    .warehouse-category span { display:block; color:#10244a; font-size:12px; font-weight:900; }
+    .warehouse-category small { display:block; margin-top:6px; color:#64769a; }
+    .warehouse-feed { display:grid; gap:9px; }
+    .warehouse-feed-row { display:grid; grid-template-columns:34px 1fr auto; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid #e8eef7; }
+    .warehouse-feed-row:last-child { border-bottom:0; }
+    .warehouse-feed-row i { display:grid; place-items:center; width:32px; height:32px; border-radius:50%; background:#e8fff5; color:#00a86b; font-style:normal; font-weight:900; }
+    .warehouse-feed-row.out i { background:#eff6ff; color:#0b69ff; }
+    .warehouse-feed-row.adjust i { background:#fff7ed; color:#f59e0b; }
+    .warehouse-feed-row strong { display:block; color:#10244a; font-size:13px; }
+    .warehouse-feed-row span { display:block; color:#64769a; font-size:12px; }
+    .warehouse-feed-row em { color:#10244a; font-style:normal; font-weight:900; }
+    .warehouse-donut-wrap { display:grid; grid-template-columns:150px 1fr; align-items:center; gap:14px; }
+    .warehouse-donut { width:142px; height:142px; border-radius:50%; background:conic-gradient(#00a86b 0 35%, #0b69ff 35% 57%, #0891b2 57% 74%, #7c3aed 74% 88%, #f59e0b 88% 100%); display:grid; place-items:center; }
+    .warehouse-donut div { width:82px; height:82px; display:grid; place-items:center; border-radius:50%; background:white; color:#071f49; text-align:center; font-weight:900; font-size:13px; }
+    .warehouse-legend { display:grid; gap:8px; color:#10244a; font-size:13px; font-weight:800; }
+    .warehouse-legend span { display:flex; justify-content:space-between; gap:10px; }
+    .warehouse-legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; }
+    .warehouse-legend .c1 { background:#00a86b; } .warehouse-legend .c2 { background:#0b69ff; } .warehouse-legend .c3 { background:#0891b2; } .warehouse-legend .c4 { background:#7c3aed; } .warehouse-legend .c5 { background:#f59e0b; }
+    .warehouse-page #inventario > .grid2 { grid-template-columns:1.25fr .9fr; }
+    .warehouse-page #inventoryTable th, .warehouse-page #movementTable th, .warehouse-page #filtersTable th { background:#f3f7fc; color:#425982; }
+    .warehouse-page #inventoryTable td, .warehouse-page #movementTable td, .warehouse-page #filtersTable td { color:#1d376b; }
     @media print {
       header, .tabs, #stats, .dashboard-controls, .no-print { display:none !important; }
       main { width:100%; padding:0; }
@@ -6880,33 +6950,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
   </style>
 </head>
-<body>
+<body class="warehouse-page">
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
-      <div><h1>Portal MGA mantenimiento</h1><p>KPI, preventivos, bitacora, disponibilidad, diesel y filtros</p></div>
+      <div><h1>Almacen de Filtros</h1><p>Control de inventario, movimientos, kardex e importacion Excel</p></div>
     </div>
     <div class="hero-visual" aria-hidden="true">
       <div class="ops-card"><span>Operacion</span><b>En vivo</b><i></i></div>
-      <div class="ops-graph">
-        <span>Tendencia semanal</span>
-        <div class="ops-lines"><i style="height:22px"></i><i style="height:38px"></i><i style="height:28px"></i><i style="height:46px"></i><i style="height:34px"></i><i style="height:52px"></i><i style="height:42px"></i><i style="height:58px"></i></div>
-        <div class="ops-legend"><span><b></b>KPI</span><span><b></b>Alertas</span></div>
-      </div>
-      <div class="maintenance-video" aria-label="Animacion de operacion de mantenimiento">
-        <div class="maintenance-pulse"><i></i>Mtto activo</div>
-        <div class="mine-dust"></div>
-        <div class="mine-sparks"></div>
-        <div class="machine-track"></div>
-        <div class="scooptram">
-          <div class="light"></div>
-          <div class="bucket"></div>
-          <div class="body"></div>
-          <div class="rear"></div>
-          <div class="wheel front"></div>
-          <div class="wheel back"></div>
-        </div>
-      </div>
     </div>
     <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
@@ -7685,9 +7736,29 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="table-wrap"><table id="filtersTable"></table></div>
     </section>
     <section id="inventario" class="view">
+      <div class="warehouse-dashboard">
+        <div class="warehouse-titlebar">
+          <div>
+            <div class="warehouse-breadcrumb">Inicio &gt; Almacen &gt; Filtros</div>
+            <h2>Almacen de Filtros</h2>
+            <p>Vista operativa para controlar stock, bajas, entradas/salidas y exportacion.</p>
+          </div>
+          <button class="btn secondary" id="warehouseRefreshBtn">Actualizar tablero</button>
+        </div>
+        <div class="warehouse-kpis" id="warehouseStats"></div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Acciones rapidas</h3><span class="muted">Entrada, salida, kardex y reporte</span></div>
+          <div class="warehouse-quick">
+            <button type="button" data-warehouse-action="ENTRADA"><b>↓</b>Entrada de filtros</button>
+            <button type="button" data-warehouse-action="SALIDA"><b>↑</b>Salida de filtros</button>
+            <button type="button" data-warehouse-action="KARDEX"><b>▦</b>Kardex</button>
+            <button type="button" data-warehouse-action="REPORTE"><b>▤</b>Reporte inventario</button>
+          </div>
+        </div>
+      </div>
       <div class="grid2">
         <div class="panel">
-          <h3>Concentrado de filtros</h3>
+          <div class="subtle-title"><h3>Catalogo de filtros</h3><span class="muted" id="warehouseInventoryCount"></span></div>
           <div class="toolbar" style="grid-template-columns:1fr 160px;">
             <label>Buscar<input id="inventorySearch" placeholder="No. parte o descripcion"></label>
             <button class="btn secondary" id="exportBtn">Exportar Excel</button>
@@ -7711,6 +7782,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
           </div>
           <h3>Ultimos movimientos</h3>
           <div class="table-wrap" style="max-height:300px;"><table id="movementTable"></table></div>
+        </div>
+      </div>
+      <div class="warehouse-bottom">
+        <div class="panel">
+          <div class="subtle-title"><h3>Resumen por categoria</h3><span class="muted">Calculado desde descripcion/tipo</span></div>
+          <div class="warehouse-category-grid" id="warehouseCategorySummary"></div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Movimientos recientes</h3><span class="muted">Ultimos registros</span></div>
+          <div class="warehouse-feed" id="warehouseMovementFeed"></div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Distribucion de inventario</h3><span class="muted">Por categoria</span></div>
+          <div class="warehouse-donut-wrap" id="warehouseDistribution"></div>
         </div>
       </div>
     </section>
@@ -8483,6 +8568,75 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const bars = [0,1,2,3,4].map(step => `<i style="height:${10 + ((seed + idx * 7 + step * 9) % 18)}px"></i>`).join("");
         return `<div class="stat"><span class="stat-icon"></span><div><strong>${v}</strong><span>${esc(k)}</span></div><div class="stat-spark">${bars}</div></div>`;
       }).join("");
+    }
+    function warehouseCategory(row){
+      const text = [row.item_type,row.description,row.catalog_description,row.part_number].join(" ").toUpperCase();
+      if(/AIRE|AIR/.test(text)) return "Aire";
+      if(/COMBUST|DIESEL|FUEL|SEPARADOR/.test(text)) return "Combustible";
+      if(/HIDRAUL|HYD|HCO/.test(text)) return "Hidraulico";
+      if(/TRANSM|TRANS|CONVERTIDOR/.test(text)) return "Transmision";
+      if(/ACEITE|MOTOR|LUBE|LUBRIC/.test(text)) return "Motor";
+      return "General";
+    }
+    function warehouseMoney(value){
+      return Number(value || 0).toLocaleString("es-MX", {style:"currency", currency:"MXN", maximumFractionDigits:0});
+    }
+    function warehouseInventoryRows(){
+      return Array.isArray(data.inventory) ? data.inventory : [];
+    }
+    function warehouseMovementRows(){
+      return Array.isArray(data.movements) ? data.movements : [];
+    }
+    function warehouseUnitCost(row){
+      return Number(row.unit_cost || row.cost || row.price || row.costo_unitario || 0);
+    }
+    function renderWarehouseDashboard(){
+      if(!$("warehouseStats")) return;
+      const rows = warehouseInventoryRows();
+      const movements = warehouseMovementRows();
+      const totalParts = rows.length;
+      const totalQty = rows.reduce((acc,row) => acc + Number(row.quantity || 0), 0);
+      const lowStock = rows.filter(row => Number(row.min_stock || 0) > 0 && Number(row.quantity || 0) > 0 && Number(row.quantity || 0) <= Number(row.min_stock || 0)).length;
+      const noStock = rows.filter(row => Number(row.quantity || 0) <= 0).length;
+      const totalValue = rows.reduce((acc,row) => acc + Number(row.quantity || 0) * warehouseUnitCost(row), 0);
+      const kpis = [
+        ["◆", totalParts.toLocaleString("es-MX"), "Filtros registrados", "En catalogo", ""],
+        ["✓", num(totalQty), "En inventario", "Disponibles", "good"],
+        ["!", lowStock.toLocaleString("es-MX"), "Stock bajo", "Por debajo del minimo", "warn"],
+        ["△", noStock.toLocaleString("es-MX"), "Sin stock", "Requieren atencion", "bad"],
+        ["$", warehouseMoney(totalValue), "Valor inventario", totalValue ? "Costo total" : "Sin costo capturado", "money"],
+      ];
+      $("warehouseStats").innerHTML = kpis.map(([icon,value,label,note,cls]) => `
+        <article class="warehouse-kpi ${cls}">
+          <div class="warehouse-kpi-icon">${esc(icon)}</div>
+          <div><strong>${esc(value)}</strong><span>${esc(label)}</span><small>${esc(note)}</small></div>
+        </article>`).join("");
+      if($("warehouseInventoryCount")) $("warehouseInventoryCount").textContent = `Mostrando ${rows.length.toLocaleString("es-MX")} registro(s)`;
+      const categoryMap = new Map();
+      rows.forEach(row => {
+        const cat = warehouseCategory(row);
+        const bucket = categoryMap.get(cat) || {count:0, qty:0, value:0};
+        bucket.count += 1;
+        bucket.qty += Number(row.quantity || 0);
+        bucket.value += Number(row.quantity || 0) * warehouseUnitCost(row);
+        categoryMap.set(cat, bucket);
+      });
+      const preferred = ["Motor","Aire","Combustible","Hidraulico","Transmision","General"];
+      const categories = preferred.filter(cat => categoryMap.has(cat)).map(cat => [cat, categoryMap.get(cat)]);
+      $("warehouseCategorySummary").innerHTML = (categories.length ? categories : [["Sin datos",{count:0, qty:0, value:0}]]).slice(0,6).map(([cat,bucket]) => `
+        <div class="warehouse-category"><b>${esc(cat)}</b><span>${num(bucket.qty)} pzas</span><small>${bucket.count} codigo(s)</small><small>${warehouseMoney(bucket.value)}</small></div>`).join("");
+      $("warehouseMovementFeed").innerHTML = (movements.slice(0,5).map(row => {
+        const type = String(row.movement_type || "").toUpperCase();
+        const cls = type === "SALIDA" ? "out" : (type === "AJUSTE" ? "adjust" : "");
+        const symbol = type === "SALIDA" ? "↑" : (type === "AJUSTE" ? "±" : "↓");
+        return `<div class="warehouse-feed-row ${cls}"><i>${symbol}</i><div><strong>${esc(type || "MOVIMIENTO")} ${esc(row.part_number || "")}</strong><span>${esc(row.reference || row.movement_date || "")}</span></div><em>${type === "SALIDA" ? "-" : "+"}${num(row.quantity)}</em></div>`;
+      }).join("") || `<div class="muted">Sin movimientos registrados.</div>`);
+      const distTotal = categories.reduce((acc,[,bucket]) => acc + Number(bucket.qty || 0), 0) || 1;
+      $("warehouseDistribution").innerHTML = `
+        <div class="warehouse-donut"><div>${num(totalQty)}<br>Total</div></div>
+        <div class="warehouse-legend">
+          ${categories.slice(0,5).map(([cat,bucket],idx) => `<span><span><i class="c${idx+1}"></i>${esc(cat)}</span><b>${Math.round((Number(bucket.qty || 0) / distTotal) * 100)}%</b></span>`).join("") || `<span><span><i class="c1"></i>Sin datos</span><b>0%</b></span>`}
+        </div>`;
     }
     function activateTab(tabId){
       const button = document.querySelector(`.tabs button[data-tab="${tabId}"]`);
@@ -9493,14 +9647,25 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function renderInventory(){
       const search = ($("inventorySearch").value || "").toUpperCase();
       const rows = (data.inventory || []).filter(i => !search || [i.equipment,i.item_type,i.part_number,i.description,i.location].join(" ").toUpperCase().includes(search));
-      $("inventoryTable").innerHTML = `<thead><tr><th>Equipo</th><th>Tipo</th><th>No. parte</th><th>Descripcion</th><th>Exist.</th><th>Unidad</th><th>Min.</th><th>Ubicacion</th><th>Actualizado</th></tr></thead><tbody>` +
-        rows.map(i => `<tr><td>${esc(i.equipment || i.equipment_codes)}</td><td>${esc(i.item_type)}</td><td>${esc(i.part_number)}</td><td>${esc(i.description)}</td><td>${num(i.quantity)}</td><td>${esc(i.unit||"PZA")}</td><td>${num(i.min_stock)}</td><td>${esc(i.location)}</td><td>${esc(i.updated_at)}</td></tr>`).join("") +
+      if($("warehouseInventoryCount")) $("warehouseInventoryCount").textContent = `Mostrando ${rows.length.toLocaleString("es-MX")} de ${(data.inventory || []).length.toLocaleString("es-MX")} registro(s)`;
+      $("inventoryTable").innerHTML = `<thead><tr><th>Codigo</th><th>Categoria</th><th>No. parte</th><th>Descripcion</th><th>Aplicacion / equipo</th><th>Stock actual</th><th>Stock minimo</th><th>Ubicacion</th><th>Estatus</th><th>Actualizado</th></tr></thead><tbody>` +
+        rows.map(i => {
+          const qty = Number(i.quantity || 0);
+          const min = Number(i.min_stock || 0);
+          const state = qty <= 0 ? "SIN STOCK" : (min > 0 && qty <= min ? "BAJO" : "OK");
+          const cls = state === "OK" ? "ok" : (state === "SIN STOCK" ? "bad" : "warn");
+          return `<tr><td>${esc(i.part_key || i.part_number)}</td><td>${esc(warehouseCategory(i))}</td><td>${esc(i.part_number)}</td><td>${esc(i.description)}</td><td>${esc(i.equipment || i.equipment_codes)}</td><td><span class="pill ${cls}">${num(i.quantity)}</span></td><td>${num(i.min_stock)}</td><td>${esc(i.location)}</td><td><span class="pill ${cls}">${state}</span></td><td>${esc(String(i.updated_at || "").slice(0,10))}</td></tr>`;
+        }).join("") +
         `</tbody>`;
     }
     function renderMovements(){
       const rows = data.movements || [];
-      $("movementTable").innerHTML = `<thead><tr><th>Fecha</th><th>Parte</th><th>Tipo</th><th>Cant.</th><th>Saldo</th><th>Ref.</th></tr></thead><tbody>` +
-        rows.map(m => `<tr><td>${esc(m.movement_date)}</td><td>${esc(m.part_number)}</td><td>${esc(m.movement_type)}</td><td>${num(m.quantity)}</td><td>${num(m.balance_after)}</td><td>${esc(m.reference)}</td></tr>`).join("") +
+      $("movementTable").innerHTML = `<thead><tr><th>Fecha</th><th>Parte</th><th>Tipo</th><th>Cant.</th><th>Saldo</th><th>Equipo</th><th>Ref.</th></tr></thead><tbody>` +
+        rows.map(m => {
+          const type = String(m.movement_type || "").toUpperCase();
+          const cls = type === "SALIDA" ? "warn" : (type === "AJUSTE" ? "bad" : "ok");
+          return `<tr><td>${esc(m.movement_date)}</td><td>${esc(m.part_number)}</td><td><span class="pill ${cls}">${esc(m.movement_type)}</span></td><td>${num(m.quantity)}</td><td>${num(m.balance_after)}</td><td>${esc(m.equipment_code || "")}</td><td>${esc(m.reference)}</td></tr>`;
+        }).join("") +
         `</tbody>`;
     }
     function eppSelectedCode(){ return ($("eppCode").value || "").trim().toUpperCase(); }
@@ -13443,6 +13608,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderFilters();
       renderInventory();
       renderMovements();
+      renderWarehouseDashboard();
     }
     document.querySelectorAll(".tabs button").forEach(btn => btn.addEventListener("click", () => {
       activateTab(btn.dataset.tab);
@@ -13618,6 +13784,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $(id).addEventListener(eventName, () => { if(id==="equipmentSelect") renderServiceOptions(); renderFilters(); });
     });
     $("inventorySearch").addEventListener("input", renderInventory);
+    $("warehouseRefreshBtn").addEventListener("click", () => load().catch(showError));
+    document.querySelectorAll("[data-warehouse-action]").forEach(btn => btn.addEventListener("click", () => {
+      const action = btn.dataset.warehouseAction || "";
+      if(action === "REPORTE") return $("exportBtn").click();
+      if(action === "KARDEX") {
+        $("inventorySearch").focus();
+        $("movementTable").scrollIntoView({behavior:"smooth", block:"center"});
+        return;
+      }
+      $("movType").value = action;
+      $("movPart").focus();
+      $("movementBtn").scrollIntoView({behavior:"smooth", block:"center"});
+    }));
     $("refreshBtn").addEventListener("click", () => load().catch(showError));
     $("exportBtn").addEventListener("click", async () => {
       const r = await fetch("/api/filter-inventory/export", {headers: headers()});
@@ -13642,6 +13821,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("importResult").textContent = JSON.stringify(payload, null, 2);
       if(r.ok) await load();
     });
+    activateTab("inventario");
     load().catch(showError);
     setInterval(() => {
       if(document.visibilityState !== "visible") return;
