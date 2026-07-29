@@ -7212,7 +7212,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <p class="muted">Planes base por horometro para cargador, scoop y retroexcavadora. Se pueden ajustar cuando se tenga el manual OEM exacto.</p>
         <div class="panel toolbar">
           <label>Equipo<select id="woPlanEquipment"></select></label>
-          <label>Modelo<select id="woPlanModel"><option value="R1600G">Caterpillar R1600G</option><option value="R1600H">Caterpillar R1600H</option><option value="ST1030">Epiroc ST-1030</option><option value="CAT416">Retroexcavadora CAT 416</option><option value="DD311">SANDVIK DD311</option><option value="DD31340">SANDVIK DD313-40</option><option value="BOLTER99_JMC915">RESEMIN BOLTER 99 JMC-915</option><option value="BOLTER99_JMC1387">RESEMIN BOLTER 99 JMC-1387</option></select></label>
+          <label>Modelo<select id="woPlanModel"><option value="R1600G">Caterpillar R1600G</option><option value="R1600H">Caterpillar R1600H</option><option value="ST1030">Epiroc ST-1030</option><option value="CAT416">Retroexcavadora CAT 416</option><option value="DD311">SANDVIK DD311</option><option value="DD31340">SANDVIK DD313-40</option><option value="BOLTER99_JMC915">RESEMIN BOLTER 99 JMC-915</option><option value="BOLTER99_JMC1387">RESEMIN BOLTER 99 JMC-1387</option><option value="FREIGHTLINER_M2">Camion volteo Freightliner M2</option></select></label>
           <label>Intervalo<select id="woPlanInterval"><option value="TURNO">Inspeccion turno</option><option value="250H">250H</option><option value="500H">500H</option><option value="750H">750H</option><option value="1000H">1000H</option></select></label>
           <label>Sistema<select id="woPlanSystem"><option value="GENERAL">Plan completo</option><option value="MOTOR">Servicio motor</option><option value="HIDRAULICO">Servicio hidraulico</option></select></label>
           <button class="btn" id="woPlanLoadBtn">Cargar plan a OT</button>
@@ -8814,6 +8814,75 @@ WAREHOUSE_HTML = r"""<!doctype html>
     workOrderMaintenancePlans.DD31340 = {name:"SANDVIK DD313-40", priority:"ALTA", origin:"PREVENTIVO", note:"Plan base para jumbo perforador SANDVIK DD313-40. Validar contra manual OEM, numero de serie y configuracion real.", intervals: jumboWorkOrderIntervals};
     workOrderMaintenancePlans.BOLTER99_JMC915 = {name:"RESEMIN BOLTER 99 JMC-915", priority:"ALTA", origin:"PREVENTIVO", note:"Plan base para jumbo empernador RESEMIN BOLTER 99 JMC-915. Validar contra manual OEM y configuracion real.", intervals: jumboWorkOrderIntervals};
     workOrderMaintenancePlans.BOLTER99_JMC1387 = {name:"RESEMIN BOLTER 99 JMC-1387", priority:"ALTA", origin:"PREVENTIVO", note:"Plan base para jumbo empernador RESEMIN BOLTER 99 JMC-1387. Validar contra manual OEM y configuracion real.", intervals: jumboWorkOrderIntervals};
+    workOrderMaintenancePlans.FREIGHTLINER_M2 = {
+      name:"Camion volteo Freightliner M2",
+      priority:"MEDIA",
+      origin:"PREVENTIVO",
+      note:"Plan base para Freightliner Business Class M2 / camion volteo. Referencia: manual de mantenimiento Freightliner M2 con grupos M1-M5; validar contra VIN, motor, transmision, ejes y sistema de volteo instalado.",
+      intervals:{
+        TURNO:{
+          title:"Inspeccion turno Freightliner M2 volteo",
+          tasks:[
+            ["Seguridad","Revisar luces, claxon, alarma reversa, limpiaparabrisas, espejos, cinturon, extintor, triangulos y fugas visibles."],
+            ["Motor","Revisar nivel aceite, refrigerante, fugas, bandas, mangueras, radiador, ventilador y condicion de admision."],
+            ["Frenos / aire","Drenar tanques si aplica; verificar presion de aire, fugas audibles, freno estacionamiento y prueba de frenos."],
+            ["Direccion / suspension","Revisar terminales, barras, amortiguadores, muelles, bolsas, pernos, birlos, llantas y presion/condicion."],
+            ["Volteo / PTO","Revisar fugas hidraulicas, cilindro de volteo, mangueras, bomba/PTO, pasadores, seguros de caja y operacion sin carga."],
+            ["Cabina / tablero","Revisar indicadores, codigos/alertas, nivel combustible/DEF si aplica y condiciones de operacion."],
+          ],
+          parts:["ACEITE MOTOR 15W40 5 L","REFRIGERANTE 5 L","ACEITE HIDRAULICO VG100 5 L","GRASA EP2 1 KG"],
+        },
+        "250H":{
+          title:"Servicio 250H Freightliner M2 - M1 base",
+          tasks:[
+            ["Motor","Cambiar/revisar aceite y filtro segun motor instalado; revisar fugas, mangueras, abrazaderas, bandas, tensor y soportes."],
+            ["Combustible / aire","Cambiar/revisar filtros de combustible/separador de agua; revisar filtro de aire e indicador de restriccion."],
+            ["Lubricacion chasis","Lubricar crucetas, flechas, direccion, suspension, bisagras, pernos de caja y puntos de chasis segun carta de lubricacion."],
+            ["Frenos / aire","Inspeccionar camaras, lineas, valvulas, secador de aire, slack adjusters/ajustadores, desgaste de balatas y fugas."],
+            ["Direccion / suspension","Inspeccionar terminales, barra de direccion, muelles, amortiguadores, bujes, pernos U y montaje de ejes."],
+            ["Volteo hidraulico","Revisar nivel/condicion aceite hidraulico, respiradero, filtro, bomba/PTO, cilindro, mangueras y pasadores."],
+            ["Registro","Registrar horometro/kilometraje, codigos activos, refacciones aplicadas y condicion encontrada."],
+          ],
+          parts:["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO SEPARADOR AGUA 1 PZA","FILTRO AIRE 1 PZA","ACEITE MOTOR 15W40 28 L","GRASA EP2 3 KG"],
+        },
+        "500H":{
+          title:"Servicio 500H Freightliner M2 - M2 base",
+          tasks:[
+            ["Motor / enfriamiento","Revisar sistema de enfriamiento, tapa/radiador, ventilador, bandas, mangueras, fugas, soportes y codigos motor."],
+            ["Transmision","Revisar nivel/condicion de fluido, fugas, respiradero, montaje, enfriador y funcionamiento de cambios."],
+            ["Ejes / cardan","Revisar crucetas, yokes, flechas, diferenciales, niveles, respiraderos, retenes y fugas."],
+            ["Frenos / aire","Inspeccion completa de sistema de aire/frenos, secador, compresor, lineas, camaras, tambores/discos y ajuste."],
+            ["Electrico","Revisar baterias, alternador, motor de arranque, tierras, arneses, luces, fusibles y conectores."],
+            ["Volteo / PTO","Probar PTO, bomba, valvula, cilindro, limitador/seguro, bisagras y estabilidad de caja."],
+          ],
+          parts:["FILTRO TRANSMISION 1 PZA","FILTRO AIRE SECADOR 1 PZA","ACEITE TRANSMISION 12 L","ACEITE HIDRAULICO VG100 20 L","GRASA EP2 3 KG"],
+        },
+        "750H":{
+          title:"Servicio 750H Freightliner M2 - M3 base",
+          tasks:[
+            ["Motor","Repetir servicio motor/combustible/aire; revisar juego, soportes, fugas, codigos y parametros de operacion."],
+            ["Frenos / seguridad","Medir desgaste de frenos, revisar ajustadores, camaras, lineas, valvulas, freno estacionamiento y prueba de ruta controlada."],
+            ["Suspension / direccion","Revisar torque/condicion de pernos U, muelles, bujes, amortiguadores, terminales, caja direccion y alineacion visible."],
+            ["Ejes / ruedas","Revisar birlos, rines, rodamientos/mazas, sellos, diferenciales, respiraderos, niveles y fugas."],
+            ["Hidraulico volteo","Revisar filtro/aceite hidraulico, cilindro, bomba, PTO, valvula, mangueras, soportes, pasadores y puntos de engrase."],
+            ["Estructura","Inspeccionar chasis, soportes de caja, bisagras, soldaduras, subchasis y deformaciones por carga."],
+          ],
+          parts:["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE MOTOR 15W40 28 L","ACEITE HIDRAULICO VG100 20 L"],
+        },
+        "1000H":{
+          title:"Servicio 1000H Freightliner M2 - M4/M5 base",
+          tasks:[
+            ["Servicio mayor","Ejecutar inspeccion integral de motor, transmision, ejes, frenos/aire, suspension, direccion, electrico y sistema de volteo."],
+            ["Analisis fluidos","Tomar muestra o revisar condicion de aceite motor, transmision, diferenciales y aceite hidraulico de volteo."],
+            ["Transmision / ejes","Cambiar o revisar fluidos/filtros segun componente; revisar diferencial, respiraderos, retenes, cardanes y montaje."],
+            ["Frenos / aire","Servicio mayor de frenos, secador de aire, compresor, valvulas, camaras, lineas y prueba de fugas/recuperacion de presion."],
+            ["Volteo","Servicio mayor de PTO/bomba, cilindro, valvula, filtro, aceite, mangueras, pernos, seguros de caja y prueba de levante/descenso."],
+            ["Liberacion","Prueba de ruta y prueba de volteo controlada; documentar pendientes, evidencia y firma de supervisor/operacion."],
+          ],
+          parts:["KIT FILTROS MOTOR 1 JGO","FILTRO TRANSMISION 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE 85W140 20 L","ACEITE HIDRAULICO VG100 40 L","REFRIGERANTE 15 L"],
+        },
+      },
+    };
     function selectedWorkOrderPlan(){
       const model = $("woPlanModel")?.value || "R1600G";
       const interval = $("woPlanInterval")?.value || "TURNO";
@@ -8888,7 +8957,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function workOrderSystemMatches(system, ...values){
       const text = normalizedText(values.filter(Boolean).join(" "));
       if(system === "MOTOR") return /MOTOR|DIESEL|COMBUST|AIRE|ADMISION|ACEITE MOTOR|15W40|REFRIGERANTE|ENFRIAMIENTO|TURBO|BANDA/.test(text);
-      if(system === "HIDRAULICO") return /HIDRAUL|HCO|VG100|BOMBA|VALVULA|CILINDRO|MANGUERA|ACUMULADOR|RESPIRADERO|FUGA|IMPLEMENTO|BOOM|BUCKET|GRASA|LUBRIC/.test(text);
+      if(system === "HIDRAULICO") return /HIDRAUL|HCO|VG100|BOMBA|VALVULA|CILINDRO|MANGUERA|ACUMULADOR|RESPIRADERO|FUGA|IMPLEMENTO|BOOM|BUCKET|GRASA|LUBRIC|VOLTEO|PTO|CAJA/.test(text);
       return true;
     }
     function workOrderPlanTasks(step, system){
