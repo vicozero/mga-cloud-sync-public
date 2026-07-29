@@ -1856,6 +1856,7 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
         "preventives": [],
         "service_history": [],
         "preventive_execution": {"records": []},
+        "special_services": {"records": []},
         "work_orders": {"records": []},
         "captures": captures,
         "availability": [],
@@ -1885,6 +1886,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("preventives", [])
     payload.setdefault("service_history", [])
     payload.setdefault("preventive_execution", {"records": []})
+    payload.setdefault("special_services", {"records": []})
     payload.setdefault("work_orders", {"records": []})
     payload.setdefault("kpi_groups", [])
     payload.setdefault("kpi_reports", {})
@@ -3704,7 +3706,19 @@ def portal_date_in_range(value: Any, start: str, end: str) -> bool:
 
 def portal_equipment_rows(portal: dict[str, Any]) -> list[dict[str, Any]]:
     rows = portal.get("equipment") if isinstance(portal, dict) else []
-    return [row for row in rows if isinstance(row, dict) and (row.get("code") or row.get("equipment_code"))]
+    active_states = {"ACTIVO", "TALLER", "STAND BY", "DISPONIBLE", "OPERATIVA"}
+    inactive_states = {"BAJA", "INACTIVO", "INACTIVA", "VENDIDO", "VENDIDA", "FUERA DE FLOTA"}
+    clean_rows = []
+    for row in rows:
+        if not isinstance(row, dict) or not (row.get("code") or row.get("equipment_code")):
+            continue
+        state = normalize_text(row.get("status") or row.get("state") or row.get("equipment_status") or "ACTIVO")
+        if row.get("active") is False or row.get("kpi_enabled") is False or state in inactive_states:
+            continue
+        if state and state not in active_states and state in inactive_states:
+            continue
+        clean_rows.append(row)
+    return clean_rows
 
 
 def equipment_keys_py(value: Any) -> list[str]:
@@ -3841,9 +3855,13 @@ def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
     if not source or source.get("start") != start or source.get("end") != end:
         return None
 
+    active_codes = {str(eq.get("code") or eq.get("equipment_code") or "").strip().upper() for eq in portal_equipment_rows(portal)}
     rows: list[dict[str, Any]] = []
     for source_row in source.get("rows") if isinstance(source.get("rows"), list) else []:
         if not isinstance(source_row, dict):
+            continue
+        row_code = str(source_row.get("code") or source_row.get("equipment_code") or "").strip().upper()
+        if active_codes and row_code and row_code not in active_codes:
             continue
         period = parse_float(source_row.get("period") if "period" in source_row else source_row.get("period_hours"), 0)
         mp = parse_float(source_row.get("mp") if "mp" in source_row else source_row.get("mp_hours"), 0)
@@ -3875,6 +3893,28 @@ def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
             }
         )
 
+    totals = {"period": 0.0, "worked": 0.0, "mp": 0.0, "mc": 0.0, "stops": 0.0, "available": 0.0}
+    for row in rows:
+        totals["period"] += parse_float(row.get("period"), 0)
+        totals["worked"] += parse_float(row.get("worked"), 0)
+        totals["mp"] += parse_float(row.get("mp"), 0)
+        totals["mc"] += parse_float(row.get("mc"), 0)
+        totals["stops"] += parse_float(row.get("stops"), 0)
+        totals["available"] += parse_float(row.get("available"), 0)
+    source_totals = source.get("totals") if isinstance(source.get("totals"), dict) else {}
+    mission_hours = parse_float((portal.get("settings") if isinstance(portal.get("settings"), dict) else {}).get("reliability_mission_hours"), 12) or 12
+    totals["availability"] = (totals["available"] / totals["period"] * 100) if totals["period"] else 0
+    totals["utilization"] = (totals["worked"] / totals["available"] * 100) if totals["available"] else 0
+    totals["tmef"] = (totals["worked"] / totals["stops"]) if totals["stops"] and totals["worked"] else (totals["worked"] if not totals["stops"] else 0)
+    totals["tmpr"] = (totals["mc"] / totals["stops"]) if totals["stops"] else 0
+    totals["reliability"] = (
+        max(min(math.exp(-(mission_hours / totals["tmef"])) * 100, 100), 0)
+        if totals["tmef"] and mission_hours
+        else (100 if totals["worked"] and not totals["stops"] else 0)
+    )
+    for key, value in source_totals.items():
+        totals.setdefault(key, value)
+
     return {
         "group": source.get("group") or group,
         "start": start,
@@ -3882,7 +3922,7 @@ def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         "start_day": int(str(start)[-2:]) if start else 1,
         "end_day": int(str(end)[-2:]) if end else 31,
         "rows": rows,
-        "totals": source.get("totals") if isinstance(source.get("totals"), dict) else {},
+        "totals": totals,
         "source": "desktop-kpi-report",
     }
 
@@ -6813,12 +6853,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
     <nav class="tabs">
       <button class="active" data-tab="dashboard">Dashboard KPI</button>
       <button data-tab="fichaEquipo">Ficha equipo</button>
+      <button data-tab="catalogoEquipos">Modulo equipos</button>
       <button data-tab="mensual">Reporte mensual/semanal</button>
       <button data-tab="preventivos">PR Preventivos</button>
       <button data-tab="backlog">Backlog</button>
       <button data-tab="ordenesTrabajo">Ordenes trabajo</button>
       <button data-tab="servicios">Servicios realizados</button>
       <button data-tab="ejecucionPreventivos">Ejecucion preventivos</button>
+      <button data-tab="serviciosEspeciales">Servicios especiales</button>
       <button data-tab="bitacora">Bitacora</button>
       <button data-tab="captura">Captura diaria</button>
       <button data-tab="disponibilidad">Disponibilidad</button>
@@ -6932,6 +6974,48 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
       </div>
     </section>
+    <section id="catalogoEquipos" class="view">
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Modulo equipos</h3><span class="muted" id="eqCatalogStatus"></span></div>
+          <p class="muted">La baja no elimina historial. Solo deja el equipo inactivo para nuevas capturas y KPI actuales.</p>
+          <div class="capture-form-grid">
+            <input id="eqCatalogId" type="hidden">
+            <label>Codigo / economico<input id="eqCatalogCode" placeholder="Ej. JA-007"></label>
+            <label>Descripcion<input id="eqCatalogDesc" placeholder="Descripcion del equipo"></label>
+            <label>Tipo<select id="eqCatalogType"><option>JUMBO</option><option>CAMION</option><option>SCOOP</option><option>COMPRESOR</option><option>VEHICULO</option><option>MAQUINARIA</option><option>OTRO</option></select></label>
+            <label>Grupo KPI<select id="eqCatalogGroup"><option>Equipos de Barrenacion</option><option>Equipos de Rezagado</option><option>Acarreo</option><option>Equipo Utilitario</option><option>Compresores</option><option>Vehiculos</option><option>Otros</option></select></label>
+            <label>Marca<input id="eqCatalogBrand" placeholder="Marca"></label>
+            <label>Modelo<input id="eqCatalogModel" placeholder="Modelo"></label>
+            <label>Serie<input id="eqCatalogSerial" placeholder="Serie"></label>
+            <label>Horometro actual<input id="eqCatalogMeter" type="number" step="0.1" min="0" value="0"></label>
+            <label>Estatus<select id="eqCatalogState"><option>ACTIVO</option><option>TALLER</option><option>STAND BY</option><option>BAJA</option><option>VENDIDO</option><option>RENTADO</option></select></label>
+            <label>Fecha alta<input id="eqCatalogStart" type="date"></label>
+            <label>Fecha baja<input id="eqCatalogEnd" type="date"></label>
+            <label class="inline-check"><input id="eqCatalogKpi" type="checkbox" checked> Contabilizar en KPI</label>
+            <label class="wide">Componentes para captura<input id="eqCatalogComponents" placeholder="MOTOR, DIESEL, ELECT, COMPRESOR, PER"></label>
+            <label class="wide">Motivo baja / observaciones<textarea id="eqCatalogNotes" rows="3" placeholder="Motivo de baja, condicion o notas"></textarea></label>
+          </div>
+          <div class="req-actions capture-actions">
+            <button class="btn secondary" id="eqCatalogNewBtn">Nuevo equipo</button>
+            <button class="btn" id="eqCatalogSaveBtn">Guardar equipo</button>
+            <button class="btn secondary" id="eqCatalogLowBtn">Dar de baja</button>
+            <button class="btn secondary" id="eqCatalogReactivateBtn">Reactivar</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Resumen de flota</h3><span class="muted" id="eqCatalogSummaryText"></span></div>
+          <div class="exec-alert-grid" id="eqCatalogSummary"></div>
+        </div>
+      </div>
+      <div class="panel toolbar">
+        <label>Estado<select id="eqCatalogFilterState"><option value="">Todos</option><option>ACTIVO</option><option>TALLER</option><option>STAND BY</option><option>BAJA</option><option>VENDIDO</option><option>RENTADO</option></select></label>
+        <label>Tipo<select id="eqCatalogFilterType"><option value="">Todos</option><option>JUMBO</option><option>CAMION</option><option>SCOOP</option><option>COMPRESOR</option><option>VEHICULO</option><option>MAQUINARIA</option><option>OTRO</option></select></label>
+        <label>Buscar<input id="eqCatalogSearch" placeholder="Codigo, descripcion, marca, serie"></label>
+        <button class="btn" id="eqCatalogRefreshBtn">Actualizar</button>
+      </div>
+      <div class="table-wrap"><table id="eqCatalogTable"></table></div>
+    </section>
     <section id="mensual" class="view">
       <div class="panel toolbar">
         <label>Mes<select id="monthlyMonth">
@@ -6964,6 +7048,38 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
     </section>
     <section id="preventivos" class="view">
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Programar preventivo manual</h3><span class="muted" id="manualPrStatus"></span></div>
+          <div class="capture-form-grid">
+            <input id="manualPrId" type="hidden">
+            <label>Equipo<select id="manualPrEquipment"></select></label>
+            <label>Tipo servicio<select id="manualPrService"><option value="PM1">PM1 - 250H</option><option value="PM2">PM2 - 500H</option><option value="PM3">PM3 - 750H</option><option value="PM4">PM4 - 1000H</option></select></label>
+            <label>Componente / atributo<input id="manualPrComponent" value="GENERAL"></label>
+            <label>Fecha programada<input id="manualPrDate" type="date"></label>
+            <label>Horometro actual<input id="manualPrCurrent" type="number" step="0.1" min="0" value="0"></label>
+            <label>Ultimo servicio<input id="manualPrLast" type="number" step="0.1" min="0" value="0"></label>
+            <label>Proximo servicio<input id="manualPrNext" type="number" step="0.1" min="0" value="250"></label>
+            <label>Estatus<select id="manualPrState"><option>PROGRAMADO</option><option>PROXIMO</option><option>URGENTE</option><option>VENCIDO</option><option>CANCELADO</option></select></label>
+            <label class="wide">Notas<textarea id="manualPrNotes" rows="2" placeholder="Motivo de programacion manual"></textarea></label>
+          </div>
+          <div class="req-actions capture-actions">
+            <button class="btn secondary" id="manualPrNewBtn">Nuevo</button>
+            <button class="btn" id="manualPrSaveBtn">Guardar programacion</button>
+            <button class="btn danger" id="manualPrDeleteBtn">Eliminar manual</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Regla PM</h3><span class="muted">PM1 250H | PM2 500H | PM3 750H | PM4 1000H</span></div>
+          <p class="muted">La programacion manual aparece en la tabla de preventivos y se puede cerrar desde Ejecucion preventivos. Un cierre actualiza el siguiente ciclo.</p>
+          <div class="stats">
+            <div class="stat"><strong>250H</strong>PM1</div>
+            <div class="stat"><strong>500H</strong>PM2</div>
+            <div class="stat"><strong>750H</strong>PM3</div>
+            <div class="stat"><strong>1000H</strong>PM4</div>
+          </div>
+        </div>
+      </div>
       <div class="panel toolbar">
         <label>Periodo<select id="prPeriod"><option>Mes</option><option>Semana</option><option>Año</option></select></label>
         <label>Fecha base<input id="prBase" type="date"></label>
@@ -7108,6 +7224,48 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="subtle-title"><h3>Historial preventivo web</h3><span class="muted" id="prevExecClosedCount"></span></div>
       </div>
       <div class="table-wrap"><table id="prevExecClosedTable"></table></div>
+    </section>
+    <section id="serviciosEspeciales" class="view">
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Servicio a compresor / perforadora</h3><span class="muted" id="specialSrvStatus"></span></div>
+          <p class="muted">Los servicios abiertos quedan en seguimiento. Al cerrarlos se reflejan en Servicios realizados.</p>
+          <div class="capture-form-grid">
+            <input id="specialSrvId" type="hidden">
+            <label>Modulo<select id="specialSrvModule"><option value="COMPRESOR">Compresor</option><option value="PERFORADORA">Perforadora Jumbo</option></select></label>
+            <label>Fecha<input id="specialSrvDate" type="date"></label>
+            <label>Equipo<select id="specialSrvEquipment"></select></label>
+            <label>Componente<input id="specialSrvComponent" placeholder="Compresor / Perforadora izq. / der."></label>
+            <label>Supervisor<input id="specialSrvSupervisor" placeholder="Supervisor"></label>
+            <label>Mecanico<input id="specialSrvMechanic" placeholder="Mecanico"></label>
+            <label>Horometro equipo<input id="specialSrvMeter" type="number" step="0.1" min="0" value="0"></label>
+            <label>Hrs componente<input id="specialSrvComponentMeter" type="number" step="0.1" min="0" value="0"></label>
+            <label>Tipo servicio<select id="specialSrvType"><option>INSPECCION</option><option>PREVENTIVO</option><option>CORRECTIVO</option><option>LUBRICACION</option><option>CAMBIO COMPONENTE</option></select></label>
+            <label>Estatus<select id="specialSrvState"><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
+            <label class="wide">Refacciones usadas<textarea id="specialSrvParts" rows="2" placeholder="Refacciones usadas"></textarea></label>
+            <label class="wide">Lubricantes / fluidos<textarea id="specialSrvLubricants" rows="2" placeholder="Lubricantes o fluidos usados"></textarea></label>
+            <label class="wide">Checklist<textarea id="specialSrvChecklist" rows="3" placeholder="Compresor: filtros, separador, bandas, fugas, presion. Perforadora: shank, copas, mangueras, centralizador, fugas."></textarea></label>
+            <label class="wide">Observaciones<textarea id="specialSrvNotes" rows="3" placeholder="Trabajo realizado, falla, pendientes o evidencia"></textarea></label>
+          </div>
+          <div class="req-actions capture-actions">
+            <button class="btn secondary" id="specialSrvNewBtn">Nuevo</button>
+            <button class="btn" id="specialSrvSaveBtn">Guardar</button>
+            <button class="btn secondary" id="specialSrvCloseBtn">Cerrar servicio</button>
+            <button class="btn danger" id="specialSrvDeleteBtn">Eliminar</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Resumen especiales</h3><span class="muted" id="specialSrvSummaryText"></span></div>
+          <div class="exec-alert-grid" id="specialSrvSummary"></div>
+        </div>
+      </div>
+      <div class="panel toolbar">
+        <label>Modulo<select id="specialSrvFilterModule"><option value="">Todos</option><option value="COMPRESOR">Compresor</option><option value="PERFORADORA">Perforadora Jumbo</option></select></label>
+        <label>Estatus<select id="specialSrvFilterState"><option value="">Todos</option><option>ABIERTO</option><option>EN PROCESO</option><option>CERRADO</option><option>CANCELADO</option></select></label>
+        <label>Buscar<input id="specialSrvSearch" placeholder="Equipo, mecanico, refaccion, observacion"></label>
+        <button class="btn" id="specialSrvRefreshBtn">Actualizar</button>
+      </div>
+      <div class="table-wrap"><table id="specialSrvTable"></table></div>
     </section>
     <section id="bitacora" class="view">
       <div class="panel toolbar">
@@ -7590,7 +7748,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], service_history: [], preventive_execution: {records: []}, work_orders: {records: []}, parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], preventive_execution: {records: []}, special_services: {records: []}, work_orders: {records: []}, parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
     let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
@@ -7609,6 +7767,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     let currentCaptureRecord = null;
     let currentCaptureRows = [];
     let currentPreventiveExecutionRecord = null;
+    let currentEquipmentCatalogRecord = null;
+    let currentManualPreventiveRecord = null;
+    let currentSpecialServiceRecord = null;
     let currentWorkOrderRecord = null;
     let selectedKpiMetric = "availability";
     let monthlyPeriodInitialized = false;
@@ -7629,7 +7790,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       apiKey.value = "";
       localStorage.removeItem("mgaFilterApiKey");
       if(show){
-        alert("Para modificar inventario pega la clave real. Esta en MGA Mantenimiento > Red > API key cloud.");
+        alert("Para modificar datos pega la clave real. Esta en MGA Mantenimiento > Red > API key cloud.");
         apiKey.focus();
       }
       return false;
@@ -7649,6 +7810,22 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function num(v){ const n = Number(v || 0); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
     function one(v){ return `${Number(v || 0).toFixed(1)}`; }
     function pct(v){ return `${one(v)}%`; }
+    async function savePortalSnapshot(){
+      if(!hasApiKey()) return null;
+      const response = await fetch("/api/portal/snapshot", {method:"POST", headers:headers(true), body:JSON.stringify(portal)});
+      if(!response.ok) throw new Error(await apiError(response));
+      await load();
+      return response;
+    }
+    function nowIso(){ return new Date().toISOString().slice(0, 19); }
+    function recordId(prefix){ return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
+    function normalizeState(value){
+      return String(value || "ACTIVO").trim().toUpperCase();
+    }
+    function equipmentIsActive(eq){
+      const state = normalizeState(eq.status || eq.state || eq.equipment_status || "ACTIVO");
+      return !["BAJA","INACTIVO","INACTIVA","VENDIDO","VENDIDA","FUERA DE FLOTA"].includes(state) && eq.kpi_enabled !== false && eq.active !== false;
+    }
     function statusClass(s){ return s === "Disponible" ? "ok" : (s === "Faltante" ? "bad" : "warn"); }
     function shortText(v, limit=130){
       const text = String(v || "").replace(/\s+/g, " ").trim();
@@ -8972,9 +9149,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       select.innerHTML = `<option value="">${esc(allLabel)}</option>` + options.map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join("");
       if([...select.options].some(opt => opt.value === current)) select.value = current;
     }
-    function portalEquipment(){
+    function allPortalEquipment(){
       const rows = Array.isArray(portal.equipment) ? portal.equipment : [];
       return rows.filter(e => e && (e.code || e.equipment_code));
+    }
+    function portalEquipment(){
+      return allPortalEquipment().filter(equipmentIsActive);
     }
     function desktopKpiReport(group, start, end){
       const reports = portal.kpi_reports && typeof portal.kpi_reports === "object" ? portal.kpi_reports : {};
@@ -9063,6 +9243,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(!$("srvStart").value) $("srvStart").value = period.capture_start || period.start || today;
       if(!$("srvEnd").value) $("srvEnd").value = period.capture_end || period.end || today;
       if(!$("prevExecDate").value) $("prevExecDate").value = today;
+      if(!$("manualPrDate").value) $("manualPrDate").value = today;
+      if(!$("eqCatalogStart").value) $("eqCatalogStart").value = today;
+      if(!$("specialSrvDate").value) $("specialSrvDate").value = today;
       if(!$("woDate").value) $("woDate").value = today;
       if(!$("bitStart").value) $("bitStart").value = period.start || today;
       if(!$("bitEnd").value) $("bitEnd").value = period.end || today;
@@ -9086,8 +9269,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("fichaEquipment", equipmentOptions, "Selecciona");
       if(!$("fichaEquipment").value && equipmentOptions.length) $("fichaEquipment").value = equipmentOptions[0].value;
       setOptions("prEquipment", equipmentOptions, "Todos");
+      setOptions("manualPrEquipment", equipmentOptions, "Selecciona");
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("prevExecEquipment", equipmentOptions, "Selecciona");
+      setOptions("specialSrvEquipment", equipmentOptions, "Selecciona");
       setOptions("woEquipment", equipmentOptions, "Selecciona");
       setOptions("woFilterEquipment", equipmentOptions, "Todos");
       setOptions("bitEquipment", equipmentOptions, "Todos");
@@ -9102,6 +9287,126 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderReqEquipmentOptions();
       if(!$("tireTrackDate").value) $("tireTrackDate").value = today;
       setOptions("tireTrackEquipment", tireTrackEquipmentOptions(), "Sin equipo");
+    }
+    function equipmentCatalogPayload(){
+      const code = String($("eqCatalogCode").value || "").trim().toUpperCase();
+      if(!code) throw new Error("Captura el codigo/economico del equipo.");
+      const existing = allPortalEquipment().find(row => String(row.code || row.equipment_code || "").toUpperCase() === code) || {};
+      const components = String($("eqCatalogComponents").value || "")
+        .split(",")
+        .map(value => value.trim().toUpperCase())
+        .filter(Boolean)
+        .map(name => ({name}));
+      const state = normalizeState($("eqCatalogState").value || "ACTIVO");
+      return {
+        ...existing,
+        id: $("eqCatalogId").value || existing.id || code,
+        code,
+        equipment_code: code,
+        description: $("eqCatalogDesc").value.trim(),
+        family: $("eqCatalogGroup").value || existing.family || "",
+        type: $("eqCatalogType").value || existing.type || "",
+        brand: $("eqCatalogBrand").value.trim(),
+        model: $("eqCatalogModel").value.trim(),
+        serial: $("eqCatalogSerial").value.trim(),
+        current_meter: Number($("eqCatalogMeter").value || 0),
+        status: state,
+        active: !["BAJA","VENDIDO","VENDIDA","INACTIVO","INACTIVA"].includes(state),
+        kpi_enabled: Boolean($("eqCatalogKpi").checked),
+        start_date: $("eqCatalogStart").value || "",
+        end_date: $("eqCatalogEnd").value || "",
+        notes: $("eqCatalogNotes").value.trim(),
+        components,
+        updated_at: nowIso(),
+      };
+    }
+    function resetEquipmentCatalogForm(){
+      currentEquipmentCatalogRecord = null;
+      ["eqCatalogId","eqCatalogCode","eqCatalogDesc","eqCatalogBrand","eqCatalogModel","eqCatalogSerial","eqCatalogEnd","eqCatalogNotes"].forEach(id => { $(id).value = ""; });
+      $("eqCatalogType").value = "JUMBO";
+      $("eqCatalogGroup").value = "Equipos de Barrenacion";
+      $("eqCatalogMeter").value = "0";
+      $("eqCatalogState").value = "ACTIVO";
+      $("eqCatalogKpi").checked = true;
+      $("eqCatalogStart").value = toIsoDate(new Date());
+      $("eqCatalogComponents").value = "MOTOR, DIESEL, ELECT";
+      $("eqCatalogStatus").textContent = "";
+    }
+    function fillEquipmentCatalogForm(row){
+      currentEquipmentCatalogRecord = row || null;
+      const code = row.code || row.equipment_code || "";
+      $("eqCatalogId").value = row.id || code;
+      $("eqCatalogCode").value = code;
+      $("eqCatalogDesc").value = row.description || row.family || "";
+      $("eqCatalogType").value = row.type || "OTRO";
+      $("eqCatalogGroup").value = row.family || row.group || "Otros";
+      $("eqCatalogBrand").value = row.brand || "";
+      $("eqCatalogModel").value = row.model || "";
+      $("eqCatalogSerial").value = row.serial || "";
+      $("eqCatalogMeter").value = Number(row.current_meter || row.meter || 0);
+      $("eqCatalogState").value = normalizeState(row.status || "ACTIVO");
+      $("eqCatalogKpi").checked = row.kpi_enabled !== false && row.active !== false;
+      $("eqCatalogStart").value = row.start_date || "";
+      $("eqCatalogEnd").value = row.end_date || "";
+      $("eqCatalogNotes").value = row.notes || row.inactive_reason || "";
+      $("eqCatalogComponents").value = Array.isArray(row.components) ? row.components.map(item => item.name || item.component || item).filter(Boolean).join(", ") : "";
+      $("eqCatalogStatus").textContent = `Editando ${code}`;
+      document.querySelector('[data-tab="catalogoEquipos"]')?.click();
+    }
+    function renderEquipmentCatalog(){
+      const state = $("eqCatalogFilterState").value || "";
+      const type = $("eqCatalogFilterType").value || "";
+      const search = normalizedText($("eqCatalogSearch").value || "");
+      const rows = allPortalEquipment().filter(row => {
+        const rowState = normalizeState(row.status || "ACTIVO");
+        const rowType = normalizeState(row.type || "");
+        const text = normalizedText([row.code,row.equipment_code,row.description,row.family,row.type,row.brand,row.model,row.serial,row.notes].join(" "));
+        return (!state || rowState === state) && (!type || rowType === type) && (!search || text.includes(search));
+      }).sort((a,b) => String(a.code || a.equipment_code || "").localeCompare(String(b.code || b.equipment_code || "")));
+      const active = allPortalEquipment().filter(equipmentIsActive).length;
+      const inactive = allPortalEquipment().length - active;
+      const kpi = allPortalEquipment().filter(row => equipmentIsActive(row) && row.kpi_enabled !== false).length;
+      $("eqCatalogSummaryText").textContent = `${allPortalEquipment().length} equipo(s) registrados`;
+      $("eqCatalogSummary").innerHTML = [
+        ["Activos", active, "Contabilizan / disponibles"],
+        ["Baja", inactive, "No entran a KPI actual"],
+        ["KPI", kpi, "Incluidos en indicadores"],
+        ["Mostrados", rows.length, "Segun filtros"],
+      ].map(([label,value,note]) => `<article class="exec-card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`).join("");
+      $("eqCatalogTable").innerHTML = `<thead><tr><th>Estado</th><th>Codigo</th><th>Descripcion</th><th>Tipo</th><th>Grupo KPI</th><th>Marca</th><th>Modelo</th><th>Serie</th><th>Horometro</th><th>KPI</th><th>Alta</th><th>Baja</th><th>Notas</th></tr></thead><tbody>` +
+        rows.map(row => {
+          const stateText = normalizeState(row.status || "ACTIVO");
+          const cls = equipmentIsActive(row) ? "ok" : "bad";
+          return `<tr data-eq-catalog="${esc(row.code || row.equipment_code || "")}"><td><span class="pill ${cls}">${esc(stateText)}</span></td><td>${esc(row.code || row.equipment_code || "")}</td><td>${esc(row.description || "")}</td><td>${esc(row.type || "")}</td><td>${esc(row.family || row.group || "")}</td><td>${esc(row.brand || "")}</td><td>${esc(row.model || "")}</td><td>${esc(row.serial || "")}</td><td>${one(row.current_meter || row.meter || 0)}</td><td>${row.kpi_enabled === false ? "No" : "Si"}</td><td>${esc(row.start_date || "")}</td><td>${esc(row.end_date || "")}</td><td>${esc(shortText(row.notes || row.inactive_reason || "", 110))}</td></tr>`;
+        }).join("") + `</tbody>`;
+      document.querySelectorAll("[data-eq-catalog]").forEach(row => row.addEventListener("click", () => {
+        const code = row.dataset.eqCatalog || "";
+        const record = allPortalEquipment().find(item => String(item.code || item.equipment_code || "") === code);
+        if(record) fillEquipmentCatalogForm(record);
+      }));
+    }
+    async function saveEquipmentCatalog(){
+      if(!hasApiKey()) return;
+      const payload = equipmentCatalogPayload();
+      const rows = allPortalEquipment().filter(row => String(row.code || row.equipment_code || "").toUpperCase() !== payload.code);
+      rows.push(payload);
+      portal.equipment = rows;
+      await savePortalSnapshot();
+      $("eqCatalogStatus").textContent = "Equipo guardado.";
+    }
+    async function setEquipmentCatalogLow(active){
+      if(!currentEquipmentCatalogRecord && !$("eqCatalogCode").value) return alert("Selecciona un equipo.");
+      if(active){
+        $("eqCatalogState").value = "ACTIVO";
+        $("eqCatalogEnd").value = "";
+        $("eqCatalogKpi").checked = true;
+      } else {
+        if(!confirm("Dar de baja este equipo lo quitara de capturas nuevas y KPI actuales, pero conservara historial. Continuar?")) return;
+        $("eqCatalogState").value = "BAJA";
+        $("eqCatalogEnd").value = $("eqCatalogEnd").value || toIsoDate(new Date());
+        $("eqCatalogKpi").checked = false;
+      }
+      await saveEquipmentCatalog();
     }
     function calculateKpiRows(groupOverride=null, startOverride=null, endOverride=null){
       const group = groupOverride || $("kpiGroup").value || "Todos los equipos";
@@ -9954,6 +10259,88 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const checklist = row?.checklist || {};
       return preventiveChecklistInputs.filter(item => Boolean(checklist[item[1]])).length;
     }
+    function resetManualPreventiveForm(){
+      currentManualPreventiveRecord = null;
+      $("manualPrId").value = "";
+      if(!$("manualPrEquipment").value && $("manualPrEquipment").options.length > 1) $("manualPrEquipment").selectedIndex = 1;
+      $("manualPrService").value = "PM1";
+      $("manualPrComponent").value = "GENERAL";
+      $("manualPrDate").value = toIsoDate(new Date());
+      $("manualPrCurrent").value = "0";
+      $("manualPrLast").value = "0";
+      $("manualPrNext").value = "250";
+      $("manualPrState").value = "PROGRAMADO";
+      $("manualPrNotes").value = "";
+      $("manualPrStatus").textContent = "";
+    }
+    function manualPreventivePayload(){
+      const code = $("manualPrEquipment").value || "";
+      if(!code) throw new Error("Selecciona un equipo para programar.");
+      const service = $("manualPrService").value || "PM1";
+      const hours = preventiveServiceHours[service] || 250;
+      const equipment = allPortalEquipment().find(item => String(item.code || item.equipment_code || "") === code) || {};
+      const current = Number($("manualPrCurrent").value || 0);
+      const next = Number($("manualPrNext").value || 0) || (Number($("manualPrLast").value || 0) + hours);
+      return {
+        id: $("manualPrId").value || recordId("pr-manual"),
+        source: "manual_web",
+        equipment_code: code,
+        equipment_description: equipment.description || equipment.family || "",
+        component: $("manualPrComponent").value.trim().toUpperCase() || "GENERAL",
+        meter_type: "HOROMETRO",
+        current_meter: current,
+        last_service_meter: Number($("manualPrLast").value || 0),
+        next_service_meter: next,
+        hours_remaining: next - current,
+        projected_date: $("manualPrDate").value || toIsoDate(new Date()),
+        status: $("manualPrState").value || "PROGRAMADO",
+        service_name: service,
+        service_interval: `${hours}H`,
+        manual_service_type: service,
+        notes: $("manualPrNotes").value.trim(),
+        updated_at: nowIso(),
+      };
+    }
+    function fillManualPreventiveForm(row){
+      currentManualPreventiveRecord = row || null;
+      $("manualPrId").value = row.id || "";
+      $("manualPrEquipment").value = row.equipment_code || "";
+      $("manualPrService").value = row.manual_service_type || row.service_name || serviceTypeFromInterval(row.service_interval) || "PM1";
+      $("manualPrComponent").value = row.component || "GENERAL";
+      $("manualPrDate").value = row.projected_date || toIsoDate(new Date());
+      $("manualPrCurrent").value = Number(row.current_meter || 0);
+      $("manualPrLast").value = Number(row.last_service_meter || 0);
+      $("manualPrNext").value = Number(row.next_service_meter || 0);
+      $("manualPrState").value = row.status || "PROGRAMADO";
+      $("manualPrNotes").value = row.notes || "";
+      $("manualPrStatus").textContent = `Editando ${row.id || ""}`;
+      document.querySelector('[data-tab="preventivos"]')?.click();
+    }
+    function serviceTypeFromInterval(value){
+      const hours = preventiveIntervalHours(value);
+      return Object.entries(preventiveServiceHours).find(([, h]) => h === hours)?.[0] || "";
+    }
+    async function saveManualPreventive(){
+      if(!hasApiKey()) return;
+      const payload = manualPreventivePayload();
+      const rows = Array.isArray(portal.preventives) ? portal.preventives.filter(row => String(row.id || "") !== String(payload.id || "")) : [];
+      rows.push(payload);
+      portal.preventives = rows;
+      await savePortalSnapshot();
+      $("manualPrStatus").textContent = "Preventivo manual guardado.";
+    }
+    async function deleteManualPreventive(){
+      if(!hasApiKey()) return;
+      const id = $("manualPrId").value || (currentManualPreventiveRecord || {}).id || "";
+      if(!id) return alert("Selecciona una programacion manual.");
+      const record = (portal.preventives || []).find(row => String(row.id || "") === String(id));
+      if(record && record.source !== "manual_web") return alert("Solo se pueden eliminar desde aqui los preventivos programados manualmente en la web.");
+      if(!confirm("Eliminar esta programacion manual?")) return;
+      portal.preventives = (portal.preventives || []).filter(row => String(row.id || "") !== String(id));
+      await savePortalSnapshot();
+      resetManualPreventiveForm();
+      $("manualPrStatus").textContent = "Programacion manual eliminada.";
+    }
     function filteredPreventives(){
       const [start, end] = periodRange($("prPeriod").value, $("prBase").value);
       const selected = $("prEquipment").value;
@@ -9984,9 +10371,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
           return `<div class="schedule-cell"><strong>${esc(day.slice(8,10))}</strong><em>${esc(day.slice(5,7))}</em>${chips}</div>`;
         }).join("");
       }
-      $("prTable").innerHTML = `<thead><tr><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
-        result.rows.map(row => `<tr><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(row.projected_date || "")}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
+      $("prTable").innerHTML = `<thead><tr><th>Origen</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
+        result.rows.map(row => `<tr data-pr-id="${esc(row.id || "")}" class="${row.source === "manual_web" ? "manual-row" : ""}"><td>${row.source === "manual_web" ? "Manual" : "Auto"}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(row.projected_date || "")}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
         `</tbody>`;
+      document.querySelectorAll("[data-pr-id]").forEach(tr => tr.addEventListener("click", () => {
+        const id = tr.dataset.prId || "";
+        const record = result.rows.find(row => String(row.id || "") === String(id));
+        if(record && record.source === "manual_web") fillManualPreventiveForm(record);
+      }));
     }
     function calculateBacklogRows(start, end){
       const rows = [];
@@ -10295,6 +10687,149 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderExecutiveBoard();
       resetPreventiveExecutionForm();
       $("prevExecStatus").textContent = "Servicio eliminado.";
+    }
+    function specialServiceRows(){
+      const payload = portal.special_services || {};
+      return Array.isArray(payload.records) ? payload.records : [];
+    }
+    function specialServiceClosed(row){
+      return preventiveClosedStates.has(String(row.status || "").toUpperCase());
+    }
+    function resetSpecialServiceForm(){
+      currentSpecialServiceRecord = null;
+      $("specialSrvId").value = "";
+      $("specialSrvModule").value = "COMPRESOR";
+      $("specialSrvDate").value = toIsoDate(new Date());
+      if(!$("specialSrvEquipment").value && $("specialSrvEquipment").options.length > 1) $("specialSrvEquipment").selectedIndex = 1;
+      ["specialSrvComponent","specialSrvSupervisor","specialSrvMechanic","specialSrvParts","specialSrvLubricants","specialSrvChecklist","specialSrvNotes"].forEach(id => { $(id).value = ""; });
+      $("specialSrvMeter").value = "0";
+      $("specialSrvComponentMeter").value = "0";
+      $("specialSrvType").value = "INSPECCION";
+      $("specialSrvState").value = "ABIERTO";
+      $("specialSrvStatus").textContent = "";
+    }
+    function specialServicePayload(){
+      const code = $("specialSrvEquipment").value || "";
+      if(!code) throw new Error("Selecciona un equipo.");
+      const equipment = allPortalEquipment().find(item => String(item.code || item.equipment_code || "") === code) || {};
+      return {
+        id: $("specialSrvId").value || recordId("srv-esp"),
+        module: $("specialSrvModule").value || "COMPRESOR",
+        service_date: $("specialSrvDate").value || toIsoDate(new Date()),
+        equipment_code: code,
+        equipment_description: equipment.description || equipment.family || "",
+        component: $("specialSrvComponent").value.trim().toUpperCase(),
+        supervisor: $("specialSrvSupervisor").value.trim(),
+        mechanic: $("specialSrvMechanic").value.trim(),
+        completed_meter: Number($("specialSrvMeter").value || 0),
+        component_meter: Number($("specialSrvComponentMeter").value || 0),
+        service_type: $("specialSrvType").value || "INSPECCION",
+        status: $("specialSrvState").value || "ABIERTO",
+        parts_used: $("specialSrvParts").value.trim(),
+        lubricants_used: $("specialSrvLubricants").value.trim(),
+        checklist: $("specialSrvChecklist").value.trim(),
+        notes: $("specialSrvNotes").value.trim(),
+        updated_at: nowIso(),
+      };
+    }
+    function specialServiceHistoryRecord(row){
+      return {
+        id: `special-${row.id}`,
+        completed_date: row.close_date || row.service_date || "",
+        service_date: row.service_date || "",
+        service_type: row.module === "PERFORADORA" ? "Perforadora Jumbo" : "Compresor",
+        stage: row.service_type || "CERRADO",
+        equipment_code: row.equipment_code || "",
+        equipment_description: row.equipment_description || "",
+        component: row.component || row.module || "",
+        service_name: row.service_type || "",
+        service_interval: row.module || "",
+        scheduled_meter: "",
+        completed_meter: row.completed_meter || 0,
+        due_date: row.service_date || "",
+        status: "A TIEMPO",
+        order_number: "",
+        document_name: "Servicio especial web",
+        filters_used: row.parts_used || "",
+        oils_used: row.lubricants_used || "",
+        notes: [row.checklist, row.notes, row.mechanic ? `Mecanico: ${row.mechanic}` : "", row.supervisor ? `Supervisor: ${row.supervisor}` : ""].filter(Boolean).join(" | "),
+        source: "special_services_web",
+        source_id: row.id,
+      };
+    }
+    function syncSpecialServicesToHistory(){
+      const history = (Array.isArray(portal.service_history) ? portal.service_history : []).filter(row => String(row.source || "") !== "special_services_web");
+      const additions = specialServiceRows().filter(specialServiceClosed).map(specialServiceHistoryRecord);
+      portal.service_history = additions.concat(history);
+    }
+    function fillSpecialServiceForm(row){
+      currentSpecialServiceRecord = row || null;
+      $("specialSrvId").value = row.id || "";
+      $("specialSrvModule").value = row.module || "COMPRESOR";
+      $("specialSrvDate").value = row.service_date || row.close_date || toIsoDate(new Date());
+      $("specialSrvEquipment").value = row.equipment_code || "";
+      $("specialSrvComponent").value = row.component || "";
+      $("specialSrvSupervisor").value = row.supervisor || "";
+      $("specialSrvMechanic").value = row.mechanic || "";
+      $("specialSrvMeter").value = Number(row.completed_meter || 0);
+      $("specialSrvComponentMeter").value = Number(row.component_meter || 0);
+      $("specialSrvType").value = row.service_type || "INSPECCION";
+      $("specialSrvState").value = row.status || "ABIERTO";
+      $("specialSrvParts").value = row.parts_used || "";
+      $("specialSrvLubricants").value = row.lubricants_used || "";
+      $("specialSrvChecklist").value = row.checklist || "";
+      $("specialSrvNotes").value = row.notes || "";
+      $("specialSrvStatus").textContent = `Editando ${row.id || ""}`;
+      document.querySelector('[data-tab="serviciosEspeciales"]')?.click();
+    }
+    function renderSpecialServices(){
+      const module = $("specialSrvFilterModule").value || "";
+      const state = $("specialSrvFilterState").value || "";
+      const search = normalizedText($("specialSrvSearch").value || "");
+      const rows = specialServiceRows().filter(row => {
+        const text = normalizedText([row.module,row.status,row.equipment_code,row.equipment_description,row.component,row.supervisor,row.mechanic,row.service_type,row.parts_used,row.lubricants_used,row.checklist,row.notes].join(" "));
+        return (!module || row.module === module) && (!state || row.status === state) && (!search || text.includes(search));
+      }).sort((a,b) => String(b.service_date || "").localeCompare(String(a.service_date || "")) || String(a.equipment_code || "").localeCompare(String(b.equipment_code || "")));
+      const open = specialServiceRows().filter(row => !specialServiceClosed(row) && String(row.status || "").toUpperCase() !== "CANCELADO").length;
+      const closed = specialServiceRows().filter(specialServiceClosed).length;
+      $("specialSrvSummaryText").textContent = `${specialServiceRows().length} servicio(s) especiales`;
+      $("specialSrvSummary").innerHTML = [
+        ["Abiertos", open, "Pendientes de cierre"],
+        ["Cerrados", closed, "En servicios realizados"],
+        ["Compresor", specialServiceRows().filter(row => row.module === "COMPRESOR").length, "Servicios compresor"],
+        ["Perforadora", specialServiceRows().filter(row => row.module === "PERFORADORA").length, "Servicios jumbo"],
+      ].map(([label,value,note]) => `<article class="exec-card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`).join("");
+      $("specialSrvTable").innerHTML = `<thead><tr><th>Fecha</th><th>Modulo</th><th>Equipo</th><th>Componente</th><th>Tipo</th><th>Horometro</th><th>Hrs comp.</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Refacciones</th><th>Lubricantes</th><th>Notas</th></tr></thead><tbody>` +
+        rows.map(row => `<tr data-special-srv="${esc(row.id || "")}"><td>${esc(row.service_date || "")}</td><td>${esc(row.module || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.service_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${one(row.component_meter || 0)}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill ${specialServiceClosed(row) ? "ok" : "warn"}">${esc(row.status || "")}</span></td><td>${esc(shortText(row.parts_used || "", 90))}</td><td>${esc(shortText(row.lubricants_used || "", 90))}</td><td>${esc(shortText(row.notes || row.checklist || "", 120))}</td></tr>`).join("") + `</tbody>`;
+      document.querySelectorAll("[data-special-srv]").forEach(row => row.addEventListener("click", () => {
+        const record = specialServiceRows().find(item => String(item.id || "") === String(row.dataset.specialSrv || ""));
+        if(record) fillSpecialServiceForm(record);
+      }));
+    }
+    async function saveSpecialService(close=false){
+      if(!hasApiKey()) return;
+      const payload = specialServicePayload();
+      if(close){
+        payload.status = "CERRADO";
+        payload.close_date = payload.service_date || toIsoDate(new Date());
+      }
+      const rows = specialServiceRows().filter(row => String(row.id || "") !== String(payload.id || ""));
+      rows.push(payload);
+      portal.special_services = {records: rows};
+      syncSpecialServicesToHistory();
+      await savePortalSnapshot();
+      $("specialSrvStatus").textContent = close ? "Servicio cerrado y enviado a Servicios realizados." : "Servicio guardado.";
+    }
+    async function deleteSpecialService(){
+      if(!hasApiKey()) return;
+      const id = $("specialSrvId").value || (currentSpecialServiceRecord || {}).id || "";
+      if(!id) return alert("Selecciona un servicio especial.");
+      if(!confirm("Eliminar este servicio especial? Si estaba cerrado se quitara de Servicios realizados.")) return;
+      portal.special_services = {records: specialServiceRows().filter(row => String(row.id || "") !== String(id))};
+      syncSpecialServicesToHistory();
+      await savePortalSnapshot();
+      resetSpecialServiceForm();
+      $("specialSrvStatus").textContent = "Servicio eliminado.";
     }
     function renderSpareParts(){
       const payload = portal.parts_manuals || {rows: [], summary: {}};
@@ -11674,6 +12209,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderStats();
       renderSelectors();
       renderPortalSelectors();
+      renderEquipmentCatalog();
       renderExecutiveBoard();
       renderEquipmentProfile();
       renderDashboard();
@@ -11682,6 +12218,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderWorkOrders();
       renderServiceHistory();
       renderPreventiveExecution();
+      renderSpecialServices();
       renderAudit();
       renderBitacora();
       renderCaptureRecent();
@@ -11715,6 +12252,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(code) $("prevExecEquipment").value = code;
       activateTab("ejecucionPreventivos");
     });
+    ["eqCatalogFilterState","eqCatalogFilterType"].forEach(id => $(id).addEventListener("change", renderEquipmentCatalog));
+    $("eqCatalogSearch").addEventListener("input", renderEquipmentCatalog);
+    $("eqCatalogRefreshBtn").addEventListener("click", renderEquipmentCatalog);
+    $("eqCatalogNewBtn").addEventListener("click", resetEquipmentCatalogForm);
+    $("eqCatalogSaveBtn").addEventListener("click", () => saveEquipmentCatalog().catch(showError));
+    $("eqCatalogLowBtn").addEventListener("click", () => setEquipmentCatalogLow(false).catch(showError));
+    $("eqCatalogReactivateBtn").addEventListener("click", () => setEquipmentCatalogLow(true).catch(showError));
     ["kpiSimEnabled","kpiSimName","kpiSimMetaAvailability","kpiSimMetaUtilization","kpiSimMetaReliability","kpiSimMetaTmef","kpiSimMetaTmpr","kpiSimPeriod","kpiSimWorked","kpiSimMp","kpiSimMc","kpiSimStops","kpiSimMission"].forEach(id => {
       const el = $(id);
       if(!el) return;
@@ -11735,6 +12279,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
+    $("manualPrService").addEventListener("change", () => {
+      const hours = preventiveServiceHours[$("manualPrService").value] || 250;
+      const last = Number($("manualPrLast").value || 0);
+      $("manualPrNext").value = String(last + hours);
+    });
+    $("manualPrLast").addEventListener("input", () => {
+      const hours = preventiveServiceHours[$("manualPrService").value] || 250;
+      $("manualPrNext").value = String(Number($("manualPrLast").value || 0) + hours);
+    });
+    $("manualPrNewBtn").addEventListener("click", resetManualPreventiveForm);
+    $("manualPrSaveBtn").addEventListener("click", () => saveManualPreventive().catch(showError));
+    $("manualPrDeleteBtn").addEventListener("click", () => deleteManualPreventive().catch(showError));
     ["backlogStart","backlogEnd","backlogLevel","backlogSource","backlogStatus"].forEach(id => $(id).addEventListener("change", renderBacklog));
     $("backlogSearch").addEventListener("input", renderBacklog);
     $("renderBacklogBtn").addEventListener("click", renderBacklog);
@@ -11754,6 +12310,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("prevExecDeleteBtn").addEventListener("click", () => deletePreventiveExecution().catch(showError));
     $("prevExecViewHistoryBtn").addEventListener("click", () => document.querySelector('[data-tab="servicios"]')?.click());
     preventiveOilInputs.forEach(item => $(item[0]).addEventListener("input", updatePreventiveOilTotal));
+    ["specialSrvFilterModule","specialSrvFilterState"].forEach(id => $(id).addEventListener("change", renderSpecialServices));
+    $("specialSrvSearch").addEventListener("input", renderSpecialServices);
+    $("specialSrvRefreshBtn").addEventListener("click", renderSpecialServices);
+    $("specialSrvNewBtn").addEventListener("click", resetSpecialServiceForm);
+    $("specialSrvSaveBtn").addEventListener("click", () => saveSpecialService(false).catch(showError));
+    $("specialSrvCloseBtn").addEventListener("click", () => saveSpecialService(true).catch(showError));
+    $("specialSrvDeleteBtn").addEventListener("click", () => deleteSpecialService().catch(showError));
     ["spareEquipment","spareStatus"].forEach(id => $(id).addEventListener("change", renderSpareParts));
     $("spareSearch").addEventListener("input", renderSpareParts);
     $("renderSpareBtn").addEventListener("click", renderSpareParts);
@@ -12634,6 +13197,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             payload["service_history"] = previous_payload["service_history"]
         if "preventive_execution" not in payload and isinstance(previous_payload.get("preventive_execution"), dict):
             payload["preventive_execution"] = previous_payload["preventive_execution"]
+        if "special_services" not in payload and isinstance(previous_payload.get("special_services"), dict):
+            payload["special_services"] = previous_payload["special_services"]
         if "work_orders" not in payload and isinstance(previous_payload.get("work_orders"), dict):
             payload["work_orders"] = previous_payload["work_orders"]
         if "parts_manuals" not in payload and isinstance(previous_payload.get("parts_manuals"), dict):
@@ -12658,6 +13223,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "preventives": len(preventives),
         "service_history": len(payload.get("service_history") or []) if isinstance(payload.get("service_history"), list) else 0,
         "preventive_execution": len((payload.get("preventive_execution") or {}).get("records") or []) if isinstance(payload.get("preventive_execution"), dict) else 0,
+        "special_services": len((payload.get("special_services") or {}).get("records") or []) if isinstance(payload.get("special_services"), dict) else 0,
         "work_orders": len((payload.get("work_orders") or {}).get("records") or []) if isinstance(payload.get("work_orders"), dict) else 0,
         "parts_manuals": len((payload.get("parts_manuals") or {}).get("rows") or []) if isinstance(payload.get("parts_manuals"), dict) else 0,
         "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
