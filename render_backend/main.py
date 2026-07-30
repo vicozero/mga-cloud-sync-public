@@ -486,6 +486,7 @@ REQUISITION_TRACKING_TEMPLATE_PATH = STATIC_DIR / "requisition_tracking_template
 DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
 DIESEL_LOGO_PATH = STATIC_DIR / "mga-corner-logo.jfif"
 MONTHLY_REPORT_TEMPLATE_PATH = STATIC_DIR / "monthly_report_template.pptx"
+OIL_CONSUMPTION_TEMPLATE_PATH = STATIC_DIR / "consumos_aceites_template.xlsx"
 KPI_FORMAT_PDFS = {
     "barrenacion": STATIC_DIR / "kpi_barrenacion_format.pdf",
     "rezagado": STATIC_DIR / "kpi_rezagado_format.pdf",
@@ -4436,6 +4437,200 @@ def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -
     }
 
 
+def oil_consumption_sheet_name(code: Any) -> str:
+    raw = re.sub(r"[^A-Z0-9]", "", normalized_ascii(code))
+    raw = re.sub(r"([A-Z]+)0+(\d)", r"\1\2", raw)
+    return (raw or "EQUIPO")[:31]
+
+
+def oil_consumption_date_label(day: date) -> str:
+    prefix = f"{day.day:02d}" if day.day == 1 else str(day.day)
+    return f"{prefix} DE {MONTH_NAMES_ES_FULL[day.month - 1].upper()} DEL {day.year}"
+
+
+def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) -> BytesIO:
+    start_date = parse_report_date(start, "start")
+    end_date = parse_report_date(end, "end")
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="La fecha final no puede ser menor que la fecha inicial.")
+    if start_date.year != end_date.year or start_date.month != end_date.month:
+        raise HTTPException(status_code=400, detail="El formato de consumos de aceites solo soporta un mes por archivo.")
+
+    if OIL_CONSUMPTION_TEMPLATE_PATH.exists():
+        wb = load_workbook(OIL_CONSUMPTION_TEMPLATE_PATH, data_only=False)
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "EQUIPO"
+        ws.merge_cells("A1:I5")
+        ws["A1"] = "                                    MGA CONTRATISTA MIINERA S.A DE C.V. "
+        ws["J1"] = "Fecha:"
+        ws["J2"] = "Elaboró:"
+        ws["J3"] = "Revisó:"
+        ws["J4"] = "Autorizo:"
+        ws["K2"] = "Programador"
+        ws["K3"] = "Coordinador de Mtto"
+        ws["K4"] = "Gerente de Mtto"
+        ws["A6"] = "CONSUMOS DE ACEITES "
+        ws["A8"] = "Dia"
+        ws["B8"] = "FECHA"
+        ws["C8"] = "Tipo de Aceite"
+        for idx, label in enumerate(["Hidraulico", "Trasmision", "Diferencial", "Motor", "Almo", "Anticongelante"], start=3):
+            ws.cell(9, idx, label)
+        ws["I8"] = "Comentarios"
+        wb.create_sheet("Totales")
+
+    if "Totales" not in wb.sheetnames:
+        wb.create_sheet("Totales")
+
+    equipment = portal_equipment_rows(portal)
+    equipment_by_key: dict[str, dict[str, Any]] = {}
+    active_codes: list[str] = []
+    for eq in equipment:
+        code = str(eq.get("code") or eq.get("equipment_code") or "").strip()
+        if not code:
+            continue
+        active_codes.append(code)
+        for key in equipment_keys_py(code):
+            equipment_by_key[key] = eq
+
+    daily: dict[str, dict[int, dict[str, Any]]] = {}
+    captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
+    for capture in captures:
+        if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
+            continue
+        code = str(capture.get("equipment_code") or capture.get("code") or capture.get("equipment") or "").strip()
+        if not code:
+            continue
+        work_date = str(capture.get("work_date") or "")[:10]
+        try:
+            day_number = date.fromisoformat(work_date).day
+        except ValueError:
+            continue
+        oil_sae50 = parse_float(capture.get("oil_sae50"), 0)
+        oil_liters = parse_float(capture.get("oil_liters"), 0)
+        mapped_values = {
+            "hydraulic": parse_float(capture.get("oil_hco_iso68"), 0) + parse_float(capture.get("oil_hyd_vg100"), 0),
+            "transmission": parse_float(capture.get("oil_trans_sae30"), 0) + parse_float(capture.get("atf_liters"), 0),
+            "differential": parse_float(capture.get("oil_85w140"), 0),
+            "motor": parse_float(capture.get("oil_motor_15w40"), 0),
+            "almo": parse_float(capture.get("almo_liters"), 0),
+            "coolant": parse_float(capture.get("coolant_liters"), 0),
+        }
+        if not any(mapped_values.values()) and not oil_sae50 and not oil_liters and not str(capture.get("observations") or "").strip():
+            continue
+        record = daily.setdefault(code, {}).setdefault(
+            day_number,
+            {"hydraulic": 0.0, "transmission": 0.0, "differential": 0.0, "motor": 0.0, "almo": 0.0, "coolant": 0.0, "comments": []},
+        )
+        for key, value in mapped_values.items():
+            record[key] = parse_float(record.get(key), 0) + value
+        extra: list[str] = []
+        if oil_sae50:
+            extra.append(f"SAE 50: {oil_sae50:g} L")
+        classified = sum(mapped_values.values()) + oil_sae50
+        if oil_liters - classified > 0.01:
+            extra.append(f"Aceite sin clasificar: {oil_liters - classified:g} L")
+        obs = str(capture.get("observations") or "").strip()
+        component = str(capture.get("component") or "").strip()
+        if extra or obs:
+            detail = " / ".join(item for item in [component, "; ".join(extra), obs] if item)
+            if detail:
+                record["comments"].append(detail)
+
+    template_sheets = [name for name in wb.sheetnames if name != "Totales"]
+    first_template = wb[template_sheets[0]] if template_sheets else None
+    sheet_by_key: dict[str, str] = {}
+    for sheet_name in template_sheets:
+        for key in equipment_keys_py(sheet_name):
+            sheet_by_key[key] = sheet_name
+    for code in active_codes:
+        if any(key in sheet_by_key for key in equipment_keys_py(code)):
+            continue
+        base_name = oil_consumption_sheet_name(code)
+        candidate = base_name
+        suffix = 1
+        while candidate in wb.sheetnames:
+            suffix += 1
+            candidate = f"{base_name[:28]}{suffix}"
+        if first_template is not None:
+            ws_new = wb.copy_worksheet(first_template)
+            ws_new.title = candidate
+        else:
+            ws_new = wb.create_sheet(candidate)
+        for key in equipment_keys_py(code):
+            sheet_by_key[key] = candidate
+
+    month_start, month_end = month_bounds(start_date.year, start_date.month)
+    month_last_day = parse_report_date(month_end, "end").day
+    title = f"CONSUMOS DE ACEITES {MONTH_NAMES_ES_FULL[start_date.month - 1].upper()} {start_date.day:02d}-{end_date.day:02d}"
+    for sheet_name in [name for name in wb.sheetnames if name != "Totales"]:
+        ws = wb[sheet_name]
+        ws["A6"] = title
+        ws["K1"] = end_date
+        for day_number in range(1, 32):
+            row_idx = 9 + day_number
+            if day_number <= month_last_day:
+                current = date(start_date.year, start_date.month, day_number)
+                ws.cell(row_idx, 1, str(day_number))
+                ws.cell(row_idx, 2, oil_consumption_date_label(current))
+            else:
+                ws.cell(row_idx, 1, None)
+                ws.cell(row_idx, 2, None)
+            for col_idx in range(3, 9):
+                ws.cell(row_idx, col_idx, None)
+            ws.cell(row_idx, 9, None)
+        for col_letter in "CDEFGH":
+            ws[f"{col_letter}41"] = f"=SUM({col_letter}10:{col_letter}40)"
+
+    for code, rows_by_day in daily.items():
+        target_sheet = next((sheet_by_key[key] for key in equipment_keys_py(code) if key in sheet_by_key), "")
+        if not target_sheet:
+            continue
+        ws = wb[target_sheet]
+        for day_number, record in rows_by_day.items():
+            if day_number < start_date.day or day_number > end_date.day:
+                continue
+            row_idx = 9 + day_number
+            for key, col_idx in [("hydraulic", 3), ("transmission", 4), ("differential", 5), ("motor", 6), ("almo", 7), ("coolant", 8)]:
+                value = parse_float(record.get(key), 0)
+                ws.cell(row_idx, col_idx, value if abs(value) > 0.0001 else None)
+            comments = record.get("comments") or []
+            ws.cell(row_idx, 9, " | ".join(dict.fromkeys(str(item) for item in comments if item)))
+
+    totals = wb["Totales"]
+    totals["A6"] = f"TOTAL DE {MONTH_NAMES_ES_FULL[start_date.month - 1].upper()} {start_date.day:02d}-{end_date.day:02d}"
+    totals["G1"] = end_date
+    ordered_sheet_names = [name for name in wb.sheetnames if name != "Totales"]
+    required_rows = len(ordered_sheet_names)
+    if required_rows > 16:
+        totals.insert_rows(25, amount=required_rows - 16)
+    total_row = 9 + required_rows + 1
+    for row_idx in range(9, total_row + 1):
+        for col_idx in range(1, 8):
+            totals.cell(row_idx, col_idx, None)
+    for idx, sheet_name in enumerate(ordered_sheet_names, start=9):
+        eq = next((equipment_by_key[key] for key in equipment_keys_py(sheet_name) if key in equipment_by_key), None)
+        display = str((eq or {}).get("code") or (eq or {}).get("equipment_code") or sheet_name)
+        totals.cell(idx, 1, display)
+        totals.cell(idx, 2, f"='{sheet_name}'!C41")
+        totals.cell(idx, 3, f"='{sheet_name}'!F41")
+        totals.cell(idx, 4, f"='{sheet_name}'!G41")
+        totals.cell(idx, 5, f"='{sheet_name}'!H41")
+        totals.cell(idx, 6, f"='{sheet_name}'!D41")
+        totals.cell(idx, 7, f"='{sheet_name}'!E41")
+    if required_rows:
+        totals.cell(total_row, 1, "Totales")
+        for col_idx in range(2, 8):
+            letter = chr(ord("A") + col_idx - 1)
+            totals.cell(total_row, col_idx, f"=SUM({letter}9:{letter}{8 + required_rows})")
+
+    stream = BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    return stream
+
+
 def portal_for_report_period(session: Session, portal: dict[str, Any], start: str, end: str) -> dict[str, Any]:
     report_portal = dict(portal)
     report_portal["period"] = {
@@ -6223,6 +6418,29 @@ def get_kpi_format_image(group: str = Query(default="")) -> StreamingResponse:
     return StreamingResponse(
         BytesIO(image),
         media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/oil-consumption/excel")
+def get_oil_consumption_excel(
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+) -> StreamingResponse:
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+    period = portal.get("period") if isinstance(portal.get("period"), dict) else {}
+    today = utc_now().date()
+    start_text = start or str(period.get("start") or today.replace(day=1).isoformat())
+    end_text = end or str(period.get("end") or today.isoformat())
+    start_date = parse_report_date(start_text, "start")
+    end_date = parse_report_date(end_text, "end")
+    stream = build_oil_consumption_excel(portal, start_date.isoformat(), end_date.isoformat())
+    month_name = MONTH_NAMES_ES_FULL[start_date.month - 1]
+    filename = f"Consumos_Aceites_{month_name}_{start_date.day:02d}-{end_date.day:02d}_{start_date.year}.xlsx"
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -8788,7 +9006,26 @@ WAREHOUSE_HTML = r"""<!doctype html>
     async function downloadKpiExcel(){
       const group = $("kpiGroup").value || "Todos los equipos";
       const normalized = group.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
-      if(normalized.includes("ACEITE") || normalized.includes("LLANTA") || normalized.includes("DIESEL")){
+      if(normalized.includes("ACEITE")){
+        const params = new URLSearchParams({
+          start: $("kpiStart").value || "",
+          end: $("kpiEnd").value || ""
+        });
+        const response = await fetch(`/api/oil-consumption/excel?${params.toString()}`, {headers: headers(), cache: "no-store"});
+        if(!response.ok) throw new Error(await apiError(response));
+        const blob = await response.blob();
+        const link = document.createElement("a");
+        const start = $("kpiStart").value || "inicio";
+        const end = $("kpiEnd").value || "fin";
+        link.href = URL.createObjectURL(blob);
+        link.download = `Consumos_Aceites_${start}_${end}.xlsx`;
+        document.body.appendChild(link);
+        link.click();
+        URL.revokeObjectURL(link.href);
+        link.remove();
+        return;
+      }
+      if(normalized.includes("LLANTA") || normalized.includes("DIESEL")){
         alert("Excel editable disponible para Barrenacion, Rezagado, Acarreo y Utilitario.");
         return;
       }
@@ -11435,6 +11672,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function renderDashboard(){
       const selectedGroup = $("kpiGroup").value || "";
+      if($("kpiExcelBtn")) $("kpiExcelBtn").textContent = selectedGroup === "KPI Aceites" ? "Consumos aceites Excel" : "Excel editable";
       const commandReport = simulatedKpiReport(calculateKpiRows("Todos los equipos", $("kpiStart").value, $("kpiEnd").value));
       renderKpiCommandCenter(commandReport);
       renderKpiMainSummary(commandReport, currentKpiSettings());
