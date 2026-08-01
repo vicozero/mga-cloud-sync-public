@@ -3665,12 +3665,12 @@ OIL_CONSUMPTION_EQUIPMENT = [
     {"sheet": "MG54", "display": "MG54", "aliases": ["MG-054", "MG054", "MG-54"]},
 ]
 OIL_KPI_COLUMNS = [
-    {"label": "Motor 15W40", "key": "oil_motor_15w40", "source_keys": ["oil_motor_15w40"]},
     {"label": "Hidraulico", "key": "oil_hydraulic_total", "source_keys": ["oil_hco_iso68", "oil_hyd_vg100"]},
-    {"label": "Transmision", "key": "oil_transmission_total", "source_keys": ["oil_trans_sae30", "atf_liters"]},
-    {"label": "Diferencial", "key": "oil_differential_total", "source_keys": ["oil_85w140"]},
+    {"label": "Motor 15W40", "key": "oil_motor_15w40", "source_keys": ["oil_motor_15w40"]},
     {"label": "Almo", "key": "almo_liters", "source_keys": ["almo_liters"]},
     {"label": "Anticongelante", "key": "coolant_liters", "source_keys": ["coolant_liters"]},
+    {"label": "Transmision", "key": "oil_transmission_total", "source_keys": ["oil_trans_sae30", "atf_liters"]},
+    {"label": "Diferencial", "key": "oil_differential_total", "source_keys": ["oil_85w140"]},
 ]
 OIL_STOCK_FIELDS = [
     ("oil_motor_15w40", "15W40", "Aceite 15W40"),
@@ -4228,7 +4228,7 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
     for capture in oil_sources:
         if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
             continue
-        code = str(capture.get("equipment_code") or capture.get("code") or "").strip()
+        code = str(capture.get("equipment_code") or capture.get("code") or capture.get("equipment") or "").strip()
         if code not in grouped:
             continue
         if not kpi_capture_component_matches_py(code, capture.get("component") or capture.get("component_name")):
@@ -4439,7 +4439,7 @@ def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -
     for capture in oil_sources:
         if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
             continue
-        code = str(capture.get("equipment_code") or capture.get("code") or "").strip()
+        code = str(capture.get("equipment_code") or capture.get("code") or capture.get("equipment") or "").strip()
         if not code:
             continue
         allowed_item = next((allowed_by_key[key] for key in equipment_keys_py(code) if key in allowed_by_key), None)
@@ -4679,11 +4679,11 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
                 ws.cell(row_idx, 1, str(day_number))
                 ws.cell(row_idx, 2, oil_consumption_date_label(current))
             else:
-                ws.cell(row_idx, 1, None)
-                ws.cell(row_idx, 2, None)
+                ws.cell(row_idx, 1).value = None
+                ws.cell(row_idx, 2).value = None
             for col_idx in range(3, 9):
-                ws.cell(row_idx, col_idx, None)
-            ws.cell(row_idx, 9, None)
+                ws.cell(row_idx, col_idx).value = None
+            ws.cell(row_idx, 9).value = None
         for col_letter in "CDEFGH":
             ws[f"{col_letter}41"] = f"=SUM({col_letter}10:{col_letter}40)"
 
@@ -4711,7 +4711,7 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
     total_row = 9 + required_rows + 1
     for row_idx in range(9, total_row + 1):
         for col_idx in range(1, 8):
-            totals.cell(row_idx, col_idx, None)
+            totals.cell(row_idx, col_idx).value = None
     display_by_sheet = {str(item["sheet"]): str(item["display"]) for item in allowed_equipment}
     for idx, sheet_name in enumerate(ordered_sheet_names, start=9):
         display = display_by_sheet.get(sheet_name, sheet_name)
@@ -11188,12 +11188,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       {sheet:"MG54", display:"MG54", aliases:["MG-054","MG054","MG-54"]},
     ];
     const oilConsumptionColumns = [
-      {label:"Motor 15W40", key:"oil_motor_15w40", sourceKeys:["oil_motor_15w40"]},
       {label:"Hidraulico", key:"oil_hydraulic_total", sourceKeys:["oil_hco_iso68","oil_hyd_vg100"]},
-      {label:"Transmision", key:"oil_transmission_total", sourceKeys:["oil_trans_sae30","atf_liters"]},
-      {label:"Diferencial", key:"oil_differential_total", sourceKeys:["oil_85w140"]},
+      {label:"Motor 15W40", key:"oil_motor_15w40", sourceKeys:["oil_motor_15w40"]},
       {label:"Almo", key:"almo_liters", sourceKeys:["almo_liters"]},
       {label:"Anticongelante", key:"coolant_liters", sourceKeys:["coolant_liters"]},
+      {label:"Transmision", key:"oil_transmission_total", sourceKeys:["oil_trans_sae30","atf_liters"]},
+      {label:"Diferencial", key:"oil_differential_total", sourceKeys:["oil_85w140"]},
     ];
     function oilAllowedItemForCode(code){
       const keys = equipmentKeys(code);
@@ -11274,7 +11274,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         cols.forEach(col => grouped[item.sheet][col.key] = 0);
       });
       (portal.captures || []).filter(row => String(row.source || "") !== "preventive_execution_web" && inRange(row.work_date, start, end)).forEach(row => {
-        const allowed = oilAllowedItemForCode(row.equipment_code || row.code || "");
+        const allowed = oilAllowedItemForCode(row.equipment_code || row.code || row.equipment || "");
         if(!allowed || !grouped[allowed.sheet]) return;
         grouped[allowed.sheet].worked_hours += Number(row.worked_hours || 0);
         cols.forEach(col => {
@@ -11397,8 +11397,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function oilTotalsForColumns(start, end, cols){
       const totals = {};
       cols.forEach(col => totals[col.key] = 0);
-      (portal.captures || []).filter(row => inRange(row.work_date, start, end)).forEach(row => {
-        if(!oilAllowedItemForCode(row.equipment_code || row.code || "")) return;
+      (portal.captures || []).filter(row => String(row.source || "") !== "preventive_execution_web" && inRange(row.work_date, start, end)).forEach(row => {
+        if(!oilAllowedItemForCode(row.equipment_code || row.code || row.equipment || "")) return;
         cols.forEach(col => totals[col.key] += oilColumnValue(row, col));
       });
       preventiveExecutionRows().filter(row => isPreventiveClosed(row) && inRange(row.close_date || row.service_date, start, end)).forEach(row => {
