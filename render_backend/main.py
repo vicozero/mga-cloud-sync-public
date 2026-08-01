@@ -11447,12 +11447,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("portalUpdated").textContent = "";
       $("kpiTitle").innerHTML = `<span class="oil-month">${esc(month)}</span><span>Consumo de aceite de equipos "Providencia"</span><span class="oil-month">${esc(month)}</span>`;
       $("kpiCards").innerHTML = [
-        oilMetricSection("Consumo de Aceite HCO", report.totals.oil_hco_iso68, accumulated.totals.oil_hco_iso68, "teal"),
-        oilMetricSection("Consumo de Aceite SAE 30", report.totals.oil_trans_sae30, accumulated.totals.oil_trans_sae30, "red"),
+        oilMetricSection("Consumo de Aceite HCO / Hidraulico", report.totals.oil_hydraulic_total, accumulated.totals.oil_hydraulic_total, "teal"),
+        oilMetricSection("Consumo de Aceite SAE 30 / Transmision", report.totals.oil_transmission_total, accumulated.totals.oil_transmission_total, "red"),
       ].join("");
       $("kpiSideCards").innerHTML = [
         oilMetricSection("Consumo de Aceite de Motor", report.totals.oil_motor_15w40, accumulated.totals.oil_motor_15w40, "red"),
-        oilMetricSection("Consumo de Aceite SAE 50", report.totals.oil_sae50, accumulated.totals.oil_sae50, "red"),
+        oilMetricSection("Consumo de Diferencial 85W140", report.totals.oil_differential_total, accumulated.totals.oil_differential_total, "red"),
       ].join("");
       $("kpiChart").innerHTML = oilChartHtml(report);
       const tableWrap = $("kpiTable").closest(".table-wrap");
