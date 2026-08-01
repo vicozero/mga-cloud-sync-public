@@ -1439,8 +1439,14 @@ def portal_capture_is_closed_month(row: dict[str, Any]) -> bool:
         day = date.fromisoformat(text[:10])
     except ValueError:
         return False
-    current_month_start = utc_now().date().replace(day=1)
-    return day < current_month_start
+    today = utc_now().date()
+    current_month_start = today.replace(day=1)
+    previous_month_start = (current_month_start - timedelta(days=1)).replace(day=1)
+    if day >= current_month_start:
+        return False
+    if day >= previous_month_start and today.day <= 7:
+        return False
+    return True
 
 
 def closed_capture_period_error(row: dict[str, Any]) -> str:
@@ -1449,7 +1455,7 @@ def closed_capture_period_error(row: dict[str, Any]) -> str:
         return ""
     return (
         f"El periodo {text[:7]} ya esta cerrado. "
-        "No se puede modificar, eliminar ni importar capturas de meses anteriores."
+        "Solo se permite capturar el mes actual y, durante los primeros 7 dias, corregir el mes anterior."
     )
 
 
@@ -4519,9 +4525,47 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
     allowed_by_key = oil_consumption_equipment_by_key()
     daily: dict[str, dict[int, dict[str, Any]]] = {}
     captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
+
+    def oil_capture_dedupe_key(capture: dict[str, Any]) -> tuple[Any, ...]:
+        code_key = next(iter(equipment_keys_py(capture.get("equipment_code") or capture.get("code") or capture.get("equipment"))), "")
+        oil_keys = (
+            "oil_motor_15w40",
+            "oil_hco_iso68",
+            "oil_trans_sae30",
+            "oil_sae50",
+            "oil_85w140",
+            "almo_liters",
+            "coolant_liters",
+            "oil_hyd_vg100",
+            "atf_liters",
+            "oil_liters",
+        )
+        return (
+            str(capture.get("work_date") or "")[:10],
+            normalize_capture_shift_py(capture.get("shift") or capture.get("turno")),
+            code_key,
+            round(parse_float(capture.get("hi"), 0), 3),
+            round(parse_float(capture.get("hf"), 0), 3),
+            round(parse_float(capture.get("worked_hours"), 0), 3),
+            *(round(parse_float(capture.get(key), 0), 3) for key in oil_keys),
+        )
+
+    def oil_capture_rank(capture: dict[str, Any]) -> tuple[int, str, int]:
+        source = normalized_ascii(capture.get("source"))
+        source_rank = 1 if source in {"WEB", "PORTAL WEB", "PORTAL-WEB"} or capture.get("mobile_id") else 0
+        timestamp = str(capture.get("received_at") or capture.get("captured_at") or capture.get("created_at") or "")
+        return (source_rank, timestamp, int(parse_float(capture.get("id"), 0) or 0))
+
+    deduped_captures: dict[tuple[Any, ...], dict[str, Any]] = {}
     for capture in captures:
         if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
             continue
+        key = oil_capture_dedupe_key(capture)
+        existing = deduped_captures.get(key)
+        if existing is None or oil_capture_rank(capture) >= oil_capture_rank(existing):
+            deduped_captures[key] = capture
+
+    for capture in deduped_captures.values():
         code = str(capture.get("equipment_code") or capture.get("code") or capture.get("equipment") or "").strip()
         if not code:
             continue
@@ -13155,7 +13199,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       });
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
-      if(!result.ok) throw new Error(`No se pudo guardar la captura. Errores: ${result.errors || 0}`);
+      if(!result.ok){
+        const details = Array.isArray(result.results)
+          ? result.results.filter(row => row && row.error).map(row => row.error).join("\n")
+          : "";
+        throw new Error(`No se pudo guardar la captura. Errores: ${result.errors || 0}${details ? "\n" + details : ""}`);
+      }
       const wasEditing = !!currentCaptureRecord;
       upsertLocalCapture(record, result);
       currentCaptureRecord = null;
