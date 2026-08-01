@@ -3776,12 +3776,18 @@ def kpi_unavailable_status(status: Any) -> bool:
     return any(token in text for token in ("NO DISPONIBLE", "FUERA", "NO DISP", "REPARACION", "MANTENIMIENTO"))
 
 
+def kpi_excluded_status(status: Any) -> bool:
+    return "FUERA" in normalized_ascii(status)
+
+
 def kpi_status_from_condition_py(value: Any) -> str:
     text = normalized_ascii(value)
     if not text:
         return ""
     if "STAND" in text:
         return "Stand By"
+    if kpi_excluded_status(text):
+        return "FUERA"
     if kpi_unavailable_status(text):
         return "No Disponible"
     if "DISPONIBLE" in text:
@@ -3843,7 +3849,7 @@ AVAILABILITY_CATEGORY_NAMES = {
 }
 
 
-AVAILABILITY_CONDITIONS = ["FUERA DE SERVICIO", "NO DISPONIBLE", "DISPONIBLE", "OPERATIVA", "STAND BY", "REPARACION"]
+AVAILABILITY_CONDITIONS = ["FUERA", "FUERA DE SERVICIO", "NO DISPONIBLE", "DISPONIBLE", "OPERATIVA", "STAND BY", "REPARACION"]
 
 
 def availability_import_date_from_text(text: str) -> str:
@@ -4117,13 +4123,14 @@ def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         worked = parse_float(source_row.get("worked") if "worked" in source_row else source_row.get("worked_hours"), 0)
         availability_text = str(source_row.get("availability_text") or source_row.get("availabilityText") or "").strip()
         utilization_text = str(source_row.get("utilization_text") or source_row.get("utilizationText") or "").strip()
-        out = availability_text.upper() == "FUERA" or utilization_text.upper() == "FUERA"
+        status = source_row.get("status") or ("FUERA" if availability_text.upper() == "FUERA" or utilization_text.upper() == "FUERA" else "")
+        out = availability_text.upper() == "FUERA" or utilization_text.upper() == "FUERA" or kpi_excluded_status(status)
         rows.append(
             {
                 "code": source_row.get("code") or "",
                 "description": source_row.get("description") or "",
                 "family": source_row.get("family") or "",
-                "status": source_row.get("status") or ("FUERA" if out else ""),
+                "status": "FUERA" if kpi_excluded_status(status) else status,
                 "period": period,
                 "worked": worked,
                 "mp": mp,
@@ -4142,7 +4149,8 @@ def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         )
 
     totals = {"period": 0.0, "worked": 0.0, "mp": 0.0, "mc": 0.0, "stops": 0.0, "available": 0.0}
-    for row in rows:
+    rows_for_totals = [row for row in rows if not kpi_excluded_status(row.get("status"))]
+    for row in rows_for_totals:
         totals["period"] += parse_float(row.get("period"), 0)
         totals["worked"] += parse_float(row.get("worked"), 0)
         totals["mp"] += parse_float(row.get("mp"), 0)
@@ -4261,7 +4269,8 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
             row["status"] = row["availability_status"]
         elif row["capture_status"]:
             row["status"] = row["capture_status"]
-        out = row["worked"] <= 0 and (row["unavailable_count"] > 0 or kpi_unavailable_status(row["status"]))
+        excluded = kpi_excluded_status(row["status"])
+        out = excluded or (row["worked"] <= 0 and (row["unavailable_count"] > 0 or kpi_unavailable_status(row["status"])))
         metric_values = {"available": 0, "availability": 0, "utilization": 0, "tmef": 0, "tmpr": 0, "reliability": 0} if out else monthly_kpi_metric(row["period"], row["worked"], row["mp"], row["mc"], row["stops"], mission_hours)
         row.update(metric_values)
         row["out"] = out
@@ -4270,7 +4279,8 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         rows.append(row)
 
     totals = {"period": 0.0, "worked": 0.0, "mp": 0.0, "mc": 0.0, "stops": 0.0, "available": 0.0}
-    for row in rows:
+    rows_for_totals = [row for row in rows if not kpi_excluded_status(row.get("status"))]
+    for row in rows_for_totals:
         totals["period"] += row["period"]
         totals["worked"] += row["worked"]
         totals["mp"] += row["mp"]
@@ -8086,7 +8096,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <label>Equipo<input id="dispEditEquipment" readonly></label>
           <label>No ECO<input id="dispEditEco" readonly></label>
           <label>Fecha actualizacion<input id="dispEditDate" type="date"></label>
-          <label>Condicion<select id="dispEditCondition"><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>NO DISPONIBLE</option><option>OPERATIVA</option><option>STAND BY</option><option>REPARACION</option></select></label>
+          <label>Condicion<select id="dispEditCondition"><option>DISPONIBLE</option><option>FUERA</option><option>FUERA DE SERVICIO</option><option>NO DISPONIBLE</option><option>OPERATIVA</option><option>STAND BY</option><option>REPARACION</option></select></label>
           <label>Resaltar obs.<select id="dispEditHighlight"><option value="0">No</option><option value="1">Si</option></select></label>
           <label class="wide">Observaciones<textarea id="dispEditObservations" rows="2" placeholder="Motivo, trabajo pendiente o comentario de operacion"></textarea></label>
         </div>
@@ -8097,7 +8107,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
       <div class="panel toolbar">
         <label>Categoria / equipo<input id="dispSearch" placeholder="Buscar"></label>
-        <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
+        <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
         <button class="btn" id="renderDispBtn">Actualizar</button>
       </div>
       <div class="table-wrap"><table id="dispTable"></table></div>
@@ -10586,6 +10596,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = String(status || "").toUpperCase();
       return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP") || text.includes("REPARACION") || text.includes("REPARACIÓN") || text.includes("MANTENIMIENTO");
     }
+    function kpiExcludedStatus(status){
+      return normalizedText(status).includes("FUERA");
+    }
     function normalizedText(value){
       return String(value || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     }
@@ -10635,6 +10648,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = normalizedText(value);
       if(!text) return "";
       if(text.includes("STAND")) return "Stand By";
+      if(kpiExcludedStatus(text)) return "FUERA";
       if(unavailable(text)) return "No Disponible";
       if(text.includes("DISPONIBLE")) return "Disponible";
       if(text.includes("OPERATIVA")) return "Operativa";
@@ -10754,14 +10768,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
         row.mp = Math.max(Number(source.mp || 0) * factors.mp, 0);
         row.mc = Math.max(Number(source.mc || 0) * factors.mc, 0);
         row.stops = Math.max(Math.round(Number(source.stops || 0) * factors.stops), 0);
-        row.out = row.worked <= 0 && unavailable(row.status);
+        row.excluded = kpiExcludedStatus(row.status);
+        row.out = row.excluded || (row.worked <= 0 && unavailable(row.status));
         const values = row.out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops, missionHours);
         Object.assign(row, values);
         row.availabilityText = row.out ? "FUERA" : pct(row.availability);
         row.utilizationText = row.out ? "FUERA" : pct(row.utilization);
         return row;
       });
-      const totals = rows.reduce((acc, row) => {
+      const totalRows = rows.filter(row => !row.excluded && !kpiExcludedStatus(row.status));
+      const totals = totalRows.reduce((acc, row) => {
         acc.period += Number(row.period || 0); acc.worked += Number(row.worked || 0); acc.mp += Number(row.mp || 0); acc.mc += Number(row.mc || 0); acc.stops += Number(row.stops || 0); acc.available += Number(row.available || 0);
         return acc;
       }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
@@ -10796,14 +10812,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const worked = Number(sourceRow.worked ?? sourceRow.worked_hours ?? 0);
         const availabilityText = String(sourceRow.availabilityText || sourceRow.availability_text || "").trim();
         const utilizationText = String(sourceRow.utilizationText || sourceRow.utilization_text || "").trim();
-        const out = availabilityText.toUpperCase() === "FUERA" || utilizationText.toUpperCase() === "FUERA";
+        const status = sourceRow.status || (availabilityText.toUpperCase() === "FUERA" || utilizationText.toUpperCase() === "FUERA" ? "FUERA" : "");
+        const out = availabilityText.toUpperCase() === "FUERA" || utilizationText.toUpperCase() === "FUERA" || kpiExcludedStatus(status);
         const availability = Number(sourceRow.availability || 0);
         const utilization = Number(sourceRow.utilization || 0);
         return {
           code: sourceRow.code || "",
           description: sourceRow.description || "",
           family: sourceRow.family || "",
-          status: sourceRow.status || (out ? "FUERA" : ""),
+          status: kpiExcludedStatus(status) ? "FUERA" : status,
           period,
           worked,
           mp,
@@ -10816,16 +10833,34 @@ WAREHOUSE_HTML = r"""<!doctype html>
           tmpr: Number(sourceRow.tmpr || 0),
           reliability: Number(sourceRow.reliability || 0),
           out,
+          excluded: kpiExcludedStatus(status),
           availabilityText: availabilityText || (out ? "FUERA" : pct(availability)),
           utilizationText: utilizationText || (out ? "FUERA" : pct(utilization)),
         };
       }) : [];
+      const settings = portal.settings || {};
+      const missionHours = Number(settings.reliability_mission_hours || settings.mission_hours || 12);
+      const totalRows = rows.filter(row => !row.excluded && !kpiExcludedStatus(row.status));
+      const totals = totalRows.reduce((acc, row) => {
+        acc.period += Number(row.period || 0);
+        acc.worked += Number(row.worked || 0);
+        acc.mp += Number(row.mp || 0);
+        acc.mc += Number(row.mc || 0);
+        acc.stops += Number(row.stops || 0);
+        acc.available += Number(row.available || 0);
+        return acc;
+      }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
+      totals.availability = totals.period ? (totals.available / totals.period) * 100 : 0;
+      totals.utilization = totals.available ? (totals.worked / totals.available) * 100 : 0;
+      totals.tmef = totals.stops ? (totals.worked ? totals.worked / totals.stops : 0) : totals.worked;
+      totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
+      totals.reliability = totals.tmef && missionHours ? Math.max(Math.min(Math.exp(-(missionHours / totals.tmef)) * 100, 100), 0) : (totals.worked > 0 && !totals.stops ? 100 : 0);
       return {
         group: source.group || group,
         start,
         end,
         rows,
-        totals: source.totals || {period:0, worked:0, mp:0, mc:0, stops:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0},
+        totals,
         source: "desktop-kpi-report",
       };
     }
@@ -11103,11 +11138,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const rows = Object.values(grouped).sort((a,b) => a.code.localeCompare(b.code)).map(row => {
         if(row.availabilityStatus) row.status = row.availabilityStatus;
         else if(row.captureStatus) row.status = row.captureStatus;
-        const out = row.worked <= 0 && (row.unavailableCount > 0 || unavailable(row.status));
+        const excluded = kpiExcludedStatus(row.status);
+        const out = excluded || (row.worked <= 0 && (row.unavailableCount > 0 || unavailable(row.status)));
         const m = out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops, missionHours);
-        return {...row, ...m, out, availabilityText: out ? "FUERA" : pct(m.availability), utilizationText: out ? "FUERA" : pct(m.utilization)};
+        return {...row, ...m, out, excluded, availabilityText: out ? "FUERA" : pct(m.availability), utilizationText: out ? "FUERA" : pct(m.utilization)};
       });
-      const totals = rows.reduce((acc, row) => {
+      const totalRows = rows.filter(row => !row.excluded && !kpiExcludedStatus(row.status));
+      const totals = totalRows.reduce((acc, row) => {
         acc.period += row.period; acc.worked += row.worked; acc.mp += row.mp; acc.mc += row.mc; acc.stops += row.stops; acc.available += row.available;
         return acc;
       }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
