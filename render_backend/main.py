@@ -3639,6 +3639,25 @@ OIL_REPORT_COLUMNS = [
     {"label": "VG100", "key": "oil_hyd_vg100"},
     {"label": "ATF", "key": "atf_liters"},
 ]
+OIL_CONSUMPTION_EQUIPMENT = [
+    {"sheet": "ST031", "display": "ST-031", "aliases": ["ST31"]},
+    {"sheet": "ST016", "display": "ST-016", "aliases": ["ST16"]},
+    {"sheet": "ST018", "display": "ST-018", "aliases": ["ST18"]},
+    {"sheet": "ST036", "display": "ST-036", "aliases": ["ST36"]},
+    {"sheet": "ST025", "display": "ST-025", "aliases": ["ST25"]},
+    {"sheet": "JL015", "display": "JL-015", "aliases": ["JL15"]},
+    {"sheet": "JL025", "display": "JL-025", "aliases": ["JL25"]},
+    {"sheet": "JL024", "display": "JL-024", "aliases": ["JL24"]},
+    {"sheet": "JL019", "display": "JL-019", "aliases": ["JL19"]},
+    {"sheet": "JA004", "display": "JA-004", "aliases": ["JA04", "JA4"]},
+    {"sheet": "JA007", "display": "JA-007", "aliases": ["JA07", "JA7"]},
+    {"sheet": "JA009", "display": "JA-009", "aliases": ["JA09", "JA9"]},
+    {"sheet": "RE009", "display": "RE-009", "aliases": ["RE09", "RE9"]},
+    {"sheet": "RE010", "display": "RE-010", "aliases": ["RE10"]},
+    {"sheet": "CBP001", "display": "CBP-001", "aliases": ["CBP01", "CBP-01"]},
+    {"sheet": "MG044", "display": "MG044", "aliases": ["MG-044", "MG44"]},
+    {"sheet": "MG54", "display": "MG54", "aliases": ["MG-054", "MG054", "MG-54"]},
+]
 OIL_STOCK_FIELDS = [
     ("oil_motor_15w40", "15W40", "Aceite 15W40"),
     ("oil_hco_iso68", "HCO ISO 68", "Aceite HCO ISO 68"),
@@ -4437,15 +4456,26 @@ def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -
     }
 
 
-def oil_consumption_sheet_name(code: Any) -> str:
-    raw = re.sub(r"[^A-Z0-9]", "", normalized_ascii(code))
-    raw = re.sub(r"([A-Z]+)0+(\d)", r"\1\2", raw)
-    return (raw or "EQUIPO")[:31]
-
-
 def oil_consumption_date_label(day: date) -> str:
     prefix = f"{day.day:02d}" if day.day == 1 else str(day.day)
     return f"{prefix} DE {MONTH_NAMES_ES_FULL[day.month - 1].upper()} DEL {day.year}"
+
+
+def oil_consumption_equipment_keys(item: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    for value in [item.get("sheet"), item.get("display"), *(item.get("aliases") or [])]:
+        for key in equipment_keys_py(value):
+            if key and key not in keys:
+                keys.append(key)
+    return keys
+
+
+def oil_consumption_equipment_by_key() -> dict[str, dict[str, Any]]:
+    mapping: dict[str, dict[str, Any]] = {}
+    for item in OIL_CONSUMPTION_EQUIPMENT:
+        for key in oil_consumption_equipment_keys(item):
+            mapping[key] = item
+    return mapping
 
 
 def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) -> BytesIO:
@@ -4483,17 +4513,10 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
     if "Totales" not in wb.sheetnames:
         wb.create_sheet("Totales")
 
-    equipment = portal_equipment_rows(portal)
-    equipment_by_key: dict[str, dict[str, Any]] = {}
-    active_codes: list[str] = []
-    for eq in equipment:
-        code = str(eq.get("code") or eq.get("equipment_code") or "").strip()
-        if not code:
-            continue
-        active_codes.append(code)
-        for key in equipment_keys_py(code):
-            equipment_by_key[key] = eq
-
+    allowed_equipment = OIL_CONSUMPTION_EQUIPMENT
+    allowed_sheets = [str(item["sheet"]) for item in allowed_equipment]
+    allowed_sheet_set = set(allowed_sheets)
+    allowed_by_key = oil_consumption_equipment_by_key()
     daily: dict[str, dict[int, dict[str, Any]]] = {}
     captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
     for capture in captures:
@@ -4502,6 +4525,10 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
         code = str(capture.get("equipment_code") or capture.get("code") or capture.get("equipment") or "").strip()
         if not code:
             continue
+        allowed_item = next((allowed_by_key[key] for key in equipment_keys_py(code) if key in allowed_by_key), None)
+        if not allowed_item:
+            continue
+        target_sheet = str(allowed_item["sheet"])
         work_date = str(capture.get("work_date") or "")[:10]
         try:
             day_number = date.fromisoformat(work_date).day
@@ -4519,7 +4546,7 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
         }
         if not any(mapped_values.values()) and not oil_sae50 and not oil_liters and not str(capture.get("observations") or "").strip():
             continue
-        record = daily.setdefault(code, {}).setdefault(
+        record = daily.setdefault(target_sheet, {}).setdefault(
             day_number,
             {"hydraulic": 0.0, "transmission": 0.0, "differential": 0.0, "motor": 0.0, "almo": 0.0, "coolant": 0.0, "comments": []},
         )
@@ -4540,26 +4567,21 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
 
     template_sheets = [name for name in wb.sheetnames if name != "Totales"]
     first_template = wb[template_sheets[0]] if template_sheets else None
-    sheet_by_key: dict[str, str] = {}
-    for sheet_name in template_sheets:
-        for key in equipment_keys_py(sheet_name):
-            sheet_by_key[key] = sheet_name
-    for code in active_codes:
-        if any(key in sheet_by_key for key in equipment_keys_py(code)):
+    for sheet_name in list(template_sheets):
+        if sheet_name not in allowed_sheet_set:
+            wb.remove(wb[sheet_name])
+    for item in allowed_equipment:
+        sheet_name = str(item["sheet"])
+        if sheet_name in wb.sheetnames:
             continue
-        base_name = oil_consumption_sheet_name(code)
-        candidate = base_name
-        suffix = 1
-        while candidate in wb.sheetnames:
-            suffix += 1
-            candidate = f"{base_name[:28]}{suffix}"
         if first_template is not None:
             ws_new = wb.copy_worksheet(first_template)
-            ws_new.title = candidate
+            ws_new.title = sheet_name
         else:
-            ws_new = wb.create_sheet(candidate)
-        for key in equipment_keys_py(code):
-            sheet_by_key[key] = candidate
+            ws_new = wb.create_sheet(sheet_name)
+    if "Totales" in wb.sheetnames:
+        ordered_sheets = [wb[name] for name in allowed_sheets if name in wb.sheetnames] + [wb["Totales"]]
+        wb._sheets = ordered_sheets
 
     month_start, month_end = month_bounds(start_date.year, start_date.month)
     month_last_day = parse_report_date(month_end, "end").day
@@ -4583,9 +4605,8 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
         for col_letter in "CDEFGH":
             ws[f"{col_letter}41"] = f"=SUM({col_letter}10:{col_letter}40)"
 
-    for code, rows_by_day in daily.items():
-        target_sheet = next((sheet_by_key[key] for key in equipment_keys_py(code) if key in sheet_by_key), "")
-        if not target_sheet:
+    for target_sheet, rows_by_day in daily.items():
+        if target_sheet not in wb.sheetnames:
             continue
         ws = wb[target_sheet]
         for day_number, record in rows_by_day.items():
@@ -4601,7 +4622,7 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
     totals = wb["Totales"]
     totals["A6"] = f"TOTAL DE {MONTH_NAMES_ES_FULL[start_date.month - 1].upper()} {start_date.day:02d}-{end_date.day:02d}"
     totals["G1"] = end_date
-    ordered_sheet_names = [name for name in wb.sheetnames if name != "Totales"]
+    ordered_sheet_names = [name for name in allowed_sheets if name in wb.sheetnames]
     required_rows = len(ordered_sheet_names)
     if required_rows > 16:
         totals.insert_rows(25, amount=required_rows - 16)
@@ -4609,9 +4630,9 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
     for row_idx in range(9, total_row + 1):
         for col_idx in range(1, 8):
             totals.cell(row_idx, col_idx, None)
+    display_by_sheet = {str(item["sheet"]): str(item["display"]) for item in allowed_equipment}
     for idx, sheet_name in enumerate(ordered_sheet_names, start=9):
-        eq = next((equipment_by_key[key] for key in equipment_keys_py(sheet_name) if key in equipment_by_key), None)
-        display = str((eq or {}).get("code") or (eq or {}).get("equipment_code") or sheet_name)
+        display = display_by_sheet.get(sheet_name, sheet_name)
         totals.cell(idx, 1, display)
         totals.cell(idx, 2, f"='{sheet_name}'!C41")
         totals.cell(idx, 3, f"='{sheet_name}'!F41")
