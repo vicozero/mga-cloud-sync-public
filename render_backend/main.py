@@ -3664,6 +3664,14 @@ OIL_CONSUMPTION_EQUIPMENT = [
     {"sheet": "MG044", "display": "MG044", "aliases": ["MG-044", "MG44"]},
     {"sheet": "MG54", "display": "MG54", "aliases": ["MG-054", "MG054", "MG-54"]},
 ]
+OIL_KPI_COLUMNS = [
+    {"label": "Motor 15W40", "key": "oil_motor_15w40", "source_keys": ["oil_motor_15w40"]},
+    {"label": "Hidraulico", "key": "oil_hydraulic_total", "source_keys": ["oil_hco_iso68", "oil_hyd_vg100"]},
+    {"label": "Transmision", "key": "oil_transmission_total", "source_keys": ["oil_trans_sae30", "atf_liters"]},
+    {"label": "Diferencial", "key": "oil_differential_total", "source_keys": ["oil_85w140"]},
+    {"label": "Almo", "key": "almo_liters", "source_keys": ["almo_liters"]},
+    {"label": "Anticongelante", "key": "coolant_liters", "source_keys": ["coolant_liters"]},
+]
 OIL_STOCK_FIELDS = [
     ("oil_motor_15w40", "15W40", "Aceite 15W40"),
     ("oil_hco_iso68", "HCO ISO 68", "Aceite HCO ISO 68"),
@@ -4205,7 +4213,11 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
             "unavailable_count": 0,
         }
     captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
-    oil_sources = [capture for capture in captures if isinstance(capture, dict)]
+    oil_sources = [
+        capture for capture in captures
+        if isinstance(capture, dict)
+        and str(capture.get("source") or "") != "preventive_execution_web"
+    ]
     oil_sources.extend(
         preventive_execution_as_oil_capture(row)
         for row in preventive_execution_records(portal)
@@ -4384,48 +4396,56 @@ def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -
         days = max((end_date - start_date).days + 1, 1)
     except ValueError:
         days = 1
-    grouped: dict[str, dict[str, Any]] = {}
     descriptions: dict[str, str] = {}
     for eq in portal_equipment_rows(portal):
         code = str(eq.get("code") or eq.get("equipment_code") or "").strip()
         if not code:
             continue
-        descriptions[code.upper()] = str(eq.get("description") or "")
-        grouped.setdefault(
-            code,
-            {
-                "code": code,
-                "description": str(eq.get("description") or ""),
-                "group": portal_oil_group(eq),
-                "period_hours": days * daily_hours,
-                "period": days * daily_hours,
-                "worked_hours": 0.0,
-                "worked": 0.0,
-                "total_liters": 0.0,
-                **{col["key"]: 0.0 for col in OIL_REPORT_COLUMNS},
-            },
-        )
+        for key in equipment_keys_py(code):
+            descriptions[key] = str(eq.get("description") or "")
+
+    allowed_by_key = oil_consumption_equipment_by_key()
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in OIL_CONSUMPTION_EQUIPMENT:
+        code = str(item.get("display") or item.get("sheet") or "")
+        description = next((descriptions.get(key, "") for key in oil_consumption_equipment_keys(item) if descriptions.get(key)), "")
+        group = "BARRENACION" if code.startswith(("JL", "JA")) else ("REZAGADO" if code.startswith("ST") else "UTILITARIO")
+        grouped[str(item["sheet"])] = {
+            "code": code,
+            "description": description,
+            "group": group,
+            "period_hours": days * daily_hours,
+            "period": days * daily_hours,
+            "worked_hours": 0.0,
+            "worked": 0.0,
+            "total_liters": 0.0,
+            **{col["key"]: 0.0 for col in OIL_REPORT_COLUMNS},
+            **{col["key"]: 0.0 for col in OIL_KPI_COLUMNS},
+        }
 
     captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
-    for capture in captures:
+    oil_sources = [
+        capture for capture in captures
+        if isinstance(capture, dict)
+        and str(capture.get("source") or "") != "preventive_execution_web"
+    ]
+    oil_sources.extend(
+        preventive_execution_as_oil_capture(row)
+        for row in preventive_execution_records(portal)
+        if isinstance(row, dict)
+        and normalize_text(row.get("status")) in PREVENTIVE_CLOSED_STATUSES
+        and sum(parse_float(row.get(key), 0) for key, _part_number, _description in OIL_STOCK_FIELDS) > 0
+    )
+    for capture in oil_sources:
         if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
             continue
         code = str(capture.get("equipment_code") or capture.get("code") or "").strip()
         if not code:
             continue
-        if code not in grouped:
-            grouped[code] = {
-                "code": code,
-                "description": descriptions.get(code.upper(), str(capture.get("equipment_description") or "")),
-                "group": "UTILITARIO",
-                "period_hours": days * daily_hours,
-                "period": days * daily_hours,
-                "worked_hours": 0.0,
-                "worked": 0.0,
-                "total_liters": 0.0,
-                **{col["key"]: 0.0 for col in OIL_REPORT_COLUMNS},
-            }
-        row = grouped[code]
+        allowed_item = next((allowed_by_key[key] for key in equipment_keys_py(code) if key in allowed_by_key), None)
+        if not allowed_item:
+            continue
+        row = grouped[str(allowed_item["sheet"])]
         worked = parse_float(capture.get("worked_hours"), 0)
         row["worked_hours"] += worked
         row["worked"] += worked
@@ -4433,6 +4453,12 @@ def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -
             key = col["key"]
             value = parse_float(capture.get(key), 0)
             row[key] += value
+        raw_keys = {col["key"] for col in OIL_REPORT_COLUMNS}
+        for col in OIL_KPI_COLUMNS:
+            source_keys = col.get("source_keys", [col["key"]])
+            value = sum(parse_float(capture.get(source_key), 0) for source_key in source_keys)
+            if not (col["key"] in raw_keys and source_keys == [col["key"]]):
+                row[col["key"]] += value
             row["total_liters"] += value
 
     def sort_key(row: dict[str, Any]) -> tuple[int, str]:
@@ -4447,7 +4473,7 @@ def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -
         "worked_hours": sum(parse_float(row.get("worked_hours"), 0) for row in rows),
         "total_liters": sum(parse_float(row.get("total_liters"), 0) for row in rows),
     }
-    for col in OIL_REPORT_COLUMNS:
+    for col in OIL_KPI_COLUMNS:
         totals[col["key"]] = sum(parse_float(row.get(col["key"]), 0) for row in rows)
     return {
         "start": start,
@@ -4456,7 +4482,7 @@ def portal_oil_report_for_period(portal: dict[str, Any], start: str, end: str) -
         "end_day": int(str(end)[-2:]) if end else 31,
         "days": days,
         "daily_hours": daily_hours,
-        "columns": OIL_REPORT_COLUMNS,
+        "columns": OIL_KPI_COLUMNS,
         "rows": rows,
         "totals": totals,
     }
@@ -4557,7 +4583,19 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
         return (source_rank, timestamp, int(parse_float(capture.get("id"), 0) or 0))
 
     deduped_captures: dict[tuple[Any, ...], dict[str, Any]] = {}
-    for capture in captures:
+    oil_sources = [
+        capture for capture in captures
+        if isinstance(capture, dict)
+        and str(capture.get("source") or "") != "preventive_execution_web"
+    ]
+    oil_sources.extend(
+        preventive_execution_as_oil_capture(row)
+        for row in preventive_execution_records(portal)
+        if isinstance(row, dict)
+        and normalize_text(row.get("status")) in PREVENTIVE_CLOSED_STATUSES
+        and sum(parse_float(row.get(key), 0) for key, _part_number, _description in OIL_STOCK_FIELDS) > 0
+    )
+    for capture in oil_sources:
         if not isinstance(capture, dict) or not portal_date_in_range(capture.get("work_date"), start, end):
             continue
         key = oil_capture_dedupe_key(capture)
@@ -8966,13 +9004,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="oil-title"><span class="oil-month">${esc(month)}</span><span>Consumo de aceite de equipos "Providencia"</span><span class="oil-month">${esc(month)}</span></div>
         <div class="kpi-format-board">
           <div class="kpi-side">
-            ${oilMetricSection("Consumo de Aceite HCO", report.totals.oil_hco_iso68, accumulated.totals.oil_hco_iso68, "teal")}
-            ${oilMetricSection("Consumo de Aceite SAE 30", report.totals.oil_trans_sae30, accumulated.totals.oil_trans_sae30, "red")}
+            ${oilMetricSection("Consumo de Aceite Hidraulico", report.totals.oil_hydraulic_total, accumulated.totals.oil_hydraulic_total, "teal")}
+            ${oilMetricSection("Consumo de Transmision", report.totals.oil_transmission_total, accumulated.totals.oil_transmission_total, "red")}
           </div>
           <div class="chart">${oilChartHtml(report)}</div>
           <div class="kpi-side">
             ${oilMetricSection("Consumo de Aceite de Motor", report.totals.oil_motor_15w40, accumulated.totals.oil_motor_15w40, "red")}
-            ${oilMetricSection("Consumo de Aceite SAE 50", report.totals.oil_sae50, accumulated.totals.oil_sae50, "red")}
+            ${oilMetricSection("Consumo de Diferencial 85W140", report.totals.oil_differential_total, accumulated.totals.oil_differential_total, "red")}
           </div>
         </div>
         <div class="table-wrap oil-bottom-wrap"><table class="oil-bottom-grid"><tbody><tr><td class="oil-report-cell">${oilReportTableHtml(report)}</td><td class="oil-order-cell">${oilOrderPanelHtml(report)}</td></tr></tbody></table></div>
@@ -11130,23 +11168,46 @@ WAREHOUSE_HTML = r"""<!doctype html>
         });
       });
     }
+    const oilConsumptionEquipment = [
+      {sheet:"ST031", display:"ST-031", aliases:["ST31"]},
+      {sheet:"ST016", display:"ST-016", aliases:["ST16"]},
+      {sheet:"ST018", display:"ST-018", aliases:["ST18"]},
+      {sheet:"ST036", display:"ST-036", aliases:["ST36"]},
+      {sheet:"ST025", display:"ST-025", aliases:["ST25"]},
+      {sheet:"JL015", display:"JL-015", aliases:["JL15"]},
+      {sheet:"JL025", display:"JL-025", aliases:["JL25"]},
+      {sheet:"JL024", display:"JL-024", aliases:["JL24"]},
+      {sheet:"JL019", display:"JL-019", aliases:["JL19"]},
+      {sheet:"JA004", display:"JA-004", aliases:["JA04","JA4"]},
+      {sheet:"JA007", display:"JA-007", aliases:["JA07","JA7"]},
+      {sheet:"JA009", display:"JA-009", aliases:["JA09","JA9"]},
+      {sheet:"RE009", display:"RE-009", aliases:["RE09","RE9"]},
+      {sheet:"RE010", display:"RE-010", aliases:["RE10"]},
+      {sheet:"CBP001", display:"CBP-001", aliases:["CBP01","CBP-01"]},
+      {sheet:"MG044", display:"MG044", aliases:["MG-044","MG44"]},
+      {sheet:"MG54", display:"MG54", aliases:["MG-054","MG054","MG-54"]},
+    ];
+    const oilConsumptionColumns = [
+      {label:"Motor 15W40", key:"oil_motor_15w40", sourceKeys:["oil_motor_15w40"]},
+      {label:"Hidraulico", key:"oil_hydraulic_total", sourceKeys:["oil_hco_iso68","oil_hyd_vg100"]},
+      {label:"Transmision", key:"oil_transmission_total", sourceKeys:["oil_trans_sae30","atf_liters"]},
+      {label:"Diferencial", key:"oil_differential_total", sourceKeys:["oil_85w140"]},
+      {label:"Almo", key:"almo_liters", sourceKeys:["almo_liters"]},
+      {label:"Anticongelante", key:"coolant_liters", sourceKeys:["coolant_liters"]},
+    ];
+    function oilAllowedItemForCode(code){
+      const keys = equipmentKeys(code);
+      return oilConsumptionEquipment.find(item => {
+        const itemKeys = [item.sheet, item.display, ...(item.aliases || [])].flatMap(equipmentKeys);
+        return keys.some(key => itemKeys.includes(key));
+      }) || null;
+    }
+    function oilColumnValue(row, col){
+      if(row && row[col.key] != null && Number(row[col.key] || 0)) return Number(row[col.key] || 0);
+      return (col.sourceKeys || [col.key]).reduce((sum, key) => sum + Number(row?.[key] || 0), 0);
+    }
     function oilColumns(){
-      const required = [
-        {label:"15W40", key:"oil_motor_15w40"},
-        {label:"ISO 68", key:"oil_hco_iso68"},
-        {label:"SAE 30", key:"oil_trans_sae30"},
-        {label:"SAE 50", key:"oil_sae50"},
-        {label:"85W140", key:"oil_85w140"},
-        {label:"ALMO", key:"almo_liters"},
-        {label:"Refrigerante", key:"coolant_liters"},
-        {label:"VG100", key:"oil_hyd_vg100"},
-        {label:"ATF", key:"atf_liters"},
-      ];
-      const cols = portal.oil_kpi && Array.isArray(portal.oil_kpi.columns) ? [...portal.oil_kpi.columns] : [];
-      required.forEach(item => {
-        if(!cols.some(col => col.key === item.key)) cols.push(item);
-      });
-      return cols;
+      return oilConsumptionColumns;
     }
     function oilGroupFor(eq){
       const code = String(eq.code || eq.equipment_code || "").toUpperCase();
@@ -11156,26 +11217,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       return "UTILITARIO";
     }
     function oilMainColumns(){
-      const available = oilColumns();
-      return [
-        {label:"Motor 15W40", key:"oil_motor_15w40"},
-        {label:"ISO 68", key:"oil_hco_iso68"},
-        {label:"SAE 30", key:"oil_trans_sae30"},
-        {label:"SAE 50", key:"oil_sae50"},
-        {label:"85W140", key:"oil_85w140"},
-      ].map(item => available.find(col => col.key === item.key) || item);
+      return oilColumns();
     }
     function oilOrderColumns(){
-      return [
-        {label:"ALMO", key:"almo_liters"},
-        {label:"85W140", key:"oil_85w140"},
-        {label:"Compresor ISO 32", key:"oil_compressor_iso32"},
-        {label:"HCO ISO 68", key:"oil_hco_iso68"},
-        {label:"Motor 15W40", key:"oil_motor_15w40"},
-        {label:"Trans. SAE 30", key:"oil_trans_sae30"},
-        {label:"sin clasificar", key:"oil_liters"},
-        {label:"Refrigerante", key:"coolant_liters"},
-      ];
+      return oilColumns();
     }
     function oilDays(start, end){
       const a = parseIsoDate(start);
@@ -11187,8 +11232,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const source = portal.oil_kpi || {};
       if(source.start === start && source.end === end && Array.isArray(source.rows) && source.rows.length){
         const rows = source.rows.map(row => {
+          const allowed = oilAllowedItemForCode(row.code || row.equipment_code || "");
+          if(!allowed) return null;
           const out = {
-            code: row.code || "",
+            code: allowed.display || row.code || "",
             description: row.description || "",
             group: row.group || "UTILITARIO",
             period_hours: Number(row.period_hours || row.period || 0),
@@ -11196,11 +11243,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
             total_liters: 0,
           };
           cols.forEach(col => {
-            out[col.key] = Number(row[col.key] || 0);
+            out[col.key] = oilColumnValue(row, col);
             out.total_liters += out[col.key];
           });
           return out;
-        });
+        }).filter(Boolean);
         const totals = rows.reduce((acc, row) => {
           acc.period += Number(row.period_hours || 0);
           acc.worked += Number(row.worked_hours || 0);
@@ -11215,35 +11262,35 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const settings = portal.settings || {};
       const dailyHours = (Number(settings.shift_hours || 9) || 9) * (Number(settings.turns_per_day || 2) || 2);
       const grouped = {};
+      const equipmentDescriptions = {};
       portalEquipment().forEach(eq => {
-        const code = eq.code || eq.equipment_code || "";
-        grouped[code] = {code, description:eq.description || "", group:oilGroupFor(eq), period_hours:days * dailyHours, worked_hours:0, total_liters:0};
-        cols.forEach(col => grouped[code][col.key] = 0);
+        const allowed = oilAllowedItemForCode(eq.code || eq.equipment_code || "");
+        if(allowed) equipmentDescriptions[allowed.sheet] = eq.description || "";
       });
-      (portal.captures || []).filter(row => inRange(row.work_date, start, end)).forEach(row => {
-        const code = row.equipment_code || row.code || "";
-        if(!grouped[code]) {
-          grouped[code] = {code, description:"", group:"UTILITARIO", period_hours:days * dailyHours, worked_hours:0, total_liters:0};
-          cols.forEach(col => grouped[code][col.key] = 0);
-        }
-        grouped[code].worked_hours += Number(row.worked_hours || 0);
+      oilConsumptionEquipment.forEach(item => {
+        const code = item.display || item.sheet || "";
+        const group = code.startsWith("JL") || code.startsWith("JA") ? "BARRENACION" : (code.startsWith("ST") ? "REZAGADO" : "UTILITARIO");
+        grouped[item.sheet] = {code, description:equipmentDescriptions[item.sheet] || "", group, period_hours:days * dailyHours, worked_hours:0, total_liters:0};
+        cols.forEach(col => grouped[item.sheet][col.key] = 0);
+      });
+      (portal.captures || []).filter(row => String(row.source || "") !== "preventive_execution_web" && inRange(row.work_date, start, end)).forEach(row => {
+        const allowed = oilAllowedItemForCode(row.equipment_code || row.code || "");
+        if(!allowed || !grouped[allowed.sheet]) return;
+        grouped[allowed.sheet].worked_hours += Number(row.worked_hours || 0);
         cols.forEach(col => {
-          const value = Number(row[col.key] || 0);
-          grouped[code][col.key] += value;
-          grouped[code].total_liters += value;
+          const value = oilColumnValue(row, col);
+          grouped[allowed.sheet][col.key] += value;
+          grouped[allowed.sheet].total_liters += value;
         });
       });
       preventiveExecutionRows().filter(row => isPreventiveClosed(row) && inRange(row.close_date || row.service_date, start, end)).forEach(row => {
-        const code = row.equipment_code || "";
-        if(!code) return;
-        if(!grouped[code]) {
-          grouped[code] = {code, description:row.equipment_description || "", group:"UTILITARIO", period_hours:days * dailyHours, worked_hours:0, total_liters:0};
-          cols.forEach(col => grouped[code][col.key] = 0);
-        }
+        const allowed = oilAllowedItemForCode(row.equipment_code || "");
+        if(!allowed || !grouped[allowed.sheet]) return;
+        if(row.equipment_description && !grouped[allowed.sheet].description) grouped[allowed.sheet].description = row.equipment_description;
         cols.forEach(col => {
-          const value = Number(row[col.key] || 0);
-          grouped[code][col.key] += value;
-          grouped[code].total_liters += value;
+          const value = oilColumnValue(row, col);
+          grouped[allowed.sheet][col.key] += value;
+          grouped[allowed.sheet].total_liters += value;
         });
       });
       const groupRank = {BARRENACION:1, REZAGADO:2, UTILITARIO:3};
@@ -11281,10 +11328,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const cols = oilMainColumns();
       const colors = {
         oil_motor_15w40:"#4472c4",
-        oil_hco_iso68:"#ed7d31",
-        oil_trans_sae30:"#a5a5a5",
-        oil_sae50:"#ffc000",
-        oil_85w140:"#5b9bd5",
+        oil_hydraulic_total:"#ed7d31",
+        oil_transmission_total:"#a5a5a5",
+        oil_differential_total:"#5b9bd5",
+        almo_liters:"#ffc000",
+        coolant_liters:"#70ad47",
       };
       let chartRows = [...report.rows].filter(row => cols.some(col => Number(row[col.key] || 0) > 0));
       chartRows.sort((a,b) => cols.reduce((sum,col) => sum + Number(b[col.key] || 0), 0) - cols.reduce((sum,col) => sum + Number(a[col.key] || 0), 0));
@@ -11342,14 +11390,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
         }
       });
       body.push(`<tr class="oil-total"><td></td><td><b>Total de Aceite Utilizado</b></td><td></td><td><b>${one(report.totals.worked_hours || report.totals.worked)}</b></td>${report.cols.map(col => `<td><b>${two(report.totals[col.key])}</b></td>`).join("")}</tr>`);
+      const oilHeaders = report.cols.map(col => `<th>${esc(col.label || "")}</th>`).join("");
       return `<div class="oil-report-header"><h3>REPORTE SEMANAL CONSUMO DE ACEITES</h3><div class="oil-days"><span>Dia Inicial:<b>${Number(String(report.start).slice(-2))}</b></span><span>Dia Final:<b>${Number(String(report.end).slice(-2))}</b></span></div></div>
-        <table class="oil-report-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs<br/>Periodo</th><th>Hrs<br/>Trab</th><th>Consumo<br/>Motor<br/>15W40</th><th>Consumo<br/>ISO 68</th><th>SAE30</th><th>SAE 50</th><th>85W140</th></tr></thead><tbody>${body.join("")}</tbody></table>`;
+        <table class="oil-report-table"><thead><tr><th># Eco</th><th>Equipo</th><th>Hrs<br/>Periodo</th><th>Hrs<br/>Trab</th>${oilHeaders}</tr></thead><tbody>${body.join("")}</tbody></table>`;
     }
     function oilTotalsForColumns(start, end, cols){
       const totals = {};
       cols.forEach(col => totals[col.key] = 0);
       (portal.captures || []).filter(row => inRange(row.work_date, start, end)).forEach(row => {
-        cols.forEach(col => totals[col.key] += Number(row[col.key] || 0));
+        if(!oilAllowedItemForCode(row.equipment_code || row.code || "")) return;
+        cols.forEach(col => totals[col.key] += oilColumnValue(row, col));
+      });
+      preventiveExecutionRows().filter(row => isPreventiveClosed(row) && inRange(row.close_date || row.service_date, start, end)).forEach(row => {
+        if(!oilAllowedItemForCode(row.equipment_code || "")) return;
+        cols.forEach(col => totals[col.key] += oilColumnValue(row, col));
       });
       return totals;
     }
