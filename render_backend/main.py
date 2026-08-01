@@ -7730,6 +7730,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </select></label>
         <label>Ano<input id="monthlyYear" type="number" min="2000" max="2100"></label>
         <button class="btn" id="monthlyPptBtn">Descargar PowerPoint</button>
+        <button class="btn secondary" id="monthlyOilExcelBtn">Aceites Excel mensual</button>
       </div>
       <div class="panel toolbar">
         <label>Fecha base semana<input id="weeklyBase" type="date"></label>
@@ -7737,6 +7738,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Hasta<input id="weeklyEnd" type="date"></label>
         <button class="btn secondary" id="weeklyApplyBtn">Aplicar semana</button>
         <button class="btn" id="weeklyPptBtn">Descargar semanal</button>
+        <button class="btn secondary" id="weeklyOilExcelBtn">Aceites Excel semanal</button>
       </div>
       <div class="panel">
         <div class="subtle-title"><h3>Reporte mensual y semanal PowerPoint</h3><span class="muted" id="monthlyStatus"></span></div>
@@ -9130,22 +9132,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const group = $("kpiGroup").value || "Todos los equipos";
       const normalized = group.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
       if(normalized.includes("ACEITE")){
-        const params = new URLSearchParams({
-          start: $("kpiStart").value || "",
-          end: $("kpiEnd").value || ""
-        });
-        const response = await fetch(`/api/oil-consumption/excel?${params.toString()}`, {headers: headers(), cache: "no-store"});
-        if(!response.ok) throw new Error(await apiError(response));
-        const blob = await response.blob();
-        const link = document.createElement("a");
-        const start = $("kpiStart").value || "inicio";
-        const end = $("kpiEnd").value || "fin";
-        link.href = URL.createObjectURL(blob);
-        link.download = `Consumos_Aceites_${start}_${end}.xlsx`;
-        document.body.appendChild(link);
-        link.click();
-        URL.revokeObjectURL(link.href);
-        link.remove();
+        await downloadOilConsumptionExcel($("kpiStart").value || "", $("kpiEnd").value || "");
         return;
       }
       if(normalized.includes("LLANTA") || normalized.includes("DIESEL")){
@@ -14392,6 +14379,27 @@ WAREHOUSE_HTML = r"""<!doctype html>
       a.click();
       URL.revokeObjectURL(a.href);
     }
+    async function downloadOilConsumptionExcel(start, end, statusId=""){
+      const statusEl = statusId ? $(statusId) : null;
+      const startText = start || "inicio";
+      const endText = end || "fin";
+      if(statusEl) statusEl.textContent = "Generando Excel de consumos de aceite...";
+      const params = new URLSearchParams({start:start || "", end:end || ""});
+      const response = await fetch(`/api/oil-consumption/excel?${params.toString()}`, {headers: headers(), cache: "no-store"});
+      if(!response.ok){
+        if(statusEl) statusEl.textContent = "";
+        throw new Error(await apiError(response));
+      }
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `Consumos_Aceites_${startText}_${endText}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      URL.revokeObjectURL(link.href);
+      link.remove();
+      if(statusEl) statusEl.textContent = `Excel de aceites generado ${startText} a ${endText}`;
+    }
     async function downloadMonthlyPowerPoint(){
       const month = $("monthlyMonth").value || String((new Date()).getMonth() + 1);
       const year = $("monthlyYear").value || String((new Date()).getFullYear());
@@ -14410,6 +14418,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
       a.click();
       URL.revokeObjectURL(a.href);
       $("monthlyStatus").textContent = "PowerPoint generado";
+    }
+    async function downloadMonthlyOilExcel(){
+      const month = Math.max(Math.min(Number($("monthlyMonth").value || (new Date()).getMonth() + 1), 12), 1);
+      const year = Number($("monthlyYear").value || (new Date()).getFullYear());
+      const start = `${year}-${String(month).padStart(2, "0")}-01`;
+      const end = toIsoDate(new Date(year, month, 0));
+      await downloadOilConsumptionExcel(start, end, "monthlyStatus");
     }
     function applyWeeklyPeriod(updateStatus=true){
       const base = $("weeklyBase").value || $("weeklyStart").value || toIsoDate(new Date());
@@ -14436,6 +14451,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       a.click();
       URL.revokeObjectURL(a.href);
       $("weeklyStatus").textContent = "PowerPoint semanal generado";
+    }
+    async function downloadWeeklyOilExcel(){
+      if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
+      await downloadOilConsumptionExcel($("weeklyStart").value, $("weeklyEnd").value, "weeklyStatus");
     }
     function renderAll(){
       renderStats();
@@ -14511,9 +14530,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("meetingModeBtn").textContent = document.body.classList.contains("meeting-mode") ? "Salir reunion" : "Modo reunion";
     });
     $("monthlyPptBtn").addEventListener("click", () => downloadMonthlyPowerPoint().catch(showError));
+    $("monthlyOilExcelBtn").addEventListener("click", () => downloadMonthlyOilExcel().catch(showError));
     $("weeklyBase").addEventListener("change", () => applyWeeklyPeriod(true));
     $("weeklyApplyBtn").addEventListener("click", () => applyWeeklyPeriod(true));
     $("weeklyPptBtn").addEventListener("click", () => downloadWeeklyPowerPoint().catch(showError));
+    $("weeklyOilExcelBtn").addEventListener("click", () => downloadWeeklyOilExcel().catch(showError));
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
