@@ -5043,15 +5043,25 @@ def monthly_machine_slide(slide, prs: Presentation, portal: dict[str, Any], grou
     ppt_add_table(slide, 0.32, 4.45, sw - 0.64, 2.55, headers, display_rows, weights, 5.4, {1})
 
 
-def monthly_tires_slide(slide, prs: Presentation, portal: dict[str, Any], month_name: str, year: int) -> None:
+def monthly_tires_slide(
+    slide,
+    prs: Presentation,
+    portal: dict[str, Any],
+    month_name: str,
+    year: int,
+    rows: list[dict[str, Any]] | None = None,
+    page_number: int = 1,
+    page_count: int = 3,
+) -> None:
     ppt_clear_slide(slide)
     tire = portal.get("tire_kpi") if isinstance(portal.get("tire_kpi"), dict) else {}
-    rows = tire.get("rows") if isinstance(tire.get("rows"), list) else []
+    all_rows = tire.get("rows") if isinstance(tire.get("rows"), list) else []
+    rows = all_rows if rows is None else rows
     summary = tire.get("summary") if isinstance(tire.get("summary"), dict) else {}
     sw, _ = ppt_slide_size(prs)
-    ppt_add_header(slide, prs, "Vida util de llantas", f"{month_name} {year}")
+    ppt_add_header(slide, prs, "Vida util de llantas", f"{month_name} {year} | Hoja {page_number} de {page_count}")
     cards = [
-        ("Llantas", str(int(parse_float(summary.get("total"), len(rows)))), ""),
+        ("Llantas", str(int(parse_float(summary.get("total"), len(all_rows)))), ""),
         ("Vida prom.", ppt_format_pct(summary.get("avg_life")), ""),
         ("Criticas", str(int(parse_float(summary.get("critical"), 0))), ""),
         ("Proximas", str(int(parse_float(summary.get("soon"), 0))), ""),
@@ -5061,7 +5071,7 @@ def monthly_tires_slide(slide, prs: Presentation, portal: dict[str, Any], month_
     for idx, (label, value, note) in enumerate(cards):
         ppt_metric_card(slide, 0.35 + idx * (card_w + 0.16), 0.82, card_w, 0.72, label, value, note, 100, False)
     table_rows = []
-    for row in rows[:18]:
+    for row in rows:
         life = parse_float(row.get("life_percent") if row.get("life_percent") is not None else row.get("tread_remaining_percent"), 0)
         table_rows.append([
             row.get("equipment_code"),
@@ -5075,7 +5085,8 @@ def monthly_tires_slide(slide, prs: Presentation, portal: dict[str, Any], month_
         ])
     headers = ["Equipo", "Llanta", "Pos.", "Hrs uso", "Hrs rest.", "% vida", "% piso", "KPI"]
     weights = [0.9, 1.5, 0.5, 0.8, 0.8, 0.7, 0.7, 0.8]
-    ppt_add_table(slide, 0.35, 1.78, sw - 0.7, 5.35, headers, table_rows, weights, 7.0, {1})
+    font_size = 7.0 if len(table_rows) <= 24 else max(5.5, 7.0 - (len(table_rows) - 24) * 0.12)
+    ppt_add_table(slide, 0.35, 1.78, sw - 0.7, 5.35, headers, table_rows, weights, font_size, {1})
 
 
 def monthly_oil_slide(slide, prs: Presentation, portal: dict[str, Any], month_name: str, year: int) -> None:
@@ -6067,6 +6078,14 @@ def add_full_slide_picture(slide, prs: Presentation, image_path: Path) -> None:
     slide.shapes.add_picture(str(image_path), 0, 0, width=prs.slide_width, height=prs.slide_height)
 
 
+def ppt_move_slide(prs: Presentation, old_index: int, new_index: int) -> None:
+    """Move a slide while preserving its relationships and template layout."""
+    slide_ids = prs.slides._sldIdLst
+    slide_id = list(slide_ids)[old_index]
+    slide_ids.remove(slide_id)
+    slide_ids.insert(new_index, slide_id)
+
+
 def slide_text(slide) -> str:
     values: list[str] = []
     for shape in iter_pptx_shapes(slide.shapes):
@@ -6134,18 +6153,20 @@ def period_report_pptx_bytes(
             replace_slide_report_pictures(prs.slides[2], tmp_dir, portal, "Equipos de Barrenacion", start, end)
         if len(prs.slides) >= 4:
             replace_slide_report_pictures(prs.slides[3], tmp_dir, portal, "Equipos de Rezagado", start, end)
-        if len(prs.slides) >= 5:
-            pictures = [shape for shape in prs.slides[4].shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
-            size = picture_pixel_size(max(pictures, key=lambda shape: shape.width * shape.height)) if pictures else (440, 534)
-            tire_path = tmp_dir / "vida_util_llantas.jpg"
-            create_monthly_tire_image(portal, tire_path, size, month_name, year)
-            replace_single_picture(prs.slides[4], tire_path)
-        if len(prs.slides) >= 6:
-            pictures = [shape for shape in prs.slides[5].shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
-            size = picture_pixel_size(max(pictures, key=lambda shape: shape.width * shape.height)) if pictures else (1056, 1374)
-            diesel_path = tmp_dir / "diesel_acumulado.jpg"
-            create_monthly_diesel_image(portal, diesel_path, size, start, end, month_name, year)
-            replace_single_picture(prs.slides[5], diesel_path)
+        tire = portal.get("tire_kpi") if isinstance(portal.get("tire_kpi"), dict) else {}
+        tire_rows = tire.get("rows") if isinstance(tire.get("rows"), list) else []
+        page_count = 3
+        rows_per_page = max(1, (len(tire_rows) + page_count - 1) // page_count)
+        tire_pages = [
+            tire_rows[index * rows_per_page:(index + 1) * rows_per_page]
+            for index in range(page_count)
+        ]
+        ppt_ensure_slide(prs, 5)
+        prs.slides.add_slide(ppt_blank_layout(prs))
+        ppt_move_slide(prs, len(prs.slides) - 1, 6)
+        tire_slides = [prs.slides[4], prs.slides[5], prs.slides[6]]
+        for page_index, (slide, page_rows) in enumerate(zip(tire_slides, tire_pages), 1):
+            monthly_tires_slide(slide, prs, portal, month_name, year, page_rows, page_index, page_count)
         replace_or_add_oil_report_slide(prs, tmp_dir, portal, start, end, month_name, year)
     stream = BytesIO()
     prs.save(stream)
@@ -7724,8 +7745,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="stat"><strong>Rezagado</strong>KPI mensual</div>
           <div class="stat"><strong>Acarreo</strong>KPI mensual</div>
           <div class="stat"><strong>Utilitario</strong>KPI mensual</div>
-          <div class="stat"><strong>Llantas</strong>Vida util</div>
-          <div class="stat"><strong>Diesel</strong>Consumo</div>
+          <div class="stat"><strong>Llantas</strong>Vida util (3 hojas)</div>
           <div class="stat"><strong>Aceites</strong>KPI mensual</div>
         </div>
         <p class="muted" id="weeklyStatus"></p>
