@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from calendar import monthrange
 import json
 import math
 import os
@@ -8,10 +9,13 @@ import re
 from copy import copy
 import tempfile
 import unicodedata
+import zipfile
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -487,6 +491,7 @@ DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
 DIESEL_LOGO_PATH = STATIC_DIR / "mga-corner-logo.jfif"
 MONTHLY_REPORT_TEMPLATE_PATH = STATIC_DIR / "monthly_report_template.pptx"
 OIL_CONSUMPTION_TEMPLATE_PATH = STATIC_DIR / "consumos_aceites_template.xlsx"
+KPI_DAILY_XLSM_TEMPLATE_PATH = STATIC_DIR / "kpi_diario_template.xlsm"
 KPI_FORMAT_PDFS = {
     "barrenacion": STATIC_DIR / "kpi_barrenacion_format.pdf",
     "rezagado": STATIC_DIR / "kpi_rezagado_format.pdf",
@@ -4387,6 +4392,878 @@ def monthly_kpi_row_objects(report: dict[str, Any]) -> list[Any]:
     return [kpi_row_obj(row) for row in report.get("rows", [])]
 
 
+KPI_DAILY_DATA_COLUMNS = {
+    "code": 2,
+    "description": 3,
+    "hi": 4,
+    "hf": 5,
+    "period": 6,
+    "mp": 8,
+    "mc": 9,
+    "stops": 11,
+    "oil_motor_15w40": 17,
+    "oil_hco_iso68": 18,
+    "oil_trans_sae30": 19,
+    "oil_85w140": 21,
+    "almo_liters": 22,
+    "coolant_liters": 23,
+    "status": 24,
+    "observations": 25,
+}
+
+
+def kpi_daily_xlsm_data_row(ws, row_idx: int) -> bool:
+    if row_idx < 8:
+        return False
+    code = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value
+    description = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value
+    period_value = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["period"]).value
+    if not code and description and isinstance(period_value, str) and "SUM(" in period_value.upper():
+        return False
+    if not code and description and not str(description).strip().upper().startswith("="):
+        text = normalized_ascii(description)
+        if any(token in text for token in ("SCOOP", "JUMBO", "TOTAL", "EQUIPO DE")):
+            return False
+    return True
+
+
+def kpi_daily_sheet_rows(ws, max_rows: int = 185) -> list[int]:
+    rows: list[int] = []
+    for row_idx in range(8, min(ws.max_row, max_rows) + 1):
+        if kpi_daily_xlsm_data_row(ws, row_idx):
+            rows.append(row_idx)
+    return rows
+
+
+def kpi_daily_equipment_rows(ws) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for row_idx in kpi_daily_sheet_rows(ws):
+        code = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value)
+        if code and not code.startswith("="):
+            mapping.setdefault(code, row_idx)
+    return mapping
+
+
+def kpi_daily_clear_row(ws, row_idx: int) -> None:
+    for col in (
+        KPI_DAILY_DATA_COLUMNS["code"],
+        KPI_DAILY_DATA_COLUMNS["description"],
+        KPI_DAILY_DATA_COLUMNS["hi"],
+        KPI_DAILY_DATA_COLUMNS["hf"],
+        KPI_DAILY_DATA_COLUMNS["period"],
+        KPI_DAILY_DATA_COLUMNS["mp"],
+        KPI_DAILY_DATA_COLUMNS["mc"],
+        KPI_DAILY_DATA_COLUMNS["stops"],
+        KPI_DAILY_DATA_COLUMNS["oil_motor_15w40"],
+        KPI_DAILY_DATA_COLUMNS["oil_hco_iso68"],
+        KPI_DAILY_DATA_COLUMNS["oil_trans_sae30"],
+        KPI_DAILY_DATA_COLUMNS["oil_85w140"],
+        KPI_DAILY_DATA_COLUMNS["almo_liters"],
+        KPI_DAILY_DATA_COLUMNS["coolant_liters"],
+        KPI_DAILY_DATA_COLUMNS["status"],
+        KPI_DAILY_DATA_COLUMNS["observations"],
+    ):
+        ws.cell(row_idx, col).value = None
+
+
+def kpi_daily_active_equipment(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    equipment = portal.get("equipment") if isinstance(portal.get("equipment"), list) else []
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in equipment:
+        if not isinstance(item, dict):
+            continue
+        code = normalize_text(item.get("code") or item.get("equipment_code"))
+        if not code or code in seen:
+            continue
+        state = normalized_ascii(item.get("status") or item.get("condition") or "")
+        if item.get("active") is False or item.get("kpi_enabled") is False or state in {"BAJA", "VENDIDO", "FUERA DE OPERACION"}:
+            continue
+        seen.add(code)
+        result.append(
+            {
+                "code": code,
+                "description": normalize_text(item.get("description") or item.get("family") or code),
+                "family": normalize_text(item.get("family") or ""),
+                "status": normalize_text(item.get("status") or item.get("condition") or "DISPONIBLE") or "DISPONIBLE",
+            }
+        )
+    return result
+
+
+def kpi_daily_date_status(portal: dict[str, Any], work_date: str, equipment_code: str) -> str:
+    code = normalize_text(equipment_code)
+    availability = portal.get("availability") if isinstance(portal.get("availability"), list) else []
+    candidates: list[dict[str, Any]] = []
+    for row in availability:
+        if not isinstance(row, dict):
+            continue
+        row_code = normalize_text(row.get("eco") or row.get("equipment_code") or row.get("code"))
+        if row_code != code:
+            continue
+        row_date = str(row.get("updated_date") or row.get("date") or row.get("work_date") or "")[:10]
+        if row_date and row_date <= work_date:
+            candidates.append(row)
+    if candidates:
+        latest = sorted(candidates, key=lambda item: str(item.get("updated_date") or item.get("date") or item.get("work_date") or ""))[-1]
+        status = kpi_status_from_condition_py(latest.get("condition") or latest.get("status"))
+        if status:
+            return status
+    equipment = next((item for item in kpi_daily_active_equipment(portal) if item["code"] == code), None)
+    return kpi_status_from_condition_py((equipment or {}).get("status")) or normalize_text((equipment or {}).get("status") or "DISPONIBLE")
+
+
+def kpi_daily_capture_rows(portal: dict[str, Any], start: str, end: str) -> list[dict[str, Any]]:
+    captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
+    rows: list[dict[str, Any]] = []
+    for item in captures:
+        if not isinstance(item, dict):
+            continue
+        work_date = str(item.get("work_date") or "")[:10]
+        if not work_date or work_date < start or work_date > end:
+            continue
+        code = normalize_text(item.get("equipment_code") or item.get("equipment"))
+        if code:
+            rows.append(item)
+    return rows
+
+
+def kpi_daily_aggregate_captures(portal: dict[str, Any], start: str, end: str) -> dict[tuple[str, str], dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for capture in kpi_daily_capture_rows(portal, start, end):
+        work_date = str(capture.get("work_date") or "")[:10]
+        code = normalize_text(capture.get("equipment_code") or capture.get("equipment"))
+        if not kpi_capture_component_matches_py(code, capture.get("component") or capture.get("component_name")):
+            continue
+        key = (work_date, code)
+        row = grouped.setdefault(
+            key,
+            {
+                "work_date": work_date,
+                "code": code,
+                "hi_values": [],
+                "hf_values": [],
+                "worked": 0.0,
+                "mp": 0.0,
+                "mc": 0.0,
+                "stops": 0.0,
+                "oil_motor_15w40": 0.0,
+                "oil_hco_iso68": 0.0,
+                "oil_trans_sae30": 0.0,
+                "oil_85w140": 0.0,
+                "almo_liters": 0.0,
+                "coolant_liters": 0.0,
+                "statuses": [],
+                "observations": [],
+            },
+        )
+        hi = parse_float(capture.get("hi") if "hi" in capture else capture.get("horometer_initial"), 0)
+        hf = parse_float(capture.get("hf") if "hf" in capture else capture.get("horometer_final"), 0)
+        if hi:
+            row["hi_values"].append(hi)
+        if hf:
+            row["hf_values"].append(hf)
+        row["worked"] += parse_float(capture.get("worked_hours"), 0)
+        row["mp"] += parse_float(capture.get("mp_hours"), 0)
+        row["mc"] += parse_float(capture.get("mc_hours"), 0)
+        row["stops"] += parse_float(capture.get("stops"), 0)
+        for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+            row[field] += parse_float(capture.get(field), 0)
+        status = normalize_text(capture.get("status"))
+        if status:
+            row["statuses"].append(status)
+        observations = normalize_text(capture.get("observations"))
+        if observations:
+            row["observations"].append(observations)
+    return grouped
+
+
+XML_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+XML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+XML_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+XML_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+XML_X14AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+XML_XR_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+XML_XR2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
+XML_XR3_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3"
+XML_X14_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+XML_XM_NS = "http://schemas.microsoft.com/office/excel/2006/main"
+ET.register_namespace("", XML_MAIN_NS)
+ET.register_namespace("r", XML_REL_NS)
+ET.register_namespace("mc", XML_MC_NS)
+ET.register_namespace("x14ac", XML_X14AC_NS)
+ET.register_namespace("xr", XML_XR_NS)
+ET.register_namespace("xr2", XML_XR2_NS)
+ET.register_namespace("xr3", XML_XR3_NS)
+ET.register_namespace("x14", XML_X14_NS)
+ET.register_namespace("xm", XML_XM_NS)
+
+
+def excel_col_to_number(col: str) -> int:
+    total = 0
+    for char in col.upper():
+        if "A" <= char <= "Z":
+            total = total * 26 + (ord(char) - 64)
+    return total
+
+
+def excel_number_to_col(num: int) -> str:
+    text = ""
+    while num:
+        num, rem = divmod(num - 1, 26)
+        text = chr(65 + rem) + text
+    return text
+
+
+def excel_cell_ref(row: int, col: int) -> str:
+    return f"{excel_number_to_col(col)}{row}"
+
+
+def excel_date_serial(value: date) -> int:
+    return (value - date(1899, 12, 30)).days
+
+
+def xlsm_xml_namespaces() -> dict[str, str]:
+    return {"main": XML_MAIN_NS, "rel": XML_PACKAGE_REL_NS, "r": XML_REL_NS}
+
+
+def xlsm_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in zf.namelist():
+        return []
+    root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+    strings: list[str] = []
+    ns = xlsm_xml_namespaces()
+    for si in root.findall("main:si", ns):
+        parts = [node.text or "" for node in si.findall(".//main:t", ns)]
+        strings.append("".join(parts))
+    return strings
+
+
+def xlsm_sheet_paths(zf: zipfile.ZipFile) -> dict[str, str]:
+    ns = xlsm_xml_namespaces()
+    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
+    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+    rel_targets: dict[str, str] = {}
+    for rel in rels.findall("rel:Relationship", ns):
+        rid = rel.attrib.get("Id", "")
+        target = rel.attrib.get("Target", "")
+        if not rid or not target:
+            continue
+        rel_targets[rid] = "xl/" + target.lstrip("/") if not target.startswith("xl/") else target
+    result: dict[str, str] = {}
+    for sheet in workbook.findall("main:sheets/main:sheet", ns):
+        name = sheet.attrib.get("name", "")
+        rid = sheet.attrib.get(f"{{{XML_REL_NS}}}id", "")
+        path = rel_targets.get(rid, "")
+        if name and path:
+            result[name] = path.replace("\\", "/")
+    return result
+
+
+def xlsm_preserve_ignorable_namespace_declarations(root: ET.Element) -> None:
+    ignorable = root.attrib.get(f"{{{XML_MC_NS}}}Ignorable", "")
+    needed = {
+        "xr2": XML_XR2_NS,
+        "xr3": XML_XR3_NS,
+    }
+    for prefix in ignorable.split():
+        uri = needed.get(prefix)
+        if uri:
+            root.set(f"xmlns:{prefix}", uri)
+
+
+def xlsm_cell_text(cell: ET.Element, shared_strings: list[str]) -> str:
+    ns = xlsm_xml_namespaces()
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        return "".join(node.text or "" for node in cell.findall(".//main:t", ns)).strip()
+    value = cell.find("main:v", ns)
+    if value is None or value.text is None:
+        return ""
+    if cell_type == "s":
+        try:
+            return shared_strings[int(value.text)].strip()
+        except Exception:
+            return ""
+    return str(value.text).strip()
+
+
+def xlsm_sheet_cells(root: ET.Element) -> dict[str, ET.Element]:
+    ns = xlsm_xml_namespaces()
+    cells: dict[str, ET.Element] = {}
+    for cell in root.findall(".//main:c", ns):
+        ref = cell.attrib.get("r")
+        if ref:
+            cells[ref] = cell
+    return cells
+
+
+def xlsm_ensure_row(sheet_data: ET.Element, row_idx: int) -> ET.Element:
+    ns = xlsm_xml_namespaces()
+    for row in sheet_data.findall("main:row", ns):
+        if int(row.attrib.get("r", "0") or 0) == row_idx:
+            return row
+    row = ET.Element(f"{{{XML_MAIN_NS}}}row", {"r": str(row_idx)})
+    inserted = False
+    for idx, existing in enumerate(list(sheet_data)):
+        if existing.tag != f"{{{XML_MAIN_NS}}}row":
+            continue
+        if int(existing.attrib.get("r", "0") or 0) > row_idx:
+            sheet_data.insert(idx, row)
+            inserted = True
+            break
+    if not inserted:
+        sheet_data.append(row)
+    return row
+
+
+def xlsm_ensure_cell(root: ET.Element, row_idx: int, col_idx: int) -> ET.Element:
+    ns = xlsm_xml_namespaces()
+    sheet_data = root.find("main:sheetData", ns)
+    if sheet_data is None:
+        sheet_data = ET.SubElement(root, f"{{{XML_MAIN_NS}}}sheetData")
+    row = xlsm_ensure_row(sheet_data, row_idx)
+    ref = excel_cell_ref(row_idx, col_idx)
+    for cell in row.findall("main:c", ns):
+        if cell.attrib.get("r") == ref:
+            return cell
+    cell = ET.Element(f"{{{XML_MAIN_NS}}}c", {"r": ref})
+    inserted = False
+    for idx, existing in enumerate(list(row)):
+        if existing.tag != f"{{{XML_MAIN_NS}}}c":
+            continue
+        existing_ref = existing.attrib.get("r", "")
+        existing_col = re.sub(r"\d+", "", existing_ref)
+        if excel_col_to_number(existing_col) > col_idx:
+            row.insert(idx, cell)
+            inserted = True
+            break
+    if not inserted:
+        row.append(cell)
+    return cell
+
+
+def xlsm_set_cell(root: ET.Element, row_idx: int, col_idx: int, value: Any) -> None:
+    cell = xlsm_ensure_cell(root, row_idx, col_idx)
+    xlsm_write_cell(cell, row_idx, col_idx, value)
+
+
+def xlsm_write_cell(cell: ET.Element, row_idx: int, col_idx: int, value: Any) -> None:
+    style = cell.attrib.get("s")
+    cell.attrib.clear()
+    cell.attrib["r"] = excel_cell_ref(row_idx, col_idx)
+    if style:
+        cell.attrib["s"] = style
+    for child in list(cell):
+        cell.remove(child)
+    if value is None or value == "":
+        return
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        cell.attrib["t"] = "n"
+        ET.SubElement(cell, f"{{{XML_MAIN_NS}}}v").text = f"{float(value):.10g}"
+        return
+    cell.attrib["t"] = "inlineStr"
+    inline = ET.SubElement(cell, f"{{{XML_MAIN_NS}}}is")
+    text = ET.SubElement(inline, f"{{{XML_MAIN_NS}}}t")
+    text.text = str(value)
+
+
+def xlsm_set_cell_cached(root: ET.Element, cells: dict[str, ET.Element], row_idx: int, col_idx: int, value: Any) -> None:
+    ref = excel_cell_ref(row_idx, col_idx)
+    cell = cells.get(ref)
+    if cell is None:
+        cell = xlsm_ensure_cell(root, row_idx, col_idx)
+        cells[ref] = cell
+    xlsm_write_cell(cell, row_idx, col_idx, value)
+
+
+def xlsm_cell_xml(ref: str, value: Any, style: str = "") -> str:
+    style_attr = f' s="{style}"' if style else ""
+    if value is None or value == "":
+        return f'<c r="{ref}"{style_attr}/>'
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f'<c r="{ref}"{style_attr}><v>{float(value):.10g}</v></c>'
+    text = xml_escape(str(value), {'"': "&quot;"})
+    preserve = ' xml:space="preserve"' if text.strip() != text else ""
+    return f'<c r="{ref}"{style_attr} t="inlineStr"><is><t{preserve}>{text}</t></is></c>'
+
+
+def xlsm_replace_cell_text(sheet_xml: str, row_idx: int, col_idx: int, value: Any) -> str:
+    ref = excel_cell_ref(row_idx, col_idx)
+    pattern = re.compile(
+        rf'<c\b(?=[^>]*\br="{re.escape(ref)}")[^>]*/>|<c\b(?=[^>]*\br="{re.escape(ref)}")[^>]*>.*?</c>',
+        re.DOTALL,
+    )
+    match = pattern.search(sheet_xml)
+    if match:
+        cell_text = match.group(0)
+        style_match = re.search(r'\bs="([^"]+)"', cell_text)
+        replacement = xlsm_cell_xml(ref, value, style_match.group(1) if style_match else "")
+        return sheet_xml[: match.start()] + replacement + sheet_xml[match.end() :]
+    row_pattern = re.compile(rf'(<row\b(?=[^>]*\br="{row_idx}")[^>]*>)(.*?)(</row>)', re.DOTALL)
+    row_match = row_pattern.search(sheet_xml)
+    if not row_match:
+        return sheet_xml
+    replacement = row_match.group(1) + row_match.group(2) + xlsm_cell_xml(ref, value) + row_match.group(3)
+    return sheet_xml[: row_match.start()] + replacement + sheet_xml[row_match.end() :]
+
+
+def build_monthly_kpi_daily_xlsm_text_fast(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
+    last_day = monthrange(year, month)[1]
+    start = date(year, month, 1).isoformat()
+    end = date(year, month, last_day).isoformat()
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9)
+    turns = parse_float(settings.get("turns_per_day"), 2)
+    daily_hours = shift_hours * turns if shift_hours and turns else 18
+    equipment = kpi_daily_active_equipment(portal)
+    equipment_by_code = {item["code"]: item for item in equipment}
+    aggregates = kpi_daily_aggregate_captures(portal, start, end)
+
+    with zipfile.ZipFile(KPI_DAILY_XLSM_TEMPLATE_PATH, "r") as zin:
+        sheet_paths = xlsm_sheet_paths(zin)
+        shared_strings = xlsm_shared_strings(zin)
+        sheet_roots: dict[str, ET.Element] = {}
+        for name, path in sheet_paths.items():
+            if name == "ASN" or name in {str(day) for day in range(1, 32)}:
+                sheet_roots[name] = ET.fromstring(zin.read(path))
+        template_row_map = xlsm_equipment_rows(sheet_roots["1"], shared_strings) if "1" in sheet_roots else {}
+        ordered_codes = [code for code in template_row_map if code in equipment_by_code]
+        ordered_seen = set(ordered_codes)
+        ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
+
+        replacements: dict[str, str] = {}
+        if "ASN" in sheet_paths:
+            path = sheet_paths["ASN"]
+            text = zin.read(path).decode("utf-8")
+            for row_idx, col_idx, value in (
+                (5, 2, excel_date_serial(date(year, month, 1))),
+                (5, 4, normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA"),
+                (5, 5, shift_hours),
+                (5, 6, turns),
+            ):
+                text = xlsm_replace_cell_text(text, row_idx, col_idx, value)
+            replacements[path] = text
+
+        for day in range(1, 32):
+            sheet_name = str(day)
+            path = sheet_paths.get(sheet_name)
+            root = sheet_roots.get(sheet_name)
+            if not path or root is None:
+                continue
+            text = zin.read(path).decode("utf-8")
+            writable_rows = xlsm_data_rows(root, shared_strings)
+            row_map = xlsm_equipment_rows(root, shared_strings)
+            if day <= last_day:
+                work_date = date(year, month, day).isoformat()
+                available_rows = [row for row in writable_rows if row not in row_map.values()]
+                used_rows: set[int] = set()
+                for code in ordered_codes:
+                    equipment_row = equipment_by_code.get(code)
+                    if not equipment_row:
+                        continue
+                    row_idx = row_map.get(code)
+                    if not row_idx:
+                        if not available_rows:
+                            break
+                        row_idx = available_rows.pop(0)
+                    if row_idx in used_rows:
+                        continue
+                    used_rows.add(row_idx)
+                    aggregate = aggregates.get((work_date, code), {})
+                    hi_values = aggregate.get("hi_values") or []
+                    hf_values = aggregate.get("hf_values") or []
+                    worked = parse_float(aggregate.get("worked"), 0)
+                    hi = min(hi_values) if hi_values else 0
+                    hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
+                    status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
+                    values = {
+                        "code": code,
+                        "description": equipment_row.get("description") or code,
+                        "hi": hi or None,
+                        "hf": hf or None,
+                        "period": daily_hours,
+                        "mp": parse_float(aggregate.get("mp"), 0) or None,
+                        "mc": parse_float(aggregate.get("mc"), 0) or None,
+                        "stops": parse_float(aggregate.get("stops"), 0) or None,
+                        "status": status or "Disponible",
+                        "observations": "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None,
+                    }
+                    for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+                        values[field] = parse_float(aggregate.get(field), 0) or None
+                    for field, value in values.items():
+                        text = xlsm_replace_cell_text(text, row_idx, KPI_DAILY_DATA_COLUMNS[field], value)
+            replacements[path] = text
+
+        output = BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+            for info in zin.infolist():
+                if info.filename == "xl/calcChain.xml":
+                    continue
+                data = replacements.get(info.filename)
+                if data is None:
+                    raw = zin.read(info.filename)
+                    if info.filename == "xl/_rels/workbook.xml.rels":
+                        text = raw.decode("utf-8")
+                        text = re.sub(r'<Relationship[^>]+Target="calcChain.xml"[^>]*/>', "", text)
+                        text = re.sub(r"<Relationship[^>]+calcChain[^>]*/>", "", text)
+                        raw = text.encode("utf-8")
+                    elif info.filename == "[Content_Types].xml":
+                        text = raw.decode("utf-8")
+                        text = text.replace(
+                            '<Override PartName="/xl/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/>',
+                            "",
+                        )
+                        raw = text.encode("utf-8")
+                    zout.writestr(info, raw)
+                else:
+                    zout.writestr(info, data.encode("utf-8"))
+    output.seek(0)
+    return output
+
+
+def xlsm_formula_text(cells: dict[str, ET.Element], row_idx: int, col_idx: int) -> str:
+    cell = cells.get(excel_cell_ref(row_idx, col_idx))
+    if cell is None:
+        return ""
+    ns = xlsm_xml_namespaces()
+    formula = cell.find("main:f", ns)
+    return formula.text or "" if formula is not None else ""
+
+
+def xlsm_data_rows(root: ET.Element, shared_strings: list[str], max_rows: int = 185) -> list[int]:
+    cells = xlsm_sheet_cells(root)
+    rows: list[int] = []
+    for row_idx in range(8, max_rows + 1):
+        code_cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["code"]))
+        desc_cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["description"]))
+        code = xlsm_cell_text(code_cell, shared_strings) if code_cell is not None else ""
+        description = xlsm_cell_text(desc_cell, shared_strings) if desc_cell is not None else ""
+        period_formula = xlsm_formula_text(cells, row_idx, KPI_DAILY_DATA_COLUMNS["period"])
+        if not code and description and "SUM(" in period_formula.upper():
+            continue
+        if not code and description:
+            text = normalized_ascii(description)
+            if any(token in text for token in ("SCOOP", "JUMBO", "TOTAL", "EQUIPO DE")):
+                continue
+        rows.append(row_idx)
+    return rows
+
+
+def xlsm_equipment_rows(root: ET.Element, shared_strings: list[str]) -> dict[str, int]:
+    cells = xlsm_sheet_cells(root)
+    mapping: dict[str, int] = {}
+    for row_idx in xlsm_data_rows(root, shared_strings):
+        cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["code"]))
+        code = normalize_text(xlsm_cell_text(cell, shared_strings) if cell is not None else "")
+        if code and not code.startswith("="):
+            mapping.setdefault(code, row_idx)
+    return mapping
+
+
+def build_monthly_kpi_daily_xlsm_fast(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
+    template_bytes = KPI_DAILY_XLSM_TEMPLATE_PATH.read_bytes()
+    last_day = monthrange(year, month)[1]
+    start = date(year, month, 1).isoformat()
+    end = date(year, month, last_day).isoformat()
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9)
+    turns = parse_float(settings.get("turns_per_day"), 2)
+    daily_hours = shift_hours * turns if shift_hours and turns else 18
+    equipment = kpi_daily_active_equipment(portal)
+    equipment_by_code = {item["code"]: item for item in equipment}
+    aggregates = kpi_daily_aggregate_captures(portal, start, end)
+
+    with zipfile.ZipFile(BytesIO(template_bytes), "r") as zin:
+        sheet_paths = xlsm_sheet_paths(zin)
+        shared_strings = xlsm_shared_strings(zin)
+        sheet_roots: dict[str, ET.Element] = {}
+        for name, path in sheet_paths.items():
+            if name == "ASN" or name in {str(day) for day in range(1, 32)}:
+                root = ET.fromstring(zin.read(path))
+                xlsm_preserve_ignorable_namespace_declarations(root)
+                sheet_roots[name] = root
+        template_row_map = xlsm_equipment_rows(sheet_roots["1"], shared_strings) if "1" in sheet_roots else {}
+        ordered_codes = [code for code in template_row_map if code in equipment_by_code]
+        ordered_seen = set(ordered_codes)
+        ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
+
+        if "ASN" in sheet_roots:
+            asn = sheet_roots["ASN"]
+            asn_cells = xlsm_sheet_cells(asn)
+            xlsm_set_cell_cached(asn, asn_cells, 5, 2, excel_date_serial(date(year, month, 1)))
+            xlsm_set_cell_cached(asn, asn_cells, 5, 4, normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA")
+            xlsm_set_cell_cached(asn, asn_cells, 5, 5, shift_hours)
+            xlsm_set_cell_cached(asn, asn_cells, 5, 6, turns)
+
+        for day in range(1, 32):
+            sheet_name = str(day)
+            root = sheet_roots.get(sheet_name)
+            if root is None:
+                continue
+            cells = xlsm_sheet_cells(root)
+            writable_rows = xlsm_data_rows(root, shared_strings)
+            row_map = xlsm_equipment_rows(root, shared_strings)
+            for row_idx in writable_rows:
+                for col in KPI_DAILY_DATA_COLUMNS.values():
+                    xlsm_set_cell_cached(root, cells, row_idx, col, None)
+            if day > last_day:
+                continue
+            work_date = date(year, month, day).isoformat()
+            available_rows = [row for row in writable_rows if row not in row_map.values()]
+            used_rows: set[int] = set()
+            for code in ordered_codes:
+                equipment_row = equipment_by_code.get(code)
+                if not equipment_row:
+                    continue
+                row_idx = row_map.get(code)
+                if not row_idx:
+                    if not available_rows:
+                        break
+                    row_idx = available_rows.pop(0)
+                if row_idx in used_rows:
+                    continue
+                used_rows.add(row_idx)
+                aggregate = aggregates.get((work_date, code), {})
+                hi_values = aggregate.get("hi_values") or []
+                hf_values = aggregate.get("hf_values") or []
+                worked = parse_float(aggregate.get("worked"), 0)
+                hi = min(hi_values) if hi_values else 0
+                hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
+                status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["code"], code)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["description"], equipment_row.get("description") or code)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["hi"], hi or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["hf"], hf or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["period"], daily_hours)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["mp"], parse_float(aggregate.get("mp"), 0) or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["mc"], parse_float(aggregate.get("mc"), 0) or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["stops"], parse_float(aggregate.get("stops"), 0) or None)
+                for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+                    xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS[field], parse_float(aggregate.get(field), 0) or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["status"], status or "Disponible")
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["observations"], "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None)
+
+        output = BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+            for info in zin.infolist():
+                data = zin.read(info.filename)
+                sheet_name = next((name for name, path in sheet_paths.items() if path == info.filename), None)
+                if sheet_name in sheet_roots:
+                    data = ET.tostring(sheet_roots[sheet_name], encoding="utf-8", xml_declaration=True)
+                zout.writestr(info, data)
+    output.seek(0)
+    return output
+
+
+def build_monthly_kpi_daily_xlsm_openpyxl(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
+    last_day = monthrange(year, month)[1]
+    start = date(year, month, 1).isoformat()
+    end = date(year, month, last_day).isoformat()
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9)
+    turns = parse_float(settings.get("turns_per_day"), 2)
+    daily_hours = shift_hours * turns if shift_hours and turns else 18
+    equipment = kpi_daily_active_equipment(portal)
+    equipment_by_code = {item["code"]: item for item in equipment}
+    aggregates = kpi_daily_aggregate_captures(portal, start, end)
+
+    wb = load_workbook(KPI_DAILY_XLSM_TEMPLATE_PATH, keep_vba=True, data_only=False)
+    if "ASN" in wb.sheetnames:
+        ws_asn = wb["ASN"]
+        ws_asn["B5"] = date(year, month, 1)
+        ws_asn["E5"] = shift_hours
+        ws_asn["F5"] = turns
+        ws_asn["D5"] = normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA"
+
+    template_row_map = kpi_daily_equipment_rows(wb["1"]) if "1" in wb.sheetnames else {}
+    ordered_codes = [code for code in template_row_map if code in equipment_by_code]
+    ordered_seen = set(ordered_codes)
+    ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
+
+    for day in range(1, 32):
+        sheet_name = str(day)
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        writable_rows = kpi_daily_sheet_rows(ws)
+        row_map = kpi_daily_equipment_rows(ws)
+        for row_idx in writable_rows:
+            kpi_daily_clear_row(ws, row_idx)
+        if day > last_day:
+            continue
+        work_date = date(year, month, day).isoformat()
+        available_rows = [row for row in writable_rows if row not in row_map.values()]
+        used_rows: set[int] = set()
+        for code in ordered_codes:
+            equipment_row = equipment_by_code.get(code)
+            if not equipment_row:
+                continue
+            row_idx = row_map.get(code)
+            if not row_idx:
+                if not available_rows:
+                    break
+                row_idx = available_rows.pop(0)
+            if row_idx in used_rows:
+                continue
+            used_rows.add(row_idx)
+            aggregate = aggregates.get((work_date, code), {})
+            hi_values = aggregate.get("hi_values") or []
+            hf_values = aggregate.get("hf_values") or []
+            worked = parse_float(aggregate.get("worked"), 0)
+            hi = min(hi_values) if hi_values else 0
+            hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
+            status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value = code
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value = equipment_row.get("description") or code
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hi"]).value = hi or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hf"]).value = hf or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["period"]).value = daily_hours
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mp"]).value = parse_float(aggregate.get("mp"), 0) or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mc"]).value = parse_float(aggregate.get("mc"), 0) or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["stops"]).value = parse_float(aggregate.get("stops"), 0) or None
+            for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+                ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS[field]).value = parse_float(aggregate.get(field), 0) or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["status"]).value = status or "Disponible"
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["observations"]).value = "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None
+
+    stream = BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    return stream
+
+
+def build_monthly_kpi_daily_xlsm(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    try:
+        return build_monthly_kpi_daily_xlsm_text_fast(portal, year, month)
+    except HTTPException:
+        raise
+    except Exception:
+        return build_monthly_kpi_daily_xlsm_openpyxl(portal, year, month)
+
+
+def parse_kpi_daily_xlsm_records(raw: bytes, year: int | None = None, month: int | None = None) -> list[dict[str, Any]]:
+    wb = load_workbook(BytesIO(raw), keep_vba=True, data_only=False)
+    base_date = None
+    if "ASN" in wb.sheetnames:
+        value = wb["ASN"]["B5"].value
+        if isinstance(value, datetime):
+            base_date = value.date()
+        elif isinstance(value, date):
+            base_date = value
+    if base_date is None:
+        if not year or not month:
+            raise HTTPException(status_code=400, detail="No se pudo detectar el mes del XLSM. Selecciona mes y anio antes de importar.")
+        base_date = date(year, month, 1)
+    year = year or base_date.year
+    month = month or base_date.month
+    last_day = monthrange(year, month)[1]
+    records: list[dict[str, Any]] = []
+    for day in range(1, last_day + 1):
+        sheet_name = str(day)
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        work_date = date(year, month, day).isoformat()
+        for row_idx in kpi_daily_sheet_rows(ws):
+            code = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value)
+            if not code or code.startswith("="):
+                continue
+            description = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value)
+            hi = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hi"]).value, 0)
+            hf = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hf"]).value, 0)
+            worked = max(hf - hi, 0) if hf and hi else 0
+            mp = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mp"]).value, 0)
+            mc = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mc"]).value, 0)
+            stops = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["stops"]).value, 0)
+            oils = {
+                field: parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS[field]).value, 0)
+                for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters")
+            }
+            status = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["status"]).value)
+            observations = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["observations"]).value)
+            has_data = any([hi, hf, worked, mp, mc, stops, *oils.values(), observations]) or (status and normalized_ascii(status) not in {"DISPONIBLE", "DISPONIBLE."})
+            if not has_data:
+                continue
+            component = kpi_required_component_py(code)
+            records.append(
+                {
+                    "mobile_id": f"xlsm-kpi-{work_date}-{code}-{component}".replace(" ", "-"),
+                    "source": "web_xlsm",
+                    "work_date": work_date,
+                    "shift": "DIA",
+                    "equipment_code": code,
+                    "equipment_description": description,
+                    "component_name": component,
+                    "component": component,
+                    "hi": hi,
+                    "hf": hf,
+                    "worked_hours": worked,
+                    "mp_hours": mp,
+                    "mc_hours": mc,
+                    "standby_hours": 0,
+                    "stops": stops,
+                    "oil_liters": sum(oils.values()),
+                    **oils,
+                    "oil_hyd_vg100": 0,
+                    "atf_liters": 0,
+                    "fault": "",
+                    "wear": "",
+                    "status": status or "DISPONIBLE",
+                    "observations": observations,
+                    "photos": [],
+                }
+            )
+    return records
+
+
+def upsert_kpi_daily_xlsm_records(session: Session, records: list[dict[str, Any]]) -> dict[str, int]:
+    created = 0
+    updated = 0
+    skipped = 0
+    for record in records:
+        stored_record = dict(record)
+        existing = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == stored_record["mobile_id"]))
+        duplicate = None if existing is not None else mobile_capture_by_merge_key(session, stored_record)
+        target = existing or duplicate
+        if target is None:
+            capture = MobileCapture(
+                mobile_id=stored_record["mobile_id"],
+                source_device="web-xlsm-kpi",
+                user_name="Importacion XLSM KPI",
+                equipment_code=str(stored_record.get("equipment_code") or ""),
+                component_name=str(stored_record.get("component_name") or ""),
+                work_date=str(stored_record.get("work_date") or ""),
+                payload_json=json_dumps(stored_record),
+            )
+            session.add(capture)
+            created += 1
+            continue
+        current_payload = json_loads(target.payload_json)
+        current_key = json.dumps(current_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) if isinstance(current_payload, dict) else ""
+        next_key = json.dumps(stored_record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if current_key == next_key:
+            skipped += 1
+            continue
+        target.mobile_id = stored_record["mobile_id"]
+        target.source_device = "web-xlsm-kpi"
+        target.user_name = "Importacion XLSM KPI"
+        target.equipment_code = str(stored_record.get("equipment_code") or "")
+        target.component_name = str(stored_record.get("component_name") or "")
+        target.work_date = str(stored_record.get("work_date") or "")
+        target.payload_json = json_dumps(stored_record)
+        target.received_at = utc_now()
+        target.desktop_imported_at = None
+        updated += 1
+    return {"created": created, "updated": updated, "skipped": skipped, "imported": len(records)}
+
+
 def portal_oil_group(eq: dict[str, Any]) -> str:
     if group_matches_py(eq, "Equipos de Barrenacion"):
         return "BARRENACION"
@@ -6579,6 +7456,65 @@ def get_oil_consumption_excel(
     )
 
 
+@app.get("/api/monthly-kpi-daily/xlsm")
+def get_monthly_kpi_daily_xlsm(
+    year: int = Query(default=0),
+    month: int = Query(default=0),
+) -> StreamingResponse:
+    now = utc_now()
+    year = year or now.year
+    month = month or now.month
+    if year < 2000 or year > 2100:
+        raise HTTPException(status_code=400, detail="Anio invalido.")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Mes invalido.")
+    with SessionLocal() as session:
+        start, end = month_bounds(year, month)
+        portal = portal_for_report_period(session, latest_portal_payload(session), start, end)
+    stream = build_monthly_kpi_daily_xlsm(portal, year, month)
+    month_name = MONTH_NAMES_ES_FULL[month - 1]
+    filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Diario_KPIs_Mantenimiento_Providencia_{month_name}_{year}.xlsm")
+    return Response(
+        content=stream.getvalue(),
+        media_type="application/vnd.ms-excel.sheet.macroEnabled.12",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )
+
+
+@app.post("/api/monthly-kpi-daily/import")
+async def import_monthly_kpi_daily_xlsm(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Archivo invalido.")
+    file_name = str(payload.get("file_name") or "").strip()
+    data = str(payload.get("data") or "")
+    if not data:
+        raise HTTPException(status_code=400, detail="Archivo vacio.")
+    if file_name and not file_name.lower().endswith((".xlsm", ".xlsx")):
+        raise HTTPException(status_code=400, detail="Solo se acepta Excel .xlsm o .xlsx.")
+    if "," in data:
+        data = data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="No se pudo decodificar el archivo.") from exc
+    year = int(parse_float(payload.get("year"), 0) or 0) or None
+    month = int(parse_float(payload.get("month"), 0) or 0) or None
+    if month is not None and (month < 1 or month > 12):
+        raise HTTPException(status_code=400, detail="Mes invalido.")
+    records = parse_kpi_daily_xlsm_records(raw, year, month)
+    if not records:
+        raise HTTPException(status_code=400, detail="No se encontraron capturas validas en las hojas diarias.")
+    with SessionLocal() as session:
+        summary = upsert_kpi_daily_xlsm_records(session, records)
+        session.commit()
+        return {"ok": True, **summary, "portal": latest_portal_payload(session)}
+
+
 @app.get("/api/kpi-format/excel")
 def get_kpi_format_excel(
     group: str = Query(default="Todos los equipos"),
@@ -7740,7 +8676,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </select></label>
         <label>Ano<input id="monthlyYear" type="number" min="2000" max="2100"></label>
         <button class="btn" id="monthlyPptBtn">Descargar PowerPoint</button>
+        <button class="btn" id="monthlyKpiXlsmBtn">KPI diario XLSM mensual</button>
         <button class="btn secondary" id="monthlyOilExcelBtn">Aceites Excel mensual</button>
+      </div>
+      <div class="panel toolbar">
+        <input id="monthlyKpiXlsmFile" type="file" accept=".xlsm,.xlsx">
+        <button class="btn secondary" id="monthlyKpiXlsmImportBtn">Importar KPI diario Excel</button>
+        <span class="muted">Importa el mismo formato XLSM para actualizar capturas del mes.</span>
       </div>
       <div class="panel toolbar">
         <label>Fecha base semana<input id="weeklyBase" type="date"></label>
@@ -14463,6 +15405,55 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const end = toIsoDate(new Date(year, month, 0));
       await downloadOilConsumptionExcel(start, end, "monthlyStatus");
     }
+    async function downloadMonthlyKpiXlsm(){
+      const month = Math.max(Math.min(Number($("monthlyMonth").value || (new Date()).getMonth() + 1), 12), 1);
+      const year = Number($("monthlyYear").value || (new Date()).getFullYear());
+      $("monthlyStatus").textContent = "Generando XLSM mensual...";
+      const params = new URLSearchParams({month:String(month), year:String(year)});
+      const response = await fetch(`/api/monthly-kpi-daily/xlsm?${params.toString()}`, {headers: headers(), cache:"no-store"});
+      if(!response.ok){
+        $("monthlyStatus").textContent = "";
+        return alert(await apiError(response));
+      }
+      const blob = await response.blob();
+      const a = document.createElement("a");
+      const label = monthNames[month - 1] || "Mes";
+      a.href = URL.createObjectURL(blob);
+      a.download = `Reporte_Diario_KPIs_Mantenimiento_Providencia_${label}_${year}.xlsm`;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(a.href);
+      a.remove();
+      $("monthlyStatus").textContent = "XLSM mensual generado";
+    }
+    async function importMonthlyKpiXlsm(){
+      if(!hasApiKey(true)) return;
+      const file = $("monthlyKpiXlsmFile").files[0];
+      if(!file) return alert("Selecciona el archivo Excel .xlsm o .xlsx.");
+      const month = Math.max(Math.min(Number($("monthlyMonth").value || (new Date()).getMonth() + 1), 12), 1);
+      const year = Number($("monthlyYear").value || (new Date()).getFullYear());
+      if(!confirm(`Se importaran capturas KPI del archivo ${file.name} para ${monthNames[month - 1] || month} ${year}. Si ya existen capturas con la misma fecha/equipo/componente, se actualizaran.`)) return;
+      $("monthlyStatus").textContent = "Importando XLSM...";
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch("/api/monthly-kpi-daily/import", {
+        method: "POST",
+        headers: headers(true),
+        body: JSON.stringify({file_name:file.name, data:String(dataUrl), month, year}),
+      });
+      if(!response.ok){
+        $("monthlyStatus").textContent = "";
+        return alert(await apiError(response));
+      }
+      const result = await response.json();
+      if(result.portal) portal = result.portal;
+      $("monthlyStatus").textContent = `Importado: ${result.imported || 0} registros (${result.created || 0} nuevos, ${result.updated || 0} actualizados, ${result.skipped || 0} sin cambio).`;
+      renderAll();
+    }
     function applyWeeklyPeriod(updateStatus=true){
       const base = $("weeklyBase").value || $("weeklyStart").value || toIsoDate(new Date());
       const [start, end] = periodRange("Semana", base);
@@ -14567,6 +15558,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("meetingModeBtn").textContent = document.body.classList.contains("meeting-mode") ? "Salir reunion" : "Modo reunion";
     });
     $("monthlyPptBtn").addEventListener("click", () => downloadMonthlyPowerPoint().catch(showError));
+    $("monthlyKpiXlsmBtn").addEventListener("click", () => downloadMonthlyKpiXlsm().catch(showError));
+    $("monthlyKpiXlsmImportBtn").addEventListener("click", () => importMonthlyKpiXlsm().catch(showError));
     $("monthlyOilExcelBtn").addEventListener("click", () => downloadMonthlyOilExcel().catch(showError));
     $("weeklyBase").addEventListener("change", () => applyWeeklyPeriod(true));
     $("weeklyApplyBtn").addEventListener("click", () => applyWeeklyPeriod(true));
