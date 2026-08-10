@@ -1,0 +1,18 @@
+{
+  "services": {
+    "mga-cloud-sync": {
+      "root": ".",
+      "framework": "fastapi",
+      "entrypoint": "api.index:app"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": {
+        "type": "service",
+        "service": "mga-cloud-sync"
+      }
+    }
+  ]
+}

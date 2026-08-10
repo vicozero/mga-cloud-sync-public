@@ -2,3 +2,11 @@ __pycache__/
 *.py[cod]
 *.db
 snapshot_backups/
+.vercel
+.env*
+
+_uv/
+pyproject.toml
+uv.lock
+.python-version
+api/.vercel/
