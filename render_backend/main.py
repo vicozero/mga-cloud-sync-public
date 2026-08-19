@@ -2972,6 +2972,42 @@ def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="API key invalida.")
 
 
+def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 600) -> None:
+    if not os.getenv("DATABASE_URL", "").strip():
+        return
+    peer = (peer or peer_from_request(request))[:120]
+    now = utc_now()
+    with engine.begin() as conn:
+        conn.execute(
+            sql_text(
+                "CREATE TABLE IF NOT EXISTS sync_throttle (peer TEXT PRIMARY KEY, last_at TIMESTAMPTZ NOT NULL)"
+            )
+        )
+        row = conn.execute(sql_text("SELECT last_at FROM sync_throttle WHERE peer = :p"), {"p": peer}).fetchone()
+        if row is not None:
+            last = row[0]
+            if isinstance(last, datetime) and (now - last).total_seconds() < min_interval_s:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Demasiadas sincronizaciones seguidas. Reintenta en unos minutos.",
+                )
+        conn.execute(
+            sql_text(
+                "INSERT INTO sync_throttle (peer, last_at) VALUES (:p, :t) "
+                "ON CONFLICT (peer) DO UPDATE SET last_at = :t"
+            ),
+            {"p": peer, "t": now},
+        )
+
+
+def peer_from_request(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd.strip():
+        return fwd.split(",")[0].strip()
+    client = request.client
+    return str(client.host if client else "unknown")
+
+
 def database_status() -> dict[str, Any]:
     return {
         "engine": engine.dialect.name,
@@ -16468,6 +16504,7 @@ async def save_filter_inventory_movement(request: Request, _auth: str | None = H
 @app.post("/api/catalog")
 async def publish_catalog(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
+    throttle_sync(request)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Catalogo invalido.")
@@ -16491,6 +16528,7 @@ async def publish_catalog(request: Request, _auth: str | None = Header(default=N
 @app.post("/api/portal/snapshot")
 async def publish_portal_snapshot(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
+    throttle_sync(request)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Portal invalido.")
@@ -17229,6 +17267,8 @@ async def desktop_capture_sync(
     if not isinstance(incoming, list):
         raise HTTPException(status_code=400, detail="records debe ser una lista.")
 
+    throttle_sync(request, peer=device_id)
+
     mappings: list[dict[str, str]] = []
     created = 0
     with SessionLocal() as session:
@@ -17307,6 +17347,7 @@ def desktop_pending(
     _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
 ) -> dict[str, Any]:
     require_api_key(_auth)
+    throttle_sync(request)
     with SessionLocal() as session:
         sort_order = MobileCapture.id.desc() if str(order or "").lower().startswith("desc") else MobileCapture.id.asc()
         query = select(MobileCapture).order_by(sort_order).limit(limit)
@@ -17343,6 +17384,7 @@ def desktop_pending(
 @app.post("/api/desktop/ack")
 async def desktop_ack(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
+    throttle_sync(request)
     payload = await request.json()
     ids = payload.get("ids") if isinstance(payload, dict) else []
     if not isinstance(ids, list):
