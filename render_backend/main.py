@@ -2972,10 +2972,11 @@ def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="API key invalida.")
 
 
-def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 600) -> None:
+def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 1800) -> None:
     if not os.getenv("DATABASE_URL", "").strip():
         return
     peer = (peer or peer_from_request(request))[:120]
+    key = f"{peer}:{request.url.path[:60]}"
     now = utc_now()
     with engine.begin() as conn:
         conn.execute(
@@ -2983,7 +2984,7 @@ def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 600) -
                 "CREATE TABLE IF NOT EXISTS sync_throttle (peer TEXT PRIMARY KEY, last_at TIMESTAMPTZ NOT NULL)"
             )
         )
-        row = conn.execute(sql_text("SELECT last_at FROM sync_throttle WHERE peer = :p"), {"p": peer}).fetchone()
+        row = conn.execute(sql_text("SELECT last_at FROM sync_throttle WHERE peer = :p"), {"p": key}).fetchone()
         if row is not None:
             last = row[0]
             if isinstance(last, datetime) and (now - last).total_seconds() < min_interval_s:
@@ -2996,7 +2997,7 @@ def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 600) -
                 "INSERT INTO sync_throttle (peer, last_at) VALUES (:p, :t) "
                 "ON CONFLICT (peer) DO UPDATE SET last_at = :t"
             ),
-            {"p": peer, "t": now},
+            {"p": key, "t": now},
         )
 
 
