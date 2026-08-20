@@ -17342,6 +17342,7 @@ async def desktop_capture_sync(
 
 @app.get("/api/desktop/pending")
 def desktop_pending(
+    request: Request,
     limit: int = Query(default=200, ge=1, le=1000),
     include_imported: bool = Query(default=False),
     order: str = Query(default="asc"),
