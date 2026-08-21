@@ -35,7 +35,10 @@ from reportlab.graphics.barcode import code128, qr
 from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, delete, func, select, text as sql_text
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -107,6 +110,42 @@ class MobilePhoto(Base):
     data_url: Mapped[str] = mapped_column(Text)
 
     capture: Mapped[MobileCapture] = relationship(back_populates="photos")
+
+
+class MobileTaskEvent(Base):
+    __tablename__ = "mga_mobile_task_event"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mobile_id: Mapped[str] = mapped_column(String(140), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(40), default="", index=True)
+    source_device: Mapped[str] = mapped_column(Text, default="")
+    user_name: Mapped[str] = mapped_column(String(160), default="")
+    equipment_code: Mapped[str] = mapped_column(String(120), default="", index=True)
+    order_number: Mapped[str] = mapped_column(String(80), default="", index=True)
+    work_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    desktop_imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    photos: Mapped[list["MobileTaskPhoto"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class MobileTaskPhoto(Base):
+    __tablename__ = "mga_mobile_task_photo"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("mga_mobile_task_event.id", ondelete="CASCADE"), index=True)
+    file_name: Mapped[str] = mapped_column(String(260), default="")
+    mime_type: Mapped[str] = mapped_column(String(120), default="image/jpeg")
+    captured_at: Mapped[str] = mapped_column(String(40), default="")
+    data_url: Mapped[str] = mapped_column(Text)
+
+    task: Mapped[MobileTaskEvent] = relationship(back_populates="photos")
 
 
 class CaptureDeletion(Base):
@@ -1909,6 +1948,372 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
     return enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload))))
+
+
+def report_pdf_text(value: Any) -> str:
+    return (
+        str(value if value is not None else "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br/>")
+    )
+
+
+def report_iso_date(value: Any, fallback: date | None = None) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text[:10], fmt).date().isoformat()
+        except ValueError:
+            pass
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", text[:10]):
+        return text[:10]
+    return (fallback or utc_now().date()).isoformat()
+
+
+def add_months(value: date, months: int) -> date:
+    month = value.month - 1 + months
+    year = value.year + month // 12
+    month = month % 12 + 1
+    day = min(value.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+    return date(year, month, day)
+
+
+def report_period_bounds(period: str = "Mes", base: str = "", start: str = "", end: str = "") -> tuple[str, str, str]:
+    today = utc_now().date()
+    if start and end:
+        start_iso = report_iso_date(start, today)
+        end_iso = report_iso_date(end, today)
+        if end_iso < start_iso:
+            start_iso, end_iso = end_iso, start_iso
+        return start_iso, end_iso, "Rango"
+    anchor = datetime.strptime(report_iso_date(base, today), "%Y-%m-%d").date()
+    key = normalized_ascii(period or "Mes")
+    if key.startswith("SEM"):
+        start_day = anchor - timedelta(days=anchor.weekday())
+        return start_day.isoformat(), (start_day + timedelta(days=6)).isoformat(), "Semana"
+    if key.startswith("ANO") or key.startswith("ANIO"):
+        return date(anchor.year, 1, 1).isoformat(), date(anchor.year, 12, 31).isoformat(), "Ano"
+    start_day = anchor.replace(day=1)
+    end_day = add_months(start_day, 1) - timedelta(days=1)
+    return start_day.isoformat(), end_day.isoformat(), "Mes"
+
+
+def report_styles():
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle("MgaTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=17, leading=19, textColor=colors.HexColor(MGA_BLUE), spaceAfter=4))
+    styles.add(ParagraphStyle("MgaSubtitle", parent=styles["Normal"], fontSize=8, leading=10, textColor=colors.HexColor("#475569")))
+    styles.add(ParagraphStyle("MgaSection", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=10.5, leading=12, textColor=colors.HexColor("#0f172a"), spaceBefore=8, spaceAfter=5))
+    styles.add(ParagraphStyle("MgaCell", parent=styles["Normal"], fontSize=6.4, leading=7.4, textColor=colors.HexColor("#172033")))
+    styles.add(ParagraphStyle("MgaHeader", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=6.1, leading=7.0, textColor=colors.white, alignment=1))
+    styles.add(ParagraphStyle("MgaMetric", parent=styles["Normal"], fontSize=7.2, leading=13.5, textColor=colors.HexColor("#0f172a"), alignment=1))
+    styles.add(ParagraphStyle("MgaNote", parent=styles["Normal"], fontSize=6.6, leading=8.0, textColor=colors.HexColor("#64748b")))
+    return styles
+
+
+def report_paragraph(value: Any, style: ParagraphStyle) -> Paragraph:
+    return Paragraph(report_pdf_text(value), style)
+
+
+def report_table(rows: list[list[Any]], widths: list[float], styles, header_bg: str = "#0b2f6f") -> Table:
+    formatted = []
+    for idx, row in enumerate(rows):
+        style = styles["MgaHeader"] if idx == 0 else styles["MgaCell"]
+        formatted.append([cell if isinstance(cell, Paragraph) else report_paragraph(cell, style) for cell in row])
+    table = Table(formatted, colWidths=widths, repeatRows=1, hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_bg)),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cbd5e1")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    return table
+
+
+def report_header_footer(title: str, period: str):
+    def draw(canvas, doc):
+        width, height = landscape(letter)
+        canvas.saveState()
+        canvas.setFillColor(colors.HexColor(MGA_BLUE))
+        canvas.rect(0, height - 0.22 * inch, width, 0.22 * inch, stroke=0, fill=1)
+        canvas.setFillColor(colors.HexColor(MGA_RED))
+        canvas.rect(width - 2.4 * inch, height - 0.22 * inch, 2.4 * inch, 0.22 * inch, stroke=0, fill=1)
+        if DIESEL_LOGO_PATH.exists():
+            try:
+                canvas.drawImage(str(DIESEL_LOGO_PATH), doc.leftMargin, height - 0.72 * inch, width=0.95 * inch, height=0.42 * inch, preserveAspectRatio=True, mask="auto")
+            except Exception:
+                pass
+        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.setFont("Helvetica", 7)
+        canvas.drawString(doc.leftMargin, 0.28 * inch, f"{title} | {period}")
+        canvas.drawRightString(width - doc.rightMargin, 0.28 * inch, f"Hoja {doc.page}")
+        canvas.restoreState()
+    return draw
+
+
+def report_metric_cards(metrics: list[tuple[str, str, str]], page_width: float, styles) -> Table:
+    cells = []
+    for label, value, note in metrics:
+        cells.append(Paragraph(f"<b>{report_pdf_text(label)}</b><br/><font size='14'>{report_pdf_text(value)}</font><br/><font size='6'>{report_pdf_text(note)}</font>", styles["MgaMetric"]))
+    while len(cells) < 4:
+        cells.append(Paragraph("", styles["MgaMetric"]))
+    table = Table([cells[:4]], colWidths=[page_width / 4] * 4, hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eef7f7")),
+        ("BOX", (0, 0), (-1, -1), 0.45, colors.HexColor("#b7c8e8")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    return table
+
+
+def portal_equipment_label_map(portal: dict[str, Any]) -> dict[str, str]:
+    result = {}
+    for eq in portal_equipment_rows(portal):
+        code = str(eq.get("code") or eq.get("equipment_code") or "").strip().upper()
+        if code:
+            result[code] = str(eq.get("description") or eq.get("family") or "")
+    return result
+
+
+def portal_pm_equipment_codes(portal: dict[str, Any]) -> set[str]:
+    pm_label_intervals = {"PM1=250", "PM2=500", "PM3=750", "PM4=1000"}
+    pm_numeric_intervals = {250.0, 500.0, 750.0, 1000.0}
+    codes: set[str] = set()
+    for item in portal.get("preventives") if isinstance(portal.get("preventives"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        svc = str(item.get("service_name") or "").strip().upper()
+        interval = parse_float(item.get("service_interval"), 0)
+        if svc in pm_label_intervals or interval in pm_numeric_intervals:
+            code = normalize_text(item.get("equipment_code"))
+            if code:
+                codes.add(code)
+    for wo in portal.get("work_orders") if isinstance(portal.get("work_orders"), list) else []:
+        if not isinstance(wo, dict):
+            continue
+        svc = str(wo.get("service_machinery") or "").strip().upper()
+        if svc in pm_label_intervals and str(wo.get("maintenance_type") or "").upper() == "PREVENTIVO":
+            code = normalize_text(wo.get("equipment_code") or wo.get("equipment_number"))
+            if code:
+                codes.add(code)
+    for rec in portal.get("preventive_execution", {}).get("records") if isinstance(portal.get("preventive_execution"), dict) else []:
+        if not isinstance(rec, dict):
+            continue
+        svc_type = str(rec.get("service_type") or "").strip().upper()
+        svc_hours = parse_float(rec.get("service_hours"), 0)
+        if svc_type in {"PM1", "PM2", "PM3", "PM4"} or svc_hours in pm_numeric_intervals:
+            code = normalize_text(rec.get("equipment_code"))
+            if code:
+                codes.add(code)
+    return codes
+
+
+def portal_filtered_captures(portal: dict[str, Any], start: str, end: str, equipment: str = "", search: str = "", pm_only: bool = False) -> list[dict[str, Any]]:
+    selected_codes = {
+        normalize_text(value)
+        for value in re.split(r"[,;|]", str(equipment or ""))
+        if normalize_text(value) and normalize_text(value) not in {"TODOS", "TODOS LOS EQUIPOS"}
+    }
+    pm_codes = portal_pm_equipment_codes(portal) if pm_only else set()
+    q = normalize_text(search)
+    rows = []
+    for row in portal.get("captures") if isinstance(portal.get("captures"), list) else []:
+        if not isinstance(row, dict) or not portal_date_in_range(row.get("work_date"), start, end):
+            continue
+        code = normalize_text(row.get("equipment_code") or row.get("code"))
+        if selected_codes and code not in selected_codes:
+            continue
+        if pm_only and code not in pm_codes:
+            continue
+        text = normalize_text(" ".join(str(row.get(key) or "") for key in ("equipment_code", "equipment_description", "component", "fault", "status", "observations")))
+        if q and q not in text:
+            continue
+        rows.append(row)
+    return sorted(rows, key=lambda item: (str(item.get("work_date") or ""), str(item.get("equipment_code") or ""), str(item.get("component") or "")))
+
+
+def service_report_pdf_bytes(portal: dict[str, Any], start: str, end: str, period_label: str, equipment: str = "", search: str = "") -> bytes:
+    stream = BytesIO()
+    doc = SimpleDocTemplate(stream, pagesize=landscape(letter), rightMargin=0.36 * inch, leftMargin=0.36 * inch, topMargin=0.55 * inch, bottomMargin=0.44 * inch)
+    styles = report_styles()
+    page_width = landscape(letter)[0] - doc.leftMargin - doc.rightMargin
+    captures = portal_filtered_captures(portal, start, end, equipment, search, pm_only=True)
+    equipment_names = portal_equipment_label_map(portal)
+    total_worked = sum(parse_float(row.get("worked_hours"), 0) for row in captures)
+    total_mp = sum(parse_float(row.get("mp_hours"), 0) for row in captures)
+    total_mc = sum(parse_float(row.get("mc_hours"), 0) for row in captures)
+    equipment_count = len({str(row.get("equipment_code") or row.get("code") or "").strip() for row in captures if str(row.get("equipment_code") or row.get("code") or "").strip()})
+    story = [
+        Paragraph("Reporte de servicios PM realizados", styles["MgaTitle"]),
+        Paragraph(f"Periodo {period_label}: {start} a {end} | Generado {utc_now().isoformat(timespec='seconds')}", styles["MgaSubtitle"]),
+        Spacer(1, 0.10 * inch),
+        report_metric_cards([
+            ("Registros", str(len(captures)), "Capturas de servicio"),
+            ("Equipos", str(equipment_count), "Equipos atendidos"),
+            ("Horas trabajadas", f"{total_worked:.1f}", "Acumulado del periodo"),
+            ("MP / MC", f"{total_mp:.1f} / {total_mc:.1f}", "Preventivo / Correctivo"),
+        ], page_width, styles),
+        Spacer(1, 0.10 * inch),
+        Paragraph("Servicios PM realizados (250H/500H/750H/1000H)", styles["MgaSection"]),
+    ]
+    rows = [["Fecha", "Equipo", "Descripcion", "Componente", "HI", "HF", "Trab.", "MP", "MC", "Estatus", "Falla / observaciones"]]
+    for row in captures:
+        code = str(row.get("equipment_code") or row.get("code") or "")
+        rows.append([
+            str(row.get("work_date") or ""),
+            code,
+            str(row.get("equipment_description") or equipment_names.get(code.upper(), "")),
+            str(row.get("component") or ""),
+            f"{parse_float(row.get('hi'), 0):.1f}" if parse_float(row.get("hi"), 0) else "",
+            f"{parse_float(row.get('hf'), 0):.1f}" if parse_float(row.get("hf"), 0) else "",
+            f"{parse_float(row.get('worked_hours'), 0):.1f}",
+            f"{parse_float(row.get('mp_hours'), 0):.1f}",
+            f"{parse_float(row.get('mc_hours'), 0):.1f}",
+            str(row.get("status") or ""),
+            " | ".join(str(row.get(key) or "") for key in ("fault", "observations") if str(row.get(key) or "").strip()),
+        ])
+    if len(rows) == 1:
+        rows.append(["", "Sin servicios registrados en el periodo seleccionado.", "", "", "", "", "", "", "", "", ""])
+    story.append(report_table(rows, [0.58 * inch, 0.63 * inch, 1.30 * inch, 1.0 * inch, 0.48 * inch, 0.48 * inch, 0.46 * inch, 0.42 * inch, 0.42 * inch, 0.72 * inch, 2.05 * inch], styles))
+    doc.build(story, onFirstPage=report_header_footer("Reporte de servicios PM", f"{start} a {end}"), onLaterPages=report_header_footer("Reporte de servicios PM", f"{start} a {end}"))
+    return stream.getvalue()
+
+
+def equipment_life_target_hours(eq: dict[str, Any]) -> float:
+    explicit = parse_float(eq.get("useful_life_hours") or eq.get("life_hours") or eq.get("target_life_hours"), 0)
+    if explicit > 0:
+        return explicit
+    code = normalized_ascii(eq.get("code") or eq.get("equipment_code"))
+    text = normalized_ascii(f"{eq.get('description') or ''} {eq.get('family') or ''}")
+    if code.startswith("ST") or "SCOOP" in text or "R1300" in text or "R1600" in text or "LH" in text:
+        return 25000
+    return 15000
+
+
+def short_month_date(value: date | None) -> str:
+    if value is None:
+        return ""
+    return f"{value.day} {MONTH_NAMES_ES_FULL[value.month - 1][:3].lower()} {value.year}"
+
+
+def equipment_life_rows(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    latest_hours: dict[str, tuple[str, float]] = {}
+    daily_average: dict[str, list[float]] = {}
+
+    def add_hour(code: Any, hours: Any, order: str) -> None:
+        key = normalize_text(code)
+        value = parse_float(hours, 0)
+        if not key or value <= 0:
+            return
+        current = latest_hours.get(key)
+        if current is None or order >= current[0]:
+            latest_hours[key] = (order, value)
+
+    for row in portal.get("captures") if isinstance(portal.get("captures"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        code = row.get("equipment_code") or row.get("code")
+        order = f"{row.get('work_date') or ''}-{str(row.get('id') or '').zfill(10)}"
+        add_hour(code, row.get("hf"), order)
+    for row in portal.get("preventives") if isinstance(portal.get("preventives"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        code = row.get("equipment_code")
+        add_hour(code, row.get("current_meter"), f"{row.get('projected_date') or ''}-preventive")
+        avg = parse_float(row.get("daily_average"), 0)
+        if code and avg > 0:
+            daily_average.setdefault(normalize_text(code), []).append(avg)
+
+    today = utc_now().date()
+    pm_codes = portal_pm_equipment_codes(portal)
+    rows = []
+    for eq in portal_equipment_rows(portal):
+        code = str(eq.get("code") or eq.get("equipment_code") or "").strip().upper()
+        if not code:
+            continue
+        if pm_codes and normalize_text(code) not in pm_codes:
+            continue
+        life_hours = equipment_life_target_hours(eq)
+        accumulated = latest_hours.get(normalize_text(code), ("", 0.0))[1]
+        remaining = max(life_hours - (accumulated % life_hours if accumulated > life_hours else accumulated), 0)
+        rehab_count = int(accumulated // life_hours) if accumulated > 0 else 0
+        avg_values = daily_average.get(normalize_text(code), [])
+        avg = sum(avg_values) / len(avg_values) if avg_values else parse_float((portal.get("settings") or {}).get("shift_hours"), 9)
+        next_date = today + timedelta(days=remaining / avg) if avg > 0 and remaining > 0 else None
+        next_rehab_hours = (rehab_count + 1) * life_hours if life_hours > 0 else 0
+        rows.append({
+            "code": code,
+            "equipment": str(eq.get("description") or eq.get("family") or ""),
+            "life_hours": life_hours,
+            "rehab_count": rehab_count,
+            "next_rehab": short_month_date(next_date),
+            "accumulated": accumulated,
+            "remaining": remaining,
+            "replacement": short_month_date(next_date),
+            "next_rehab_hours": next_rehab_hours,
+        })
+    return sorted(rows, key=lambda item: (item["remaining"], item["code"]))
+
+
+def equipment_life_report_pdf_bytes(portal: dict[str, Any]) -> bytes:
+    stream = BytesIO()
+    doc = SimpleDocTemplate(stream, pagesize=landscape(letter), rightMargin=0.28 * inch, leftMargin=0.28 * inch, topMargin=0.56 * inch, bottomMargin=0.42 * inch)
+    styles = report_styles()
+    page_width = landscape(letter)[0] - doc.leftMargin - doc.rightMargin
+    rows_data = equipment_life_rows(portal)
+    critical = sum(1 for row in rows_data if row["remaining"] <= max(row["life_hours"] * 0.10, 500))
+    story = [
+        Paragraph("Vida util de equipos PM", styles["MgaTitle"]),
+        Paragraph("Equipos con servicios PM (250H/500H/750H/1000H) ejecutados. Horas trabajadas acumuladas.", styles["MgaSubtitle"]),
+        Spacer(1, 0.10 * inch),
+        report_metric_cards([
+            ("Equipos PM", str(len(rows_data)), "Con servicios PM ejecutados"),
+            ("Criticos", str(critical), "10% o menos de vida"),
+            ("Prom. acumulado", f"{(sum(row['accumulated'] for row in rows_data) / len(rows_data)):.0f}" if rows_data else "0", "Horas"),
+            ("Actualizado", utc_now().date().isoformat(), "Fecha del reporte"),
+        ], page_width, styles),
+        Spacer(1, 0.12 * inch),
+    ]
+    rows = [["# Eco", "Equipo", "Vida util hrs", "No. de rehab.", "Prox. rehabilitacion", "Horas acum.", "Vida restante (hrs.)", "Proximo reemplazo"]]
+    for row in rows_data:
+        rows.append([
+            row["code"],
+            row["equipment"],
+            f"{row['life_hours']:.0f}",
+            str(row["rehab_count"]),
+            row["next_rehab"],
+            f"{row['accumulated']:.0f}",
+            f"{row['remaining']:.0f}",
+            row["replacement"],
+        ])
+    if len(rows) == 1:
+        rows.append(["", "Sin equipos con servicios PM registrados en el portal.", "", "", "", "", "", ""])
+    table = report_table(rows, [0.72 * inch, 1.62 * inch, 0.88 * inch, 0.82 * inch, 1.16 * inch, 0.88 * inch, 1.12 * inch, 1.10 * inch], styles, "#2f6ebd")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (2, 1), (4, -1), colors.HexColor("#d9e2f3")),
+        ("BACKGROUND", (6, 1), (7, -1), colors.HexColor("#d9e2f3")),
+        ("FONTNAME", (0, 1), (1, -1), "Helvetica-Bold"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (1, 1), (1, -1), "LEFT"),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 0.08 * inch))
+    story.append(Paragraph("Nota: solo se muestran equipos con servicios PM (250H/500H/750H/1000H) ejecutados. Si un equipo no tiene vida util manual publicada, se usa 25000 h para scoop/LH/R1300/R1600/ST y 15000 h para el resto.", styles["MgaNote"]))
+    doc.build(story, onFirstPage=report_header_footer("Vida util de equipos PM", "general"), onLaterPages=report_header_footer("Vida util de equipos PM", "general"))
+    return stream.getvalue()
 
 
 def diesel_iso_or_none(value: Any) -> str | None:
@@ -3783,6 +4188,8 @@ def portal_date_in_range(value: Any, start: str, end: str) -> bool:
 
 def portal_equipment_rows(portal: dict[str, Any]) -> list[dict[str, Any]]:
     rows = portal.get("equipment") if isinstance(portal, dict) else []
+    if not isinstance(rows, list):
+        rows = []
     active_states = {"ACTIVO", "TALLER", "STAND BY", "DISPONIBLE", "OPERATIVA"}
     inactive_states = {"BAJA", "INACTIVO", "INACTIVA", "VENDIDO", "VENDIDA", "FUERA DE FLOTA"}
     clean_rows = []
@@ -7699,6 +8106,46 @@ def get_weekly_report_powerpoint(
     )
 
 
+@app.get("/api/service-report/pdf")
+def get_service_report_pdf(
+    period: str = Query(default="Mes"),
+    base: str = Query(default=""),
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    equipment: str = Query(default=""),
+    search: str = Query(default=""),
+) -> StreamingResponse:
+    start_iso, end_iso, period_label = report_period_bounds(period, base, start, end)
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+    data = service_report_pdf_bytes(portal, start_iso, end_iso, period_label, equipment, search)
+    filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Servicios_PM_{period_label}_{start_iso}_a_{end_iso}.pdf")
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )
+
+
+@app.get("/api/equipment-life/pdf")
+def get_equipment_life_report_pdf() -> StreamingResponse:
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+    data = equipment_life_report_pdf_bytes(portal)
+    filename = f"Vida_Util_Equipos_PM_{utc_now().date().isoformat()}.pdf"
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )
+
+
 @app.get("/api/hose-changes")
 def get_hose_changes(
     response: Response,
@@ -8779,8 +9226,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Periodo<select id="prPeriod"><option>Mes</option><option>Semana</option><option>Año</option></select></label>
         <label>Fecha base<input id="prBase" type="date"></label>
         <label>Equipo<select id="prEquipment"></select></label>
+        <label>Equipos reporte<select id="serviceReportEquipment" multiple size="4"></select></label>
         <label>Buscar<input id="prSearch" placeholder="Equipo, componente, estado"></label>
         <button class="btn" id="renderPrBtn">Consultar</button>
+        <button class="btn secondary" id="servicePdfBtn">PDF servicios</button>
       </div>
       <div class="panel">
         <div class="subtle-title"><h3 id="prTitle">Preventivos programados</h3><span class="muted" id="prCount"></span></div>
@@ -9338,6 +9787,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Buscar<input id="filterSearch" placeholder="No. parte, descripcion"></label>
         <label>Estado<select id="statusSelect"><option value="">Todos</option><option>Disponible</option><option>Faltante</option><option>Sin inventario</option></select></label>
         <button class="btn" id="refreshBtn">Actualizar</button>
+        <button class="btn secondary" id="lifePdfBtn">Vida util PDF</button>
       </div>
       <div class="table-wrap"><table id="filtersTable"></table></div>
     </section>
@@ -11773,6 +12223,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       select.innerHTML = `<option value="">${esc(allLabel)}</option>` + options.map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join("");
       if([...select.options].some(opt => opt.value === current)) select.value = current;
     }
+    function setMultiOptions(selectId, options){
+      const select = $(selectId);
+      const current = new Set([...select.selectedOptions].map(opt => opt.value));
+      select.innerHTML = options.map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join("");
+      [...select.options].forEach(opt => { opt.selected = current.has(opt.value); });
+    }
     function allPortalEquipment(){
       const rows = Array.isArray(portal.equipment) ? portal.equipment : [];
       return rows.filter(e => e && (e.code || e.equipment_code));
@@ -11927,6 +12383,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       setOptions("fichaEquipment", equipmentOptions, "Selecciona");
       if(!$("fichaEquipment").value && equipmentOptions.length) $("fichaEquipment").value = equipmentOptions[0].value;
       setOptions("prEquipment", equipmentOptions, "Todos");
+      setMultiOptions("serviceReportEquipment", equipmentOptions);
       setOptions("manualPrEquipment", serviceEquipmentOptions, "Selecciona");
       setOptions("srvEquipment", equipmentOptions, "Todos");
       setOptions("prevExecEquipment", serviceEquipmentOptions, "Selecciona");
@@ -15435,6 +15892,32 @@ WAREHOUSE_HTML = r"""<!doctype html>
       URL.revokeObjectURL(a.href);
       $("monthlyStatus").textContent = "PowerPoint generado";
     }
+    async function downloadServicePdf(){
+      const params = new URLSearchParams({
+        period: $("prPeriod").value || "Mes",
+        base: $("prBase").value || toIsoDate(new Date()),
+        equipment: [...$("serviceReportEquipment").selectedOptions].map(opt => opt.value).join(","),
+        search: $("prSearch").value || ""
+      });
+      const r = await fetch(`/api/service-report/pdf?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Reporte_Servicios_${$("prPeriod").value || "Mes"}_${$("prBase").value || toIsoDate(new Date())}.pdf`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+    async function downloadLifePdf(){
+      const r = await fetch("/api/equipment-life/pdf", {headers: headers(), cache:"no-store"});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Vida_Util_Equipos_${toIsoDate(new Date())}.pdf`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
     async function downloadMonthlyOilExcel(){
       const month = Math.max(Math.min(Number($("monthlyMonth").value || (new Date()).getMonth() + 1), 12), 1);
       const year = Number($("monthlyYear").value || (new Date()).getFullYear());
@@ -15605,6 +16088,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["prPeriod","prBase","prEquipment"].forEach(id => $(id).addEventListener("change", renderPreventives));
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
+    $("servicePdfBtn").addEventListener("click", () => downloadServicePdf().catch(showError));
     $("manualPrService").addEventListener("change", () => {
       const hours = preventiveServiceHours[$("manualPrService").value] || 250;
       const last = Number($("manualPrLast").value || 0);
@@ -15750,6 +16234,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("movementBtn").scrollIntoView({behavior:"smooth", block:"center"});
     }));
     $("refreshBtn").addEventListener("click", () => load().catch(showError));
+    $("lifePdfBtn").addEventListener("click", () => downloadLifePdf().catch(showError));
     $("exportBtn").addEventListener("click", async () => {
       const r = await fetch("/api/filter-inventory/export", {headers: headers()});
       if(!r.ok) return alert(await apiError(r));
@@ -16986,6 +17471,61 @@ async def delete_tire_tracking_event(request: Request, _auth: str | None = Heade
         return {"ok": True, "portal": latest_portal_payload(session)}
 
 
+def save_mobile_task_event(session: Session, record: dict[str, Any], source_device: str, user_name: str) -> dict[str, Any]:
+    mobile_id = str(record.get("mobile_id") or "").strip()
+    if not mobile_id:
+        raise ValueError("Evento sin mobile_id.")
+    existing = session.scalar(select(MobileTaskEvent).where(MobileTaskEvent.mobile_id == mobile_id))
+    if existing is not None:
+        return {
+            "mobile_id": mobile_id,
+            "task_event_id": existing.id,
+            "created": False,
+            "desktop_imported": existing.desktop_imported_at is not None,
+            "evidence": 0,
+        }
+    kind = str(record.get("kind") or "").strip().upper()
+    photos = record.get("photos") or []
+    stored_record = dict(record)
+    stored_record["photos"] = []
+    task_event = MobileTaskEvent(
+        mobile_id=mobile_id,
+        kind=kind,
+        source_device=source_device,
+        user_name=str(record.get("user_name") or user_name),
+        equipment_code=str(record.get("equipment_code") or ""),
+        order_number=str(record.get("order_number") or ""),
+        work_date=str(record.get("work_date") or ""),
+        payload_json=json_dumps(stored_record),
+    )
+    session.add(task_event)
+    session.flush()
+    evidence_count = 0
+    for photo in photos if isinstance(photos, list) else []:
+        if not isinstance(photo, dict):
+            continue
+        data_url = str(photo.get("data") or "")
+        if not data_url:
+            continue
+        session.add(
+            MobileTaskPhoto(
+                task_id=task_event.id,
+                file_name=str(photo.get("name") or f"{mobile_id}.jpg")[:260],
+                mime_type=str(photo.get("mime_type") or "image/jpeg")[:120],
+                captured_at=str(photo.get("captured_at") or ""),
+                data_url=data_url,
+            )
+        )
+        evidence_count += 1
+    return {
+        "mobile_id": mobile_id,
+        "task_event_id": task_event.id,
+        "created": True,
+        "desktop_imported": False,
+        "evidence": evidence_count,
+    }
+
+
 @app.post("/api/sync")
 async def sync_mobile_records(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
@@ -17011,6 +17551,24 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 mobile_id = str(record.get("mobile_id") or "").strip()
                 if not mobile_id:
                     raise ValueError("Captura sin mobile_id.")
+                record_kind = str(record.get("kind") or "").strip().upper()
+                if record_kind in {"FALLA", "TAREA_CIERRE", "CHECKLIST"}:
+                    task_result = save_mobile_task_event(session, record, source_device, user_name)
+                    if task_result.get("created"):
+                        created += 1
+                    else:
+                        skipped += 1
+                    results.append(
+                        {
+                            "mobile_id": mobile_id,
+                            "task_event_id": task_result.get("task_event_id"),
+                            "created": bool(task_result.get("created")),
+                            "stored": True,
+                            "desktop_imported": bool(task_result.get("desktop_imported")),
+                            "evidence": int(task_result.get("evidence") or 0),
+                        }
+                    )
+                    continue
                 photos = record.get("photos") or []
                 stored_record = dict(record)
                 stored_record["photos"] = []
