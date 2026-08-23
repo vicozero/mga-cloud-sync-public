@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-from calendar import monthrange
 import json
 import math
 import os
@@ -9,13 +8,10 @@ import re
 from copy import copy
 import tempfile
 import unicodedata
-import zipfile
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree as ET
-from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,7 +35,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, delete, func, select, text as sql_text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, and_, case, create_engine, delete, func, select, text as sql_text
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
@@ -110,42 +106,6 @@ class MobilePhoto(Base):
     data_url: Mapped[str] = mapped_column(Text)
 
     capture: Mapped[MobileCapture] = relationship(back_populates="photos")
-
-
-class MobileTaskEvent(Base):
-    __tablename__ = "mga_mobile_task_event"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    mobile_id: Mapped[str] = mapped_column(String(140), unique=True, index=True)
-    kind: Mapped[str] = mapped_column(String(40), default="", index=True)
-    source_device: Mapped[str] = mapped_column(Text, default="")
-    user_name: Mapped[str] = mapped_column(String(160), default="")
-    equipment_code: Mapped[str] = mapped_column(String(120), default="", index=True)
-    order_number: Mapped[str] = mapped_column(String(80), default="", index=True)
-    work_date: Mapped[str] = mapped_column(String(20), default="", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    desktop_imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    payload_json: Mapped[str] = mapped_column(Text, default="{}")
-
-    photos: Mapped[list["MobileTaskPhoto"]] = relationship(
-        back_populates="task",
-        cascade="all, delete-orphan",
-        lazy="selectin",
-    )
-
-
-class MobileTaskPhoto(Base):
-    __tablename__ = "mga_mobile_task_photo"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    task_id: Mapped[int] = mapped_column(ForeignKey("mga_mobile_task_event.id", ondelete="CASCADE"), index=True)
-    file_name: Mapped[str] = mapped_column(String(260), default="")
-    mime_type: Mapped[str] = mapped_column(String(120), default="image/jpeg")
-    captured_at: Mapped[str] = mapped_column(String(40), default="")
-    data_url: Mapped[str] = mapped_column(Text)
-
-    task: Mapped[MobileTaskEvent] = relationship(back_populates="photos")
 
 
 class CaptureDeletion(Base):
@@ -450,9 +410,80 @@ class DieselDeletedDay(Base):
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class LubricantProduct(Base):
+    __tablename__ = "mga_lubricant_product"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), default="", unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), default="")
+    unit: Mapped[str] = mapped_column(String(20), default="L")
+    presentation: Mapped[str] = mapped_column(String(40), default="Tambor")
+    liters_per_unit: Mapped[float] = mapped_column(Float, default=208)
+    min_stock: Mapped[float] = mapped_column(Float, default=0)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class LubricantMovement(Base):
+    __tablename__ = "mga_lubricant_movement"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    movement_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    movement_type: Mapped[str] = mapped_column(String(30), default="ENTRADA", index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("mga_lubricant_product.id"), index=True)
+    liters: Mapped[float] = mapped_column(Float, default=0)
+    equipment: Mapped[str] = mapped_column(String(120), default="", index=True)
+    reference: Mapped[str] = mapped_column(String(180), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(160), default="")
+    source: Mapped[str] = mapped_column(String(80), default="web")
+    external_id: Mapped[str] = mapped_column(String(180), default="", index=True)
+    presentation: Mapped[str] = mapped_column(String(40), default="")
+    units: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+LUBRICANT_PRESENTATIONS_WEB = [
+    ("Tambor", 208),
+    ("Cubeta", 19),
+    ("Garrafa", 20),
+    ("Litro", 1),
+    ("Grasa", 1),
+]
+LUBRICANT_PRESENTATION_FACTORS = {name.upper(): float(factor) for name, factor in LUBRICANT_PRESENTATIONS_WEB}
+
+
 engine = create_engine(database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
+
+_throttle_memory: dict[str, datetime] = {}
+
+
+def peer_from_request(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for") or ""
+    ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
+    return ip[:180] or "unknown"
+
+
+def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 1800) -> None:
+    key = f"{peer or peer_from_request(request)}:{request.url.path}"
+    now = datetime.now(timezone.utc)
+    last = _throttle_memory.get(key)
+    if last is not None and (now - last).total_seconds() < min_interval_s:
+        raise HTTPException(status_code=429, detail="Limite de sincronizacion alcanzado. Intenta mas tarde.")
+    with engine.begin() as conn:
+        conn.execute(sql_text("CREATE TABLE IF NOT EXISTS sync_throttle (peer TEXT PRIMARY KEY, last_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"))
+        row = conn.execute(sql_text("SELECT last_at FROM sync_throttle WHERE peer = :p"), {"p": key}).scalar()
+        if row is not None and (now - row).total_seconds() < min_interval_s:
+            raise HTTPException(status_code=429, detail="Limite de sincronizacion alcanzado. Intenta mas tarde.")
+        conn.execute(
+            sql_text("INSERT INTO sync_throttle (peer, last_at) VALUES (:p, NOW()) ON CONFLICT (peer) DO UPDATE SET last_at = NOW()"),
+            {"p": key},
+        )
+    _throttle_memory[key] = now
 
 
 def ensure_cloud_schema() -> None:
@@ -471,6 +502,15 @@ def ensure_cloud_schema() -> None:
     hose_columns = {
         "external_id": "VARCHAR(180) DEFAULT ''",
     }
+    lubricant_movement_columns = {
+        "source": "VARCHAR(80) DEFAULT 'web'",
+        "external_id": "VARCHAR(180) DEFAULT ''",
+        "equipment": "VARCHAR(120) DEFAULT ''",
+        "reference": "VARCHAR(180) DEFAULT ''",
+        "created_by": "VARCHAR(160) DEFAULT ''",
+        "presentation": "VARCHAR(40) DEFAULT ''",
+        "units": "FLOAT DEFAULT 0",
+    }
     if database_url().startswith("sqlite"):
         try:
             with engine.begin() as conn:
@@ -485,6 +525,10 @@ def ensure_cloud_schema() -> None:
                 for column, definition in hose_columns.items():
                     if column not in hose_existing:
                         conn.execute(sql_text(f"ALTER TABLE mga_hose_change ADD COLUMN {column} {definition}"))
+                lub_existing = {row[1] for row in conn.execute(sql_text("PRAGMA table_info(mga_lubricant_movement)")).fetchall()}
+                for column, definition in lubricant_movement_columns.items():
+                    if lub_existing and column not in lub_existing:
+                        conn.execute(sql_text(f"ALTER TABLE mga_lubricant_movement ADD COLUMN {column} {definition}"))
         except Exception:
             pass
         return
@@ -496,13 +540,15 @@ def ensure_cloud_schema() -> None:
                 conn.execute(sql_text(f"ALTER TABLE mga_requisition ADD COLUMN IF NOT EXISTS {column} {pg_definition}"))
             for column, definition in hose_columns.items():
                 conn.execute(sql_text(f"ALTER TABLE mga_hose_change ADD COLUMN IF NOT EXISTS {column} {definition}"))
+            for column, definition in lubricant_movement_columns.items():
+                conn.execute(sql_text(f"ALTER TABLE mga_lubricant_movement ADD COLUMN IF NOT EXISTS {column} {definition}"))
     except Exception:
         pass
 
 
 ensure_cloud_schema()
 
-app = FastAPI(title="MGA Cloud Sync", version="1.4.29")
+app = FastAPI(title="MGA Cloud Sync", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -530,7 +576,6 @@ DIESEL_TEMPLATE_PATH = STATIC_DIR / "diesel_control_template.xlsx"
 DIESEL_LOGO_PATH = STATIC_DIR / "mga-corner-logo.jfif"
 MONTHLY_REPORT_TEMPLATE_PATH = STATIC_DIR / "monthly_report_template.pptx"
 OIL_CONSUMPTION_TEMPLATE_PATH = STATIC_DIR / "consumos_aceites_template.xlsx"
-KPI_DAILY_XLSM_TEMPLATE_PATH = STATIC_DIR / "kpi_diario_template.xlsm"
 KPI_FORMAT_PDFS = {
     "barrenacion": STATIC_DIR / "kpi_barrenacion_format.pdf",
     "rezagado": STATIC_DIR / "kpi_rezagado_format.pdf",
@@ -548,6 +593,18 @@ REQUISITION_UNITS = [
     "CUBETA", "BOTE", "LATA", "CAJA", "PAQUETE", "BOLSA", "MTS", "M2", "M3",
     "KG", "GR", "TON", "ROLLO",
 ]
+
+try:
+    from api_v2 import api_router
+    app.include_router(api_router)
+except Exception:
+    pass
+
+try:
+    from phase2 import phase2_router
+    app.include_router(phase2_router)
+except Exception:
+    pass
 
 
 def json_dumps(value: Any) -> str:
@@ -605,6 +662,484 @@ def normalize_capture_shift_py(value: Any) -> str:
 def normalize_part_key(value: Any) -> str:
     text = normalize_text(value)
     return "".join(ch for ch in text if ch.isalnum())
+
+
+LUBRICANT_SEED_CATALOG = [
+    {"code": "LIT-001", "name": "Aceite motor 15W40", "presentation": "Tambor", "liters_per_unit": 208, "min_stock": 416},
+    {"code": "LIT-002", "name": "Aceite transmision SAE 30", "presentation": "Tambor", "liters_per_unit": 208, "min_stock": 208},
+    {"code": "LIT-003", "name": "ALMO", "presentation": "Cubeta", "liters_per_unit": 19, "min_stock": 60},
+    {"code": "LIT-004", "name": "Aceite Rarus VG 100", "presentation": "Garrafa", "liters_per_unit": 20, "min_stock": 60},
+    {"code": "LIT-005", "name": "Aceite diferencial 85W140", "presentation": "Tambor", "liters_per_unit": 208, "min_stock": 208},
+    {"code": "LIT-006", "name": "Aceite mandos SAE 50", "presentation": "Cubeta", "liters_per_unit": 19, "min_stock": 100},
+    {"code": "LIT-007", "name": "Anticongelante", "presentation": "Garrafa", "liters_per_unit": 20, "min_stock": 60},
+    {"code": "LIT-008", "name": "Aceite hidraulico ISO 68", "presentation": "Tambor", "liters_per_unit": 208, "min_stock": 416},
+]
+LUBRICANT_MOVEMENT_TYPES = ("ENTRADA", "SALIDA", "AJUSTE")
+LUBRICANT_CAPTURE_OIL_CODES = {
+    "oil_motor_15w40": "LIT-001",
+    "oil_trans_sae30": "LIT-002",
+    "atf_liters": "LIT-002",
+    "almo_liters": "LIT-003",
+    "oil_hyd_vg100": "LIT-004",
+    "oil_85w140": "LIT-005",
+    "oil_sae50": "LIT-006",
+    "coolant_liters": "LIT-007",
+    "oil_hco_iso68": "LIT-008",
+}
+LUBRICANT_UNCLASSIFIED_CODE = "OIL_LITERS"
+_LUBRICANT_CAPTURE_CACHE: dict[str, Any] = {"key": None, "data": {}, "at": 0.0}
+
+
+def ensure_lubricant_catalog(session: Session) -> None:
+    existing = {row.code for row in session.scalars(select(LubricantProduct)).all()}
+    changed = False
+    for idx, item in enumerate(LUBRICANT_SEED_CATALOG):
+        if item["code"] in existing:
+            continue
+        session.add(
+            LubricantProduct(
+                code=item["code"],
+                name=item["name"],
+                unit="L",
+                presentation=item["presentation"],
+                liters_per_unit=item["liters_per_unit"],
+                min_stock=item["min_stock"],
+                sort_order=(idx + 1) * 10,
+            )
+        )
+        changed = True
+    if changed:
+        session.commit()
+
+
+def lubricant_bounds(start: str, end: str) -> tuple[str, str]:
+    start = str(start or "").strip() or "0001-01-01"
+    end = str(end or "").strip() or "9999-12-31"
+    if len(start) < 10 or len(end) < 10:
+        start, end = "0001-01-01", "9999-12-31"
+    if end < start:
+        start, end = end, start
+    return start[:10], end[:10]
+
+
+def lubricant_capture_consumption_by_date(session: Session) -> dict[str, dict[str, float]]:
+    """Consumo diario de aceites calculado desde las bitacoras del portal (fecha -> codigo -> litros)."""
+    try:
+        snapshot_updated = session.scalar(select(PortalSnapshot.updated_at).where(PortalSnapshot.name == "default"))
+        mobile_stats = session.execute(select(func.max(MobileCapture.received_at), func.count(MobileCapture.id))).one()
+    except Exception:
+        return _LUBRICANT_CAPTURE_CACHE["data"] or {}
+    cache_key = (
+        str(snapshot_updated or ""),
+        str(mobile_stats[0] or ""),
+        int(mobile_stats[1] or 0),
+    )
+    now_ts = datetime.now().timestamp()
+    if _LUBRICANT_CAPTURE_CACHE["key"] == cache_key and now_ts - float(_LUBRICANT_CAPTURE_CACHE["at"]) < 30.0:
+        return _LUBRICANT_CAPTURE_CACHE["data"]
+    try:
+        portal = latest_portal_payload(session)
+        captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
+    except Exception:
+        return _LUBRICANT_CAPTURE_CACHE["data"] or {}
+    result: dict[str, dict[str, float]] = {}
+    for capture in captures:
+        if not isinstance(capture, dict):
+            continue
+        work_date = str(capture.get("work_date") or "")[:10]
+        if len(work_date) != 10 or work_date[4] != "-" or work_date[7] != "-":
+            continue
+        detail: dict[str, float] = {}
+        for column, code in LUBRICANT_CAPTURE_OIL_CODES.items():
+            liters = max(parse_float(capture.get(column), 0), 0)
+            if liters > 0:
+                detail[code] = detail.get(code, 0.0) + liters
+        if detail:
+            by_code = detail
+        else:
+            unclassified = max(parse_float(capture.get("oil_liters"), 0), 0)
+            if unclassified <= 0:
+                continue
+            by_code = {LUBRICANT_UNCLASSIFIED_CODE: unclassified}
+        day = result.setdefault(work_date, {})
+        for code, liters in by_code.items():
+            day[code] = round(day.get(code, 0.0) + liters, 3)
+    _LUBRICANT_CAPTURE_CACHE.update({"key": cache_key, "data": result, "at": now_ts})
+    return result
+
+
+def lubricant_capture_consumption_totals(
+    consumption_by_date: dict[str, dict[str, float]], range_start: str, range_end: str
+) -> tuple[dict[str, float], dict[str, float]]:
+    totals: dict[str, float] = {}
+    period: dict[str, float] = {}
+    for day, by_code in consumption_by_date.items():
+        for code_key, liters in by_code.items():
+            totals[code_key] = totals.get(code_key, 0.0) + liters
+            if range_start <= day <= range_end:
+                period[code_key] = period.get(code_key, 0.0) + liters
+    return totals, period
+
+
+def lubricant_summary_payload(session: Session, start: str = "", end: str = "") -> list[dict[str, Any]]:
+    ensure_lubricant_catalog(session)
+    range_start, range_end = lubricant_bounds(start, end)
+    rows = session.scalars(select(LubricantProduct).where(LubricantProduct.active == 1).order_by(LubricantProduct.sort_order, LubricantProduct.id)).all()
+    if not rows:
+        return []
+    stock_rows = session.execute(
+        select(
+            LubricantMovement.product_id,
+            func.sum(LubricantMovement.liters),
+        )
+        .where(LubricantMovement.movement_type != "CONSUMO_BITACORA")
+        .group_by(LubricantMovement.product_id)
+    ).all()
+    stock_by_product = {int(row[0]): float(row[1] or 0) for row in stock_rows}
+    period_rows = session.execute(
+        select(
+            LubricantMovement.product_id,
+            func.sum(case((LubricantMovement.liters > 0, LubricantMovement.liters), else_=0)),
+            func.sum(case((LubricantMovement.liters < 0, -LubricantMovement.liters), else_=0)),
+        )
+        .where(
+            LubricantMovement.movement_type != "CONSUMO_BITACORA",
+            LubricantMovement.movement_date.between(range_start, range_end),
+        )
+        .group_by(LubricantMovement.product_id)
+    ).all()
+    period_by_product = {int(row[0]): (float(row[1] or 0), float(row[2] or 0)) for row in period_rows}
+    consumed_total_by_code, consumed_period_by_code = lubricant_capture_consumption_totals(
+        lubricant_capture_consumption_by_date(session), range_start, range_end
+    )
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        entries, manual_outputs = period_by_product.get(int(row.id), (0.0, 0.0))
+        code_key = str(row.code or "").strip().upper()
+        consumed_bitacora_total = round(consumed_total_by_code.get(code_key, 0.0), 2)
+        consumed_bitacora = round(consumed_period_by_code.get(code_key, 0.0), 2)
+        salidas_manuales = round(manual_outputs, 2)
+        stock_actual = round(stock_by_product.get(int(row.id), 0.0) - consumed_bitacora_total, 2)
+        payload.append(
+            {
+                "id": int(row.id),
+                "code": row.code,
+                "name": row.name,
+                "unit": row.unit or "L",
+                "presentation": row.presentation,
+                "liters_per_unit": float(row.liters_per_unit or 1),
+                "min_stock": float(row.min_stock or 0),
+                "stock_actual": stock_actual,
+                "entradas_periodo": round(entries, 2),
+                "consumido_periodo": round(consumed_bitacora + salidas_manuales, 2),
+                "consumido_bitacora": consumed_bitacora,
+                "salidas_manuales": salidas_manuales,
+                "alerta_stock_bajo": bool(float(row.min_stock or 0) > 0 and stock_actual <= float(row.min_stock or 0)),
+            }
+        )
+    return payload
+
+
+def lubricant_movements_payload(session: Session, start: str = "", end: str = "", code: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    max_rows = max(1, min(int(limit), 500))
+    query = (
+        select(LubricantMovement, LubricantProduct)
+        .join(LubricantProduct, LubricantMovement.product_id == LubricantProduct.id)
+        .where(LubricantMovement.movement_type != "CONSUMO_BITACORA")
+        .order_by(LubricantMovement.movement_date.desc(), LubricantMovement.id.desc())
+        .limit(max_rows)
+    )
+    range_start, range_end = lubricant_bounds(start, end)
+    if start or end:
+        query = query.where(LubricantMovement.movement_date.between(range_start, range_end))
+    code_key = normalize_text(code)
+    if code_key and code_key != "TODOS":
+        query = query.where(func.upper(LubricantProduct.code) == code_key)
+    result = session.execute(query).all()
+    items = [
+        {
+            "id": int(movement.id),
+            "movement_date": movement.movement_date,
+            "movement_type": movement.movement_type,
+            "product_id": int(movement.product_id),
+            "product_code": product.code,
+            "product_name": product.name,
+            "unit": product.unit or "L",
+            "liters": float(movement.liters or 0),
+            "equipment": movement.equipment,
+            "reference": movement.reference,
+            "notes": movement.notes,
+            "created_by": movement.created_by,
+            "presentation": getattr(movement, "presentation", "") or "",
+            "units": float(getattr(movement, "units", 0) or 0),
+            "created_at": movement.created_at.isoformat(timespec="seconds") if movement.created_at else "",
+        }
+        for movement, product in result
+    ]
+    consumption_by_date = lubricant_capture_consumption_by_date(session)
+    if consumption_by_date:
+        products_by_code = {
+            str(row.code or "").strip().upper(): row
+            for row in session.scalars(select(LubricantProduct)).all()
+        }
+        scope_code = "" if not code_key or code_key == "TODOS" else code_key
+        for day in sorted(consumption_by_date):
+            if (start or end) and not (range_start <= day <= range_end):
+                continue
+            for product_code, liters in sorted(consumption_by_date[day].items()):
+                if scope_code and product_code != scope_code:
+                    continue
+                product = products_by_code.get(product_code)
+                items.append(
+                    {
+                        "id": 0,
+                        "movement_date": day,
+                        "movement_type": "CONSUMO_BITACORA",
+                        "product_id": int(product.id) if product is not None else 0,
+                        "product_code": product_code,
+                        "product_name": str(product.name) if product is not None else product_code,
+                        "unit": str(product.unit or "L") if product is not None else "L",
+                        "liters": -round(liters, 2),
+                        "equipment": "",
+                        "reference": "BITACORA",
+                        "notes": "Calculado desde capturas diarias",
+                        "created_by": "",
+                        "presentation": "Bitacora",
+                        "units": 0.0,
+                        "created_at": "",
+                    }
+                )
+        items.sort(key=lambda item: (str(item["movement_date"]), int(item["id"] or 0)), reverse=True)
+        items = items[:max_rows]
+    return items
+
+
+def lubricant_report_pdf_bytes(
+    summary: list[dict[str, Any]],
+    movements: list[dict[str, Any]],
+    start: str,
+    end: str,
+    scope_label: str,
+) -> bytes:
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(letter),
+        topMargin=0.5 * inch,
+        bottomMargin=0.55 * inch,
+        leftMargin=0.45 * inch,
+        rightMargin=0.45 * inch,
+        title="Reporte de Lubricantes",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("LubRepTitle", parent=styles["Title"], fontSize=16, spaceAfter=2)
+    sub_style = ParagraphStyle("LubRepSub", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#475569"), alignment=1, spaceAfter=10)
+    section_style = ParagraphStyle("LubRepSection", parent=styles["Heading2"], fontSize=11, spaceBefore=6, spaceAfter=4)
+    cell_style = ParagraphStyle("LubRepCell", parent=styles["Normal"], fontSize=7.6, leading=9)
+    story: list = [
+        Paragraph("REPORTE DE LUBRICANTES", title_style),
+        Paragraph(f"Periodo: {start} a {end} &nbsp;|&nbsp; Alcance: {scope_label} &nbsp;|&nbsp; Generado: {utc_now().strftime('%d/%m/%Y %H:%M')}", sub_style),
+    ]
+    head_style = ParagraphStyle("LubRepHead", parent=cell_style, fontName="Helvetica-Bold", textColor=colors.white)
+    summary_head = [Paragraph(str(item), head_style) for item in ["Codigo", "Lubricante", "Stock actual", "Entradas", "Consumo bitacora", "Salidas manuales", "Minimo", "Estado"]]
+    summary_rows = [summary_head]
+    for row in summary:
+        unit = row.get("unit") or "L"
+        summary_rows.append(
+            [
+                row["code"],
+                row["name"],
+                f'{row["stock_actual"]:,.2f} {unit}',
+                f'{row["entradas_periodo"]:,.2f} {unit}',
+                f'{row["consumido_bitacora"]:,.2f} {unit}',
+                f'{row["salidas_manuales"]:,.2f} {unit}',
+                f'{row["min_stock"]:,.2f} {unit}',
+                "STOCK BAJO" if row["alerta_stock_bajo"] else "OK",
+            ]
+        )
+    resumen_table = Table(summary_rows, colWidths=[0.7*inch, 2.3*inch, 1.05*inch, 1.05*inch, 1.15*inch, 1.15*inch, 0.95*inch, 0.85*inch], repeatRows=1)
+    resumen_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 1), (-1, -1), 8),
+                ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f5f9")]),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+            + [
+                ("TEXTCOLOR", (7, index + 1), (7, index + 1), colors.HexColor("#dc2626"))
+                for index, row in enumerate(summary)
+                if row["alerta_stock_bajo"]
+            ]
+        )
+    )
+    story += [Paragraph("Resumen por lubricante", section_style), resumen_table]
+    kardex_head = [Paragraph(str(item), head_style) for item in ["Fecha", "Tipo", "Lubricante", "Presentacion", "Litros/KG", "Equipo", "Referencia", "Notas"]]
+    kardex_rows = [kardex_head]
+    for row in movements[:500]:
+        liters_value = float(row.get("liters") or 0)
+        presentation_text = str(row.get("presentation") or "-")
+        units_value = float(row.get("units") or 0)
+        if units_value > 0:
+            presentation_text = f"{presentation_text} x{units_value:g}" if presentation_text != "-" else "-"
+        kardex_rows.append(
+            [
+                str(row.get("movement_date") or "")[:10],
+                str(row.get("movement_type") or ""),
+                f'{row.get("product_code", "")} - {row.get("product_name", "")}',
+                presentation_text,
+                ("+" if liters_value > 0 else "") + f"{liters_value:,.2f}",
+                str(row.get("equipment") or "-"),
+                str(row.get("reference") or "-"),
+                Paragraph(str(row.get("notes") or "-")[:120].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), cell_style),
+            ]
+        )
+    kardex_table = Table(kardex_rows, colWidths=[0.8*inch, 0.9*inch, 2.1*inch, 0.95*inch, 0.75*inch, 1.15*inch, 1.25*inch, 2.2*inch], repeatRows=1)
+    kardex_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("FONTSIZE", (0, 1), (-1, -1), 7.6),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f5f9")]),
+                ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+            ]
+        )
+    )
+    story += [Spacer(1, 12), Paragraph("Kardex de movimientos", section_style), kardex_table]
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def lubricant_stock_for(session: Session, product_id: int) -> float:
+    total = session.scalar(select(func.sum(LubricantMovement.liters)).where(LubricantMovement.product_id == product_id))
+    return round(float(total or 0), 2)
+
+
+def lubricant_snapshot_payload(session: Session) -> dict[str, Any]:
+    ensure_lubricant_catalog(session)
+    products = session.scalars(select(LubricantProduct).order_by(LubricantProduct.sort_order, LubricantProduct.id)).all()
+    movements = session.scalars(select(LubricantMovement).order_by(LubricantMovement.movement_date, LubricantMovement.id)).all()
+    return {
+        "generated_at": utc_now().isoformat(timespec="seconds"),
+        "products": [
+            {
+                "code": row.code,
+                "name": row.name,
+                "unit": row.unit or "L",
+                "presentation": row.presentation,
+                "liters_per_unit": float(row.liters_per_unit or 1),
+                "min_stock": float(row.min_stock or 0),
+                "sort_order": int(row.sort_order or 0),
+                "active": bool(row.active),
+            }
+            for row in products
+        ],
+        "movements": [
+            {
+                "external_id": row.external_id,
+                "movement_date": row.movement_date,
+                "movement_type": row.movement_type,
+                "product_code": next((p.code for p in products if p.id == row.product_id), ""),
+                "liters": float(row.liters or 0),
+                "equipment": row.equipment,
+                "reference": row.reference,
+                "notes": row.notes,
+                "created_by": row.created_by,
+                "source": row.source,
+                "presentation": getattr(row, "presentation", "") or "",
+                "units": float(getattr(row, "units", 0) or 0),
+            }
+            for row in movements
+        ],
+    }
+
+
+def replace_lubricant_desktop_rows(session: Session, products: Any, movements: Any) -> dict[str, int]:
+    """Fusiona el snapshot del escritorio: reemplaza filas source='desktop' y conserva las capturadas en la nube."""
+    ensure_lubricant_catalog(session)
+    product_by_code = {row.code: row for row in session.scalars(select(LubricantProduct)).all()}
+    now = utc_now()
+    seen_codes: set[str] = set()
+    replaced_products = 0
+    if isinstance(products, list):
+        for item in products:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip().upper()[:40]
+            name = str(item.get("name") or "").strip()
+            if not code or not name:
+                continue
+            seen_codes.add(code)
+            row = product_by_code.get(code)
+            if row is None:
+                max_order = max((int(p.sort_order or 0) for p in product_by_code.values()), default=0)
+                row = LubricantProduct(code=code, name=name[:160], unit=str(item.get("unit") or "L")[:20],
+                                       presentation=str(item.get("presentation") or "Tambor")[:40],
+                                       liters_per_unit=max(parse_float(item.get("liters_per_unit"), 1), 0.001),
+                                       min_stock=max(parse_float(item.get("min_stock"), 0), 0),
+                                       sort_order=max_order + 10, active=int(bool(item.get("active", True))),
+                                       created_at=now, updated_at=now)
+                session.add(row)
+                product_by_code[code] = row
+            else:
+                row.name = name[:160]
+                if item.get("presentation"):
+                    row.presentation = str(item["presentation"])[:40]
+                if item.get("unit"):
+                    row.unit = str(item["unit"])[:20]
+                liters_per_unit = parse_float(item.get("liters_per_unit"), 0)
+                if liters_per_unit > 0:
+                    row.liters_per_unit = round(liters_per_unit, 3)
+                row.min_stock = round(max(parse_float(item.get("min_stock"), row.min_stock), 0), 2)
+                row.active = int(bool(item.get("active", True)))
+                row.updated_at = now
+            replaced_products += 1
+        session.flush()
+    deleted = session.query(LubricantMovement).filter(LubricantMovement.source == "desktop").delete()
+    inserted = 0
+    skipped = 0
+    if isinstance(movements, list):
+        for item in movements:
+            if not isinstance(item, dict):
+                continue
+            movement_type = normalize_text(item.get("movement_type") or "ENTRADA")[:30] or "ENTRADA"
+            if movement_type == "CONSUMO_BITACORA":
+                skipped += 1
+                continue
+            code = str(item.get("product_code") or "").strip().upper()[:40]
+            product = product_by_code.get(code)
+            liters = parse_float(item.get("liters"), 0)
+            movement_date = str(item.get("movement_date") or "")[:10]
+            if product is None or not movement_date or liters == 0:
+                skipped += 1
+                continue
+            session.add(
+                LubricantMovement(
+                    movement_date=movement_date,
+                    movement_type=movement_type,
+                    product_id=int(product.id),
+                    liters=round(liters, 2),
+                    equipment=normalize_text(item.get("equipment"))[:120],
+                    reference=str(item.get("reference") or "")[:180],
+                    notes=str(item.get("notes") or "")[:500],
+                    created_by=str(item.get("created_by") or "")[:160],
+                    source="desktop",
+                    external_id=str(item.get("external_id") or "")[:180],
+                    presentation=str(item.get("presentation") or "")[:40],
+                    units=max(parse_float(item.get("units"), 0), 0),
+                )
+            )
+            inserted += 1
+    session.commit()
+    return {"products": replaced_products, "inserted": inserted, "deleted": int(deleted), "skipped": skipped}
 
 
 REQUISITION_REFERENCE_RE = re.compile(r"\b(REQ|SER|SERV)\s*[\.\-_]?\s*0*(\d+)\b", re.IGNORECASE)
@@ -1604,6 +2139,15 @@ def tire_control_status_py(row: dict[str, Any]) -> tuple[str, str]:
     return "OK", "Seguimiento normal"
 
 
+TIRE_POSITIONS = [f"Posicion {i}" for i in range(1, 11)]
+OLD_TIRE_POSITION_MAP = {
+    "DD": "Posicion 1", "DI": "Posicion 2",
+    "TD": "Posicion 3", "TI": "Posicion 4",
+    "EJE 1": "Posicion 5", "EJE 2": "Posicion 6",
+    "REFACCION": "Posicion 7",
+}
+
+
 def normalize_tire_row(row: dict[str, Any]) -> dict[str, Any]:
     clean = dict(row)
     clean["tire_code"] = normalize_text(clean.get("tire_code") or clean.get("code"))
@@ -1662,6 +2206,10 @@ def tire_summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def enrich_tire_tracking(portal: dict[str, Any]) -> dict[str, Any]:
     rows = [normalize_tire_row(row) for row in tire_rows_list(portal) if row.get("tire_code")]
+    for row in rows:
+        pos = (row.get("position") or "").strip().upper()
+        if pos in OLD_TIRE_POSITION_MAP:
+            row["position"] = OLD_TIRE_POSITION_MAP[pos]
     rows.sort(
         key=lambda row: (
             row.get("equipment_code") or "ZZZ",
@@ -1673,6 +2221,10 @@ def enrich_tire_tracking(portal: dict[str, Any]) -> dict[str, Any]:
     portal["tire_kpi"] = {"rows": rows, "summary": tire_summary_from_rows(rows)}
     tracking = portal.get("tire_tracking") if isinstance(portal.get("tire_tracking"), dict) else {}
     events = sorted(tire_event_list(portal), key=lambda event: (str(event.get("event_date") or ""), int(parse_float(event.get("id"), 0))), reverse=True)
+    for event in events:
+        pos = (event.get("position") or "").strip().upper()
+        if pos in OLD_TIRE_POSITION_MAP:
+            event["position"] = OLD_TIRE_POSITION_MAP[pos]
     portal["tire_tracking"] = {"events": events[:500]}
     return portal
 
@@ -1861,6 +2413,9 @@ def normalize_work_order_record(row: dict[str, Any], existing: dict[str, Any] | 
         "lubricants_used": str(row.get("lubricants_used") or "").strip(),
         "evidence_note": str(row.get("evidence_note") or "").strip(),
         "source_ref": str(row.get("source_ref") or "").strip()[:180],
+        "cost_material": round(float(row.get("cost_material") or 0), 2),
+        "cost_labor": round(float(row.get("cost_labor") or 0), 2),
+        "cost_external": round(float(row.get("cost_external") or 0), 2),
         "created_at": str(existing.get("created_at") if existing else row.get("created_at") or now)[:40],
         "updated_at": now,
     }
@@ -1945,6 +2500,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("oil_kpi", {"rows": [], "totals": {}, "columns": []})
     payload.setdefault("tire_kpi", {"rows": [], "summary": {}})
     payload.setdefault("tire_tracking", {"events": []})
+    payload.setdefault("kanban", {"cards": {}, "overrides": {}})
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
     return enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload))))
@@ -2192,6 +2748,85 @@ def service_report_pdf_bytes(portal: dict[str, Any], start: str, end: str, perio
     return stream.getvalue()
 
 
+def service_history_filtered(portal: dict[str, Any], start: str, end: str, equipment: str = "", interval: str = "", service_type: str = "", search: str = "") -> list[dict[str, Any]]:
+    selected_eq = normalize_text(equipment)
+    interval_up = normalize_text(interval)
+    type_up = normalize_text(service_type)
+    q = normalize_text(search)
+    rows = []
+    for row in portal.get("service_history") if isinstance(portal.get("service_history"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        completed = str(row.get("completed_date") or row.get("service_date") or "")[:10]
+        if completed and start and end and not (start <= completed <= end):
+            continue
+        code = normalize_text(row.get("equipment_code"))
+        if selected_eq and code != selected_eq:
+            continue
+        if interval_up:
+            svc = normalize_text(f"{row.get('service_interval', '')} {row.get('service_name', '')} {row.get('stage', '')}")
+            if interval_up not in svc:
+                continue
+        if type_up:
+            st = normalize_text(row.get("service_type") or "Programado")
+            if type_up != st:
+                continue
+        if q:
+            text = normalize_text(" ".join(str(row.get(k) or "") for k in ("equipment_code", "equipment_description", "component", "service_name", "service_interval", "order_number", "notes", "status")))
+            if q not in text:
+                continue
+        rows.append(row)
+    return sorted(rows, key=lambda item: (str(item.get("completed_date") or item.get("service_date") or ""), str(item.get("equipment_code") or "")))
+
+
+def service_history_pdf_bytes(portal: dict[str, Any], start: str, end: str, period_label: str, equipment: str = "", interval: str = "", service_type: str = "", search: str = "") -> bytes:
+    stream = BytesIO()
+    doc = SimpleDocTemplate(stream, pagesize=landscape(letter), rightMargin=0.28 * inch, leftMargin=0.28 * inch, topMargin=0.55 * inch, bottomMargin=0.42 * inch)
+    styles = report_styles()
+    page_width = landscape(letter)[0] - doc.leftMargin - doc.rightMargin
+    rows_data = service_history_filtered(portal, start, end, equipment, interval, service_type, search)
+    programmed = sum(1 for r in rows_data if str(r.get("service_type") or "Programado").upper() != "NO PROGRAMADO")
+    unplanned = sum(1 for r in rows_data if str(r.get("service_type") or "").upper() == "NO PROGRAMADO")
+    late = sum(1 for r in rows_data if str(r.get("status") or "").upper() == "TARDIO")
+    story = [
+        Paragraph("Servicios realizados", styles["MgaTitle"]),
+        Paragraph(f"Periodo {period_label}: {start} a {end} | Generado {utc_now().isoformat(timespec='seconds')}", styles["MgaSubtitle"]),
+        Spacer(1, 0.10 * inch),
+        report_metric_cards([
+            ("Total", str(len(rows_data)), "Servicios"),
+            ("Programados", str(programmed), "Servicios"),
+            ("No programados", str(unplanned), "Servicios"),
+            ("Tardios", str(late), "Servicios"),
+        ], page_width, styles),
+        Spacer(1, 0.10 * inch),
+        Paragraph("Detalle de servicios ejecutados", styles["MgaSection"]),
+    ]
+    table_rows = [["Fecha", "Tipo", "Equipo", "Descripcion", "Servicio", "Horometro", "Estado", "OT", "Observaciones"]]
+    for row in rows_data:
+        code = str(row.get("equipment_code") or "")
+        meter_val = parse_float(row.get("completed_meter"), 0)
+        svc = " / ".join(str(row.get(k) or "") for k in ("service_name", "service_interval") if str(row.get(k) or "").strip())
+        notes = str(row.get("notes") or "")
+        if len(notes) > 80:
+            notes = notes[:77] + "..."
+        table_rows.append([
+            str(row.get("completed_date") or row.get("service_date") or ""),
+            str(row.get("service_type") or "Programado"),
+            code,
+            str(row.get("equipment_description") or ""),
+            svc,
+            f"{meter_val:.1f}" if meter_val else "",
+            str(row.get("status") or ""),
+            str(row.get("order_number") or ""),
+            notes,
+        ])
+    if len(table_rows) == 1:
+        table_rows.append(["", "Sin servicios registrados en el periodo seleccionado.", "", "", "", "", "", "", ""])
+    story.append(report_table(table_rows, [0.72 * inch, 0.82 * inch, 0.72 * inch, 1.40 * inch, 1.10 * inch, 0.72 * inch, 0.72 * inch, 0.80 * inch, 2.60 * inch], styles))
+    doc.build(story, onFirstPage=report_header_footer("Servicios realizados", f"{start} a {end}"), onLaterPages=report_header_footer("Servicios realizados", f"{start} a {end}"))
+    return stream.getvalue()
+
+
 def equipment_life_target_hours(eq: dict[str, Any]) -> float:
     explicit = parse_float(eq.get("useful_life_hours") or eq.get("life_hours") or eq.get("target_life_hours"), 0)
     if explicit > 0:
@@ -2300,7 +2935,7 @@ def equipment_life_report_pdf_bytes(portal: dict[str, Any]) -> bytes:
             row["replacement"],
         ])
     if len(rows) == 1:
-        rows.append(["", "Sin equipos con servicios PM registrados en el portal.", "", "", "", "", "", ""])
+        rows.append(["", "Sin equipos publicados en el portal.", "", "", "", "", "", ""])
     table = report_table(rows, [0.72 * inch, 1.62 * inch, 0.88 * inch, 0.82 * inch, 1.16 * inch, 0.88 * inch, 1.12 * inch, 1.10 * inch], styles, "#2f6ebd")
     table.setStyle(TableStyle([
         ("BACKGROUND", (2, 1), (4, -1), colors.HexColor("#d9e2f3")),
@@ -2311,8 +2946,8 @@ def equipment_life_report_pdf_bytes(portal: dict[str, Any]) -> bytes:
     ]))
     story.append(table)
     story.append(Spacer(1, 0.08 * inch))
-    story.append(Paragraph("Nota: solo se muestran equipos con servicios PM (250H/500H/750H/1000H) ejecutados. Si un equipo no tiene vida util manual publicada, se usa 25000 h para scoop/LH/R1300/R1600/ST y 15000 h para el resto.", styles["MgaNote"]))
-    doc.build(story, onFirstPage=report_header_footer("Vida util de equipos PM", "general"), onLaterPages=report_header_footer("Vida util de equipos PM", "general"))
+    story.append(Paragraph("Nota: si un equipo no tiene vida util manual publicada, el sistema usa 25000 h para scoop/LH/R1300/R1600/ST y 15000 h para el resto. Las fechas se proyectan con el promedio diario del componente o la configuracion de turno.", styles["MgaNote"]))
+    doc.build(story, onFirstPage=report_header_footer("Vida util de equipos", "general"), onLaterPages=report_header_footer("Vida util de equipos", "general"))
     return stream.getvalue()
 
 
@@ -3377,43 +4012,6 @@ def require_api_key(x_mga_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="API key invalida.")
 
 
-def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 1800) -> None:
-    if not os.getenv("DATABASE_URL", "").strip():
-        return
-    peer = (peer or peer_from_request(request))[:120]
-    key = f"{peer}:{request.url.path[:60]}"
-    now = utc_now()
-    with engine.begin() as conn:
-        conn.execute(
-            sql_text(
-                "CREATE TABLE IF NOT EXISTS sync_throttle (peer TEXT PRIMARY KEY, last_at TIMESTAMPTZ NOT NULL)"
-            )
-        )
-        row = conn.execute(sql_text("SELECT last_at FROM sync_throttle WHERE peer = :p"), {"p": key}).fetchone()
-        if row is not None:
-            last = row[0]
-            if isinstance(last, datetime) and (now - last).total_seconds() < min_interval_s:
-                raise HTTPException(
-                    status_code=429,
-                    detail="Demasiadas sincronizaciones seguidas. Reintenta en unos minutos.",
-                )
-        conn.execute(
-            sql_text(
-                "INSERT INTO sync_throttle (peer, last_at) VALUES (:p, :t) "
-                "ON CONFLICT (peer) DO UPDATE SET last_at = :t"
-            ),
-            {"p": key, "t": now},
-        )
-
-
-def peer_from_request(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd.strip():
-        return fwd.split(",")[0].strip()
-    client = request.client
-    return str(client.host if client else "unknown")
-
-
 def database_status() -> dict[str, Any]:
     return {
         "engine": engine.dialect.name,
@@ -4225,18 +4823,12 @@ def kpi_unavailable_status(status: Any) -> bool:
     return any(token in text for token in ("NO DISPONIBLE", "FUERA", "NO DISP", "REPARACION", "MANTENIMIENTO"))
 
 
-def kpi_excluded_status(status: Any) -> bool:
-    return "FUERA" in normalized_ascii(status)
-
-
 def kpi_status_from_condition_py(value: Any) -> str:
     text = normalized_ascii(value)
     if not text:
         return ""
     if "STAND" in text:
         return "Stand By"
-    if kpi_excluded_status(text):
-        return "FUERA"
     if kpi_unavailable_status(text):
         return "No Disponible"
     if "DISPONIBLE" in text:
@@ -4298,7 +4890,7 @@ AVAILABILITY_CATEGORY_NAMES = {
 }
 
 
-AVAILABILITY_CONDITIONS = ["FUERA", "FUERA DE SERVICIO", "NO DISPONIBLE", "DISPONIBLE", "OPERATIVA", "STAND BY", "REPARACION"]
+AVAILABILITY_CONDITIONS = ["FUERA DE SERVICIO", "NO DISPONIBLE", "DISPONIBLE", "OPERATIVA", "STAND BY", "REPARACION"]
 
 
 def availability_import_date_from_text(text: str) -> str:
@@ -4572,14 +5164,13 @@ def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         worked = parse_float(source_row.get("worked") if "worked" in source_row else source_row.get("worked_hours"), 0)
         availability_text = str(source_row.get("availability_text") or source_row.get("availabilityText") or "").strip()
         utilization_text = str(source_row.get("utilization_text") or source_row.get("utilizationText") or "").strip()
-        status = source_row.get("status") or ("FUERA" if availability_text.upper() == "FUERA" or utilization_text.upper() == "FUERA" else "")
-        out = availability_text.upper() == "FUERA" or utilization_text.upper() == "FUERA" or kpi_excluded_status(status)
+        out = availability_text.upper() == "FUERA" or utilization_text.upper() == "FUERA"
         rows.append(
             {
                 "code": source_row.get("code") or "",
                 "description": source_row.get("description") or "",
                 "family": source_row.get("family") or "",
-                "status": "FUERA" if kpi_excluded_status(status) else status,
+                "status": source_row.get("status") or ("FUERA" if out else ""),
                 "period": period,
                 "worked": worked,
                 "mp": mp,
@@ -4598,8 +5189,7 @@ def desktop_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         )
 
     totals = {"period": 0.0, "worked": 0.0, "mp": 0.0, "mc": 0.0, "stops": 0.0, "available": 0.0}
-    rows_for_totals = [row for row in rows if not kpi_excluded_status(row.get("status"))]
-    for row in rows_for_totals:
+    for row in rows:
         totals["period"] += parse_float(row.get("period"), 0)
         totals["worked"] += parse_float(row.get("worked"), 0)
         totals["mp"] += parse_float(row.get("mp"), 0)
@@ -4718,8 +5308,7 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
             row["status"] = row["availability_status"]
         elif row["capture_status"]:
             row["status"] = row["capture_status"]
-        excluded = kpi_excluded_status(row["status"])
-        out = excluded or (row["worked"] <= 0 and (row["unavailable_count"] > 0 or kpi_unavailable_status(row["status"])))
+        out = row["worked"] <= 0 and (row["unavailable_count"] > 0 or kpi_unavailable_status(row["status"]))
         metric_values = {"available": 0, "availability": 0, "utilization": 0, "tmef": 0, "tmpr": 0, "reliability": 0} if out else monthly_kpi_metric(row["period"], row["worked"], row["mp"], row["mc"], row["stops"], mission_hours)
         row.update(metric_values)
         row["out"] = out
@@ -4728,8 +5317,7 @@ def monthly_kpi_report(portal: dict[str, Any], group: str, start: str, end: str)
         rows.append(row)
 
     totals = {"period": 0.0, "worked": 0.0, "mp": 0.0, "mc": 0.0, "stops": 0.0, "available": 0.0}
-    rows_for_totals = [row for row in rows if not kpi_excluded_status(row.get("status"))]
-    for row in rows_for_totals:
+    for row in rows:
         totals["period"] += row["period"]
         totals["worked"] += row["worked"]
         totals["mp"] += row["mp"]
@@ -4834,878 +5422,6 @@ def kpi_row_obj(row: dict[str, Any]):
 
 def monthly_kpi_row_objects(report: dict[str, Any]) -> list[Any]:
     return [kpi_row_obj(row) for row in report.get("rows", [])]
-
-
-KPI_DAILY_DATA_COLUMNS = {
-    "code": 2,
-    "description": 3,
-    "hi": 4,
-    "hf": 5,
-    "period": 6,
-    "mp": 8,
-    "mc": 9,
-    "stops": 11,
-    "oil_motor_15w40": 17,
-    "oil_hco_iso68": 18,
-    "oil_trans_sae30": 19,
-    "oil_85w140": 21,
-    "almo_liters": 22,
-    "coolant_liters": 23,
-    "status": 24,
-    "observations": 25,
-}
-
-
-def kpi_daily_xlsm_data_row(ws, row_idx: int) -> bool:
-    if row_idx < 8:
-        return False
-    code = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value
-    description = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value
-    period_value = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["period"]).value
-    if not code and description and isinstance(period_value, str) and "SUM(" in period_value.upper():
-        return False
-    if not code and description and not str(description).strip().upper().startswith("="):
-        text = normalized_ascii(description)
-        if any(token in text for token in ("SCOOP", "JUMBO", "TOTAL", "EQUIPO DE")):
-            return False
-    return True
-
-
-def kpi_daily_sheet_rows(ws, max_rows: int = 185) -> list[int]:
-    rows: list[int] = []
-    for row_idx in range(8, min(ws.max_row, max_rows) + 1):
-        if kpi_daily_xlsm_data_row(ws, row_idx):
-            rows.append(row_idx)
-    return rows
-
-
-def kpi_daily_equipment_rows(ws) -> dict[str, int]:
-    mapping: dict[str, int] = {}
-    for row_idx in kpi_daily_sheet_rows(ws):
-        code = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value)
-        if code and not code.startswith("="):
-            mapping.setdefault(code, row_idx)
-    return mapping
-
-
-def kpi_daily_clear_row(ws, row_idx: int) -> None:
-    for col in (
-        KPI_DAILY_DATA_COLUMNS["code"],
-        KPI_DAILY_DATA_COLUMNS["description"],
-        KPI_DAILY_DATA_COLUMNS["hi"],
-        KPI_DAILY_DATA_COLUMNS["hf"],
-        KPI_DAILY_DATA_COLUMNS["period"],
-        KPI_DAILY_DATA_COLUMNS["mp"],
-        KPI_DAILY_DATA_COLUMNS["mc"],
-        KPI_DAILY_DATA_COLUMNS["stops"],
-        KPI_DAILY_DATA_COLUMNS["oil_motor_15w40"],
-        KPI_DAILY_DATA_COLUMNS["oil_hco_iso68"],
-        KPI_DAILY_DATA_COLUMNS["oil_trans_sae30"],
-        KPI_DAILY_DATA_COLUMNS["oil_85w140"],
-        KPI_DAILY_DATA_COLUMNS["almo_liters"],
-        KPI_DAILY_DATA_COLUMNS["coolant_liters"],
-        KPI_DAILY_DATA_COLUMNS["status"],
-        KPI_DAILY_DATA_COLUMNS["observations"],
-    ):
-        ws.cell(row_idx, col).value = None
-
-
-def kpi_daily_active_equipment(portal: dict[str, Any]) -> list[dict[str, Any]]:
-    equipment = portal.get("equipment") if isinstance(portal.get("equipment"), list) else []
-    result: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in equipment:
-        if not isinstance(item, dict):
-            continue
-        code = normalize_text(item.get("code") or item.get("equipment_code"))
-        if not code or code in seen:
-            continue
-        state = normalized_ascii(item.get("status") or item.get("condition") or "")
-        if item.get("active") is False or item.get("kpi_enabled") is False or state in {"BAJA", "VENDIDO", "FUERA DE OPERACION"}:
-            continue
-        seen.add(code)
-        result.append(
-            {
-                "code": code,
-                "description": normalize_text(item.get("description") or item.get("family") or code),
-                "family": normalize_text(item.get("family") or ""),
-                "status": normalize_text(item.get("status") or item.get("condition") or "DISPONIBLE") or "DISPONIBLE",
-            }
-        )
-    return result
-
-
-def kpi_daily_date_status(portal: dict[str, Any], work_date: str, equipment_code: str) -> str:
-    code = normalize_text(equipment_code)
-    availability = portal.get("availability") if isinstance(portal.get("availability"), list) else []
-    candidates: list[dict[str, Any]] = []
-    for row in availability:
-        if not isinstance(row, dict):
-            continue
-        row_code = normalize_text(row.get("eco") or row.get("equipment_code") or row.get("code"))
-        if row_code != code:
-            continue
-        row_date = str(row.get("updated_date") or row.get("date") or row.get("work_date") or "")[:10]
-        if row_date and row_date <= work_date:
-            candidates.append(row)
-    if candidates:
-        latest = sorted(candidates, key=lambda item: str(item.get("updated_date") or item.get("date") or item.get("work_date") or ""))[-1]
-        status = kpi_status_from_condition_py(latest.get("condition") or latest.get("status"))
-        if status:
-            return status
-    equipment = next((item for item in kpi_daily_active_equipment(portal) if item["code"] == code), None)
-    return kpi_status_from_condition_py((equipment or {}).get("status")) or normalize_text((equipment or {}).get("status") or "DISPONIBLE")
-
-
-def kpi_daily_capture_rows(portal: dict[str, Any], start: str, end: str) -> list[dict[str, Any]]:
-    captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
-    rows: list[dict[str, Any]] = []
-    for item in captures:
-        if not isinstance(item, dict):
-            continue
-        work_date = str(item.get("work_date") or "")[:10]
-        if not work_date or work_date < start or work_date > end:
-            continue
-        code = normalize_text(item.get("equipment_code") or item.get("equipment"))
-        if code:
-            rows.append(item)
-    return rows
-
-
-def kpi_daily_aggregate_captures(portal: dict[str, Any], start: str, end: str) -> dict[tuple[str, str], dict[str, Any]]:
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    for capture in kpi_daily_capture_rows(portal, start, end):
-        work_date = str(capture.get("work_date") or "")[:10]
-        code = normalize_text(capture.get("equipment_code") or capture.get("equipment"))
-        if not kpi_capture_component_matches_py(code, capture.get("component") or capture.get("component_name")):
-            continue
-        key = (work_date, code)
-        row = grouped.setdefault(
-            key,
-            {
-                "work_date": work_date,
-                "code": code,
-                "hi_values": [],
-                "hf_values": [],
-                "worked": 0.0,
-                "mp": 0.0,
-                "mc": 0.0,
-                "stops": 0.0,
-                "oil_motor_15w40": 0.0,
-                "oil_hco_iso68": 0.0,
-                "oil_trans_sae30": 0.0,
-                "oil_85w140": 0.0,
-                "almo_liters": 0.0,
-                "coolant_liters": 0.0,
-                "statuses": [],
-                "observations": [],
-            },
-        )
-        hi = parse_float(capture.get("hi") if "hi" in capture else capture.get("horometer_initial"), 0)
-        hf = parse_float(capture.get("hf") if "hf" in capture else capture.get("horometer_final"), 0)
-        if hi:
-            row["hi_values"].append(hi)
-        if hf:
-            row["hf_values"].append(hf)
-        row["worked"] += parse_float(capture.get("worked_hours"), 0)
-        row["mp"] += parse_float(capture.get("mp_hours"), 0)
-        row["mc"] += parse_float(capture.get("mc_hours"), 0)
-        row["stops"] += parse_float(capture.get("stops"), 0)
-        for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
-            row[field] += parse_float(capture.get(field), 0)
-        status = normalize_text(capture.get("status"))
-        if status:
-            row["statuses"].append(status)
-        observations = normalize_text(capture.get("observations"))
-        if observations:
-            row["observations"].append(observations)
-    return grouped
-
-
-XML_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-XML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-XML_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-XML_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
-XML_X14AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
-XML_XR_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
-XML_XR2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
-XML_XR3_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3"
-XML_X14_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
-XML_XM_NS = "http://schemas.microsoft.com/office/excel/2006/main"
-ET.register_namespace("", XML_MAIN_NS)
-ET.register_namespace("r", XML_REL_NS)
-ET.register_namespace("mc", XML_MC_NS)
-ET.register_namespace("x14ac", XML_X14AC_NS)
-ET.register_namespace("xr", XML_XR_NS)
-ET.register_namespace("xr2", XML_XR2_NS)
-ET.register_namespace("xr3", XML_XR3_NS)
-ET.register_namespace("x14", XML_X14_NS)
-ET.register_namespace("xm", XML_XM_NS)
-
-
-def excel_col_to_number(col: str) -> int:
-    total = 0
-    for char in col.upper():
-        if "A" <= char <= "Z":
-            total = total * 26 + (ord(char) - 64)
-    return total
-
-
-def excel_number_to_col(num: int) -> str:
-    text = ""
-    while num:
-        num, rem = divmod(num - 1, 26)
-        text = chr(65 + rem) + text
-    return text
-
-
-def excel_cell_ref(row: int, col: int) -> str:
-    return f"{excel_number_to_col(col)}{row}"
-
-
-def excel_date_serial(value: date) -> int:
-    return (value - date(1899, 12, 30)).days
-
-
-def xlsm_xml_namespaces() -> dict[str, str]:
-    return {"main": XML_MAIN_NS, "rel": XML_PACKAGE_REL_NS, "r": XML_REL_NS}
-
-
-def xlsm_shared_strings(zf: zipfile.ZipFile) -> list[str]:
-    if "xl/sharedStrings.xml" not in zf.namelist():
-        return []
-    root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-    strings: list[str] = []
-    ns = xlsm_xml_namespaces()
-    for si in root.findall("main:si", ns):
-        parts = [node.text or "" for node in si.findall(".//main:t", ns)]
-        strings.append("".join(parts))
-    return strings
-
-
-def xlsm_sheet_paths(zf: zipfile.ZipFile) -> dict[str, str]:
-    ns = xlsm_xml_namespaces()
-    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
-    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
-    rel_targets: dict[str, str] = {}
-    for rel in rels.findall("rel:Relationship", ns):
-        rid = rel.attrib.get("Id", "")
-        target = rel.attrib.get("Target", "")
-        if not rid or not target:
-            continue
-        rel_targets[rid] = "xl/" + target.lstrip("/") if not target.startswith("xl/") else target
-    result: dict[str, str] = {}
-    for sheet in workbook.findall("main:sheets/main:sheet", ns):
-        name = sheet.attrib.get("name", "")
-        rid = sheet.attrib.get(f"{{{XML_REL_NS}}}id", "")
-        path = rel_targets.get(rid, "")
-        if name and path:
-            result[name] = path.replace("\\", "/")
-    return result
-
-
-def xlsm_preserve_ignorable_namespace_declarations(root: ET.Element) -> None:
-    ignorable = root.attrib.get(f"{{{XML_MC_NS}}}Ignorable", "")
-    needed = {
-        "xr2": XML_XR2_NS,
-        "xr3": XML_XR3_NS,
-    }
-    for prefix in ignorable.split():
-        uri = needed.get(prefix)
-        if uri:
-            root.set(f"xmlns:{prefix}", uri)
-
-
-def xlsm_cell_text(cell: ET.Element, shared_strings: list[str]) -> str:
-    ns = xlsm_xml_namespaces()
-    cell_type = cell.attrib.get("t")
-    if cell_type == "inlineStr":
-        return "".join(node.text or "" for node in cell.findall(".//main:t", ns)).strip()
-    value = cell.find("main:v", ns)
-    if value is None or value.text is None:
-        return ""
-    if cell_type == "s":
-        try:
-            return shared_strings[int(value.text)].strip()
-        except Exception:
-            return ""
-    return str(value.text).strip()
-
-
-def xlsm_sheet_cells(root: ET.Element) -> dict[str, ET.Element]:
-    ns = xlsm_xml_namespaces()
-    cells: dict[str, ET.Element] = {}
-    for cell in root.findall(".//main:c", ns):
-        ref = cell.attrib.get("r")
-        if ref:
-            cells[ref] = cell
-    return cells
-
-
-def xlsm_ensure_row(sheet_data: ET.Element, row_idx: int) -> ET.Element:
-    ns = xlsm_xml_namespaces()
-    for row in sheet_data.findall("main:row", ns):
-        if int(row.attrib.get("r", "0") or 0) == row_idx:
-            return row
-    row = ET.Element(f"{{{XML_MAIN_NS}}}row", {"r": str(row_idx)})
-    inserted = False
-    for idx, existing in enumerate(list(sheet_data)):
-        if existing.tag != f"{{{XML_MAIN_NS}}}row":
-            continue
-        if int(existing.attrib.get("r", "0") or 0) > row_idx:
-            sheet_data.insert(idx, row)
-            inserted = True
-            break
-    if not inserted:
-        sheet_data.append(row)
-    return row
-
-
-def xlsm_ensure_cell(root: ET.Element, row_idx: int, col_idx: int) -> ET.Element:
-    ns = xlsm_xml_namespaces()
-    sheet_data = root.find("main:sheetData", ns)
-    if sheet_data is None:
-        sheet_data = ET.SubElement(root, f"{{{XML_MAIN_NS}}}sheetData")
-    row = xlsm_ensure_row(sheet_data, row_idx)
-    ref = excel_cell_ref(row_idx, col_idx)
-    for cell in row.findall("main:c", ns):
-        if cell.attrib.get("r") == ref:
-            return cell
-    cell = ET.Element(f"{{{XML_MAIN_NS}}}c", {"r": ref})
-    inserted = False
-    for idx, existing in enumerate(list(row)):
-        if existing.tag != f"{{{XML_MAIN_NS}}}c":
-            continue
-        existing_ref = existing.attrib.get("r", "")
-        existing_col = re.sub(r"\d+", "", existing_ref)
-        if excel_col_to_number(existing_col) > col_idx:
-            row.insert(idx, cell)
-            inserted = True
-            break
-    if not inserted:
-        row.append(cell)
-    return cell
-
-
-def xlsm_set_cell(root: ET.Element, row_idx: int, col_idx: int, value: Any) -> None:
-    cell = xlsm_ensure_cell(root, row_idx, col_idx)
-    xlsm_write_cell(cell, row_idx, col_idx, value)
-
-
-def xlsm_write_cell(cell: ET.Element, row_idx: int, col_idx: int, value: Any) -> None:
-    style = cell.attrib.get("s")
-    cell.attrib.clear()
-    cell.attrib["r"] = excel_cell_ref(row_idx, col_idx)
-    if style:
-        cell.attrib["s"] = style
-    for child in list(cell):
-        cell.remove(child)
-    if value is None or value == "":
-        return
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        cell.attrib["t"] = "n"
-        ET.SubElement(cell, f"{{{XML_MAIN_NS}}}v").text = f"{float(value):.10g}"
-        return
-    cell.attrib["t"] = "inlineStr"
-    inline = ET.SubElement(cell, f"{{{XML_MAIN_NS}}}is")
-    text = ET.SubElement(inline, f"{{{XML_MAIN_NS}}}t")
-    text.text = str(value)
-
-
-def xlsm_set_cell_cached(root: ET.Element, cells: dict[str, ET.Element], row_idx: int, col_idx: int, value: Any) -> None:
-    ref = excel_cell_ref(row_idx, col_idx)
-    cell = cells.get(ref)
-    if cell is None:
-        cell = xlsm_ensure_cell(root, row_idx, col_idx)
-        cells[ref] = cell
-    xlsm_write_cell(cell, row_idx, col_idx, value)
-
-
-def xlsm_cell_xml(ref: str, value: Any, style: str = "") -> str:
-    style_attr = f' s="{style}"' if style else ""
-    if value is None or value == "":
-        return f'<c r="{ref}"{style_attr}/>'
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return f'<c r="{ref}"{style_attr}><v>{float(value):.10g}</v></c>'
-    text = xml_escape(str(value), {'"': "&quot;"})
-    preserve = ' xml:space="preserve"' if text.strip() != text else ""
-    return f'<c r="{ref}"{style_attr} t="inlineStr"><is><t{preserve}>{text}</t></is></c>'
-
-
-def xlsm_replace_cell_text(sheet_xml: str, row_idx: int, col_idx: int, value: Any) -> str:
-    ref = excel_cell_ref(row_idx, col_idx)
-    pattern = re.compile(
-        rf'<c\b(?=[^>]*\br="{re.escape(ref)}")[^>]*/>|<c\b(?=[^>]*\br="{re.escape(ref)}")[^>]*>.*?</c>',
-        re.DOTALL,
-    )
-    match = pattern.search(sheet_xml)
-    if match:
-        cell_text = match.group(0)
-        style_match = re.search(r'\bs="([^"]+)"', cell_text)
-        replacement = xlsm_cell_xml(ref, value, style_match.group(1) if style_match else "")
-        return sheet_xml[: match.start()] + replacement + sheet_xml[match.end() :]
-    row_pattern = re.compile(rf'(<row\b(?=[^>]*\br="{row_idx}")[^>]*>)(.*?)(</row>)', re.DOTALL)
-    row_match = row_pattern.search(sheet_xml)
-    if not row_match:
-        return sheet_xml
-    replacement = row_match.group(1) + row_match.group(2) + xlsm_cell_xml(ref, value) + row_match.group(3)
-    return sheet_xml[: row_match.start()] + replacement + sheet_xml[row_match.end() :]
-
-
-def build_monthly_kpi_daily_xlsm_text_fast(portal: dict[str, Any], year: int, month: int) -> BytesIO:
-    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
-    last_day = monthrange(year, month)[1]
-    start = date(year, month, 1).isoformat()
-    end = date(year, month, last_day).isoformat()
-    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
-    shift_hours = parse_float(settings.get("shift_hours"), 9)
-    turns = parse_float(settings.get("turns_per_day"), 2)
-    daily_hours = shift_hours * turns if shift_hours and turns else 18
-    equipment = kpi_daily_active_equipment(portal)
-    equipment_by_code = {item["code"]: item for item in equipment}
-    aggregates = kpi_daily_aggregate_captures(portal, start, end)
-
-    with zipfile.ZipFile(KPI_DAILY_XLSM_TEMPLATE_PATH, "r") as zin:
-        sheet_paths = xlsm_sheet_paths(zin)
-        shared_strings = xlsm_shared_strings(zin)
-        sheet_roots: dict[str, ET.Element] = {}
-        for name, path in sheet_paths.items():
-            if name == "ASN" or name in {str(day) for day in range(1, 32)}:
-                sheet_roots[name] = ET.fromstring(zin.read(path))
-        template_row_map = xlsm_equipment_rows(sheet_roots["1"], shared_strings) if "1" in sheet_roots else {}
-        ordered_codes = [code for code in template_row_map if code in equipment_by_code]
-        ordered_seen = set(ordered_codes)
-        ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
-
-        replacements: dict[str, str] = {}
-        if "ASN" in sheet_paths:
-            path = sheet_paths["ASN"]
-            text = zin.read(path).decode("utf-8")
-            for row_idx, col_idx, value in (
-                (5, 2, excel_date_serial(date(year, month, 1))),
-                (5, 4, normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA"),
-                (5, 5, shift_hours),
-                (5, 6, turns),
-            ):
-                text = xlsm_replace_cell_text(text, row_idx, col_idx, value)
-            replacements[path] = text
-
-        for day in range(1, 32):
-            sheet_name = str(day)
-            path = sheet_paths.get(sheet_name)
-            root = sheet_roots.get(sheet_name)
-            if not path or root is None:
-                continue
-            text = zin.read(path).decode("utf-8")
-            writable_rows = xlsm_data_rows(root, shared_strings)
-            row_map = xlsm_equipment_rows(root, shared_strings)
-            if day <= last_day:
-                work_date = date(year, month, day).isoformat()
-                available_rows = [row for row in writable_rows if row not in row_map.values()]
-                used_rows: set[int] = set()
-                for code in ordered_codes:
-                    equipment_row = equipment_by_code.get(code)
-                    if not equipment_row:
-                        continue
-                    row_idx = row_map.get(code)
-                    if not row_idx:
-                        if not available_rows:
-                            break
-                        row_idx = available_rows.pop(0)
-                    if row_idx in used_rows:
-                        continue
-                    used_rows.add(row_idx)
-                    aggregate = aggregates.get((work_date, code), {})
-                    hi_values = aggregate.get("hi_values") or []
-                    hf_values = aggregate.get("hf_values") or []
-                    worked = parse_float(aggregate.get("worked"), 0)
-                    hi = min(hi_values) if hi_values else 0
-                    hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
-                    status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
-                    values = {
-                        "code": code,
-                        "description": equipment_row.get("description") or code,
-                        "hi": hi or None,
-                        "hf": hf or None,
-                        "period": daily_hours,
-                        "mp": parse_float(aggregate.get("mp"), 0) or None,
-                        "mc": parse_float(aggregate.get("mc"), 0) or None,
-                        "stops": parse_float(aggregate.get("stops"), 0) or None,
-                        "status": status or "Disponible",
-                        "observations": "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None,
-                    }
-                    for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
-                        values[field] = parse_float(aggregate.get(field), 0) or None
-                    for field, value in values.items():
-                        text = xlsm_replace_cell_text(text, row_idx, KPI_DAILY_DATA_COLUMNS[field], value)
-            replacements[path] = text
-
-        output = BytesIO()
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
-            for info in zin.infolist():
-                if info.filename == "xl/calcChain.xml":
-                    continue
-                data = replacements.get(info.filename)
-                if data is None:
-                    raw = zin.read(info.filename)
-                    if info.filename == "xl/_rels/workbook.xml.rels":
-                        text = raw.decode("utf-8")
-                        text = re.sub(r'<Relationship[^>]+Target="calcChain.xml"[^>]*/>', "", text)
-                        text = re.sub(r"<Relationship[^>]+calcChain[^>]*/>", "", text)
-                        raw = text.encode("utf-8")
-                    elif info.filename == "[Content_Types].xml":
-                        text = raw.decode("utf-8")
-                        text = text.replace(
-                            '<Override PartName="/xl/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/>',
-                            "",
-                        )
-                        raw = text.encode("utf-8")
-                    zout.writestr(info, raw)
-                else:
-                    zout.writestr(info, data.encode("utf-8"))
-    output.seek(0)
-    return output
-
-
-def xlsm_formula_text(cells: dict[str, ET.Element], row_idx: int, col_idx: int) -> str:
-    cell = cells.get(excel_cell_ref(row_idx, col_idx))
-    if cell is None:
-        return ""
-    ns = xlsm_xml_namespaces()
-    formula = cell.find("main:f", ns)
-    return formula.text or "" if formula is not None else ""
-
-
-def xlsm_data_rows(root: ET.Element, shared_strings: list[str], max_rows: int = 185) -> list[int]:
-    cells = xlsm_sheet_cells(root)
-    rows: list[int] = []
-    for row_idx in range(8, max_rows + 1):
-        code_cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["code"]))
-        desc_cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["description"]))
-        code = xlsm_cell_text(code_cell, shared_strings) if code_cell is not None else ""
-        description = xlsm_cell_text(desc_cell, shared_strings) if desc_cell is not None else ""
-        period_formula = xlsm_formula_text(cells, row_idx, KPI_DAILY_DATA_COLUMNS["period"])
-        if not code and description and "SUM(" in period_formula.upper():
-            continue
-        if not code and description:
-            text = normalized_ascii(description)
-            if any(token in text for token in ("SCOOP", "JUMBO", "TOTAL", "EQUIPO DE")):
-                continue
-        rows.append(row_idx)
-    return rows
-
-
-def xlsm_equipment_rows(root: ET.Element, shared_strings: list[str]) -> dict[str, int]:
-    cells = xlsm_sheet_cells(root)
-    mapping: dict[str, int] = {}
-    for row_idx in xlsm_data_rows(root, shared_strings):
-        cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["code"]))
-        code = normalize_text(xlsm_cell_text(cell, shared_strings) if cell is not None else "")
-        if code and not code.startswith("="):
-            mapping.setdefault(code, row_idx)
-    return mapping
-
-
-def build_monthly_kpi_daily_xlsm_fast(portal: dict[str, Any], year: int, month: int) -> BytesIO:
-    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
-    template_bytes = KPI_DAILY_XLSM_TEMPLATE_PATH.read_bytes()
-    last_day = monthrange(year, month)[1]
-    start = date(year, month, 1).isoformat()
-    end = date(year, month, last_day).isoformat()
-    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
-    shift_hours = parse_float(settings.get("shift_hours"), 9)
-    turns = parse_float(settings.get("turns_per_day"), 2)
-    daily_hours = shift_hours * turns if shift_hours and turns else 18
-    equipment = kpi_daily_active_equipment(portal)
-    equipment_by_code = {item["code"]: item for item in equipment}
-    aggregates = kpi_daily_aggregate_captures(portal, start, end)
-
-    with zipfile.ZipFile(BytesIO(template_bytes), "r") as zin:
-        sheet_paths = xlsm_sheet_paths(zin)
-        shared_strings = xlsm_shared_strings(zin)
-        sheet_roots: dict[str, ET.Element] = {}
-        for name, path in sheet_paths.items():
-            if name == "ASN" or name in {str(day) for day in range(1, 32)}:
-                root = ET.fromstring(zin.read(path))
-                xlsm_preserve_ignorable_namespace_declarations(root)
-                sheet_roots[name] = root
-        template_row_map = xlsm_equipment_rows(sheet_roots["1"], shared_strings) if "1" in sheet_roots else {}
-        ordered_codes = [code for code in template_row_map if code in equipment_by_code]
-        ordered_seen = set(ordered_codes)
-        ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
-
-        if "ASN" in sheet_roots:
-            asn = sheet_roots["ASN"]
-            asn_cells = xlsm_sheet_cells(asn)
-            xlsm_set_cell_cached(asn, asn_cells, 5, 2, excel_date_serial(date(year, month, 1)))
-            xlsm_set_cell_cached(asn, asn_cells, 5, 4, normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA")
-            xlsm_set_cell_cached(asn, asn_cells, 5, 5, shift_hours)
-            xlsm_set_cell_cached(asn, asn_cells, 5, 6, turns)
-
-        for day in range(1, 32):
-            sheet_name = str(day)
-            root = sheet_roots.get(sheet_name)
-            if root is None:
-                continue
-            cells = xlsm_sheet_cells(root)
-            writable_rows = xlsm_data_rows(root, shared_strings)
-            row_map = xlsm_equipment_rows(root, shared_strings)
-            for row_idx in writable_rows:
-                for col in KPI_DAILY_DATA_COLUMNS.values():
-                    xlsm_set_cell_cached(root, cells, row_idx, col, None)
-            if day > last_day:
-                continue
-            work_date = date(year, month, day).isoformat()
-            available_rows = [row for row in writable_rows if row not in row_map.values()]
-            used_rows: set[int] = set()
-            for code in ordered_codes:
-                equipment_row = equipment_by_code.get(code)
-                if not equipment_row:
-                    continue
-                row_idx = row_map.get(code)
-                if not row_idx:
-                    if not available_rows:
-                        break
-                    row_idx = available_rows.pop(0)
-                if row_idx in used_rows:
-                    continue
-                used_rows.add(row_idx)
-                aggregate = aggregates.get((work_date, code), {})
-                hi_values = aggregate.get("hi_values") or []
-                hf_values = aggregate.get("hf_values") or []
-                worked = parse_float(aggregate.get("worked"), 0)
-                hi = min(hi_values) if hi_values else 0
-                hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
-                status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["code"], code)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["description"], equipment_row.get("description") or code)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["hi"], hi or None)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["hf"], hf or None)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["period"], daily_hours)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["mp"], parse_float(aggregate.get("mp"), 0) or None)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["mc"], parse_float(aggregate.get("mc"), 0) or None)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["stops"], parse_float(aggregate.get("stops"), 0) or None)
-                for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
-                    xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS[field], parse_float(aggregate.get(field), 0) or None)
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["status"], status or "Disponible")
-                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["observations"], "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None)
-
-        output = BytesIO()
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
-            for info in zin.infolist():
-                data = zin.read(info.filename)
-                sheet_name = next((name for name, path in sheet_paths.items() if path == info.filename), None)
-                if sheet_name in sheet_roots:
-                    data = ET.tostring(sheet_roots[sheet_name], encoding="utf-8", xml_declaration=True)
-                zout.writestr(info, data)
-    output.seek(0)
-    return output
-
-
-def build_monthly_kpi_daily_xlsm_openpyxl(portal: dict[str, Any], year: int, month: int) -> BytesIO:
-    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
-    last_day = monthrange(year, month)[1]
-    start = date(year, month, 1).isoformat()
-    end = date(year, month, last_day).isoformat()
-    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
-    shift_hours = parse_float(settings.get("shift_hours"), 9)
-    turns = parse_float(settings.get("turns_per_day"), 2)
-    daily_hours = shift_hours * turns if shift_hours and turns else 18
-    equipment = kpi_daily_active_equipment(portal)
-    equipment_by_code = {item["code"]: item for item in equipment}
-    aggregates = kpi_daily_aggregate_captures(portal, start, end)
-
-    wb = load_workbook(KPI_DAILY_XLSM_TEMPLATE_PATH, keep_vba=True, data_only=False)
-    if "ASN" in wb.sheetnames:
-        ws_asn = wb["ASN"]
-        ws_asn["B5"] = date(year, month, 1)
-        ws_asn["E5"] = shift_hours
-        ws_asn["F5"] = turns
-        ws_asn["D5"] = normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA"
-
-    template_row_map = kpi_daily_equipment_rows(wb["1"]) if "1" in wb.sheetnames else {}
-    ordered_codes = [code for code in template_row_map if code in equipment_by_code]
-    ordered_seen = set(ordered_codes)
-    ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
-
-    for day in range(1, 32):
-        sheet_name = str(day)
-        if sheet_name not in wb.sheetnames:
-            continue
-        ws = wb[sheet_name]
-        writable_rows = kpi_daily_sheet_rows(ws)
-        row_map = kpi_daily_equipment_rows(ws)
-        for row_idx in writable_rows:
-            kpi_daily_clear_row(ws, row_idx)
-        if day > last_day:
-            continue
-        work_date = date(year, month, day).isoformat()
-        available_rows = [row for row in writable_rows if row not in row_map.values()]
-        used_rows: set[int] = set()
-        for code in ordered_codes:
-            equipment_row = equipment_by_code.get(code)
-            if not equipment_row:
-                continue
-            row_idx = row_map.get(code)
-            if not row_idx:
-                if not available_rows:
-                    break
-                row_idx = available_rows.pop(0)
-            if row_idx in used_rows:
-                continue
-            used_rows.add(row_idx)
-            aggregate = aggregates.get((work_date, code), {})
-            hi_values = aggregate.get("hi_values") or []
-            hf_values = aggregate.get("hf_values") or []
-            worked = parse_float(aggregate.get("worked"), 0)
-            hi = min(hi_values) if hi_values else 0
-            hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
-            status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value = code
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value = equipment_row.get("description") or code
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hi"]).value = hi or None
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hf"]).value = hf or None
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["period"]).value = daily_hours
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mp"]).value = parse_float(aggregate.get("mp"), 0) or None
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mc"]).value = parse_float(aggregate.get("mc"), 0) or None
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["stops"]).value = parse_float(aggregate.get("stops"), 0) or None
-            for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
-                ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS[field]).value = parse_float(aggregate.get(field), 0) or None
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["status"]).value = status or "Disponible"
-            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["observations"]).value = "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None
-
-    stream = BytesIO()
-    wb.save(stream)
-    stream.seek(0)
-    return stream
-
-
-def build_monthly_kpi_daily_xlsm(portal: dict[str, Any], year: int, month: int) -> BytesIO:
-    try:
-        return build_monthly_kpi_daily_xlsm_text_fast(portal, year, month)
-    except HTTPException:
-        raise
-    except Exception:
-        return build_monthly_kpi_daily_xlsm_openpyxl(portal, year, month)
-
-
-def parse_kpi_daily_xlsm_records(raw: bytes, year: int | None = None, month: int | None = None) -> list[dict[str, Any]]:
-    wb = load_workbook(BytesIO(raw), keep_vba=True, data_only=False)
-    base_date = None
-    if "ASN" in wb.sheetnames:
-        value = wb["ASN"]["B5"].value
-        if isinstance(value, datetime):
-            base_date = value.date()
-        elif isinstance(value, date):
-            base_date = value
-    if base_date is None:
-        if not year or not month:
-            raise HTTPException(status_code=400, detail="No se pudo detectar el mes del XLSM. Selecciona mes y anio antes de importar.")
-        base_date = date(year, month, 1)
-    year = year or base_date.year
-    month = month or base_date.month
-    last_day = monthrange(year, month)[1]
-    records: list[dict[str, Any]] = []
-    for day in range(1, last_day + 1):
-        sheet_name = str(day)
-        if sheet_name not in wb.sheetnames:
-            continue
-        ws = wb[sheet_name]
-        work_date = date(year, month, day).isoformat()
-        for row_idx in kpi_daily_sheet_rows(ws):
-            code = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value)
-            if not code or code.startswith("="):
-                continue
-            description = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value)
-            hi = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hi"]).value, 0)
-            hf = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hf"]).value, 0)
-            worked = max(hf - hi, 0) if hf and hi else 0
-            mp = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mp"]).value, 0)
-            mc = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mc"]).value, 0)
-            stops = parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["stops"]).value, 0)
-            oils = {
-                field: parse_float(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS[field]).value, 0)
-                for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters")
-            }
-            status = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["status"]).value)
-            observations = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["observations"]).value)
-            has_data = any([hi, hf, worked, mp, mc, stops, *oils.values(), observations]) or (status and normalized_ascii(status) not in {"DISPONIBLE", "DISPONIBLE."})
-            if not has_data:
-                continue
-            component = kpi_required_component_py(code)
-            records.append(
-                {
-                    "mobile_id": f"xlsm-kpi-{work_date}-{code}-{component}".replace(" ", "-"),
-                    "source": "web_xlsm",
-                    "work_date": work_date,
-                    "shift": "DIA",
-                    "equipment_code": code,
-                    "equipment_description": description,
-                    "component_name": component,
-                    "component": component,
-                    "hi": hi,
-                    "hf": hf,
-                    "worked_hours": worked,
-                    "mp_hours": mp,
-                    "mc_hours": mc,
-                    "standby_hours": 0,
-                    "stops": stops,
-                    "oil_liters": sum(oils.values()),
-                    **oils,
-                    "oil_hyd_vg100": 0,
-                    "atf_liters": 0,
-                    "fault": "",
-                    "wear": "",
-                    "status": status or "DISPONIBLE",
-                    "observations": observations,
-                    "photos": [],
-                }
-            )
-    return records
-
-
-def upsert_kpi_daily_xlsm_records(session: Session, records: list[dict[str, Any]]) -> dict[str, int]:
-    created = 0
-    updated = 0
-    skipped = 0
-    for record in records:
-        stored_record = dict(record)
-        existing = session.scalar(select(MobileCapture).where(MobileCapture.mobile_id == stored_record["mobile_id"]))
-        duplicate = None if existing is not None else mobile_capture_by_merge_key(session, stored_record)
-        target = existing or duplicate
-        if target is None:
-            capture = MobileCapture(
-                mobile_id=stored_record["mobile_id"],
-                source_device="web-xlsm-kpi",
-                user_name="Importacion XLSM KPI",
-                equipment_code=str(stored_record.get("equipment_code") or ""),
-                component_name=str(stored_record.get("component_name") or ""),
-                work_date=str(stored_record.get("work_date") or ""),
-                payload_json=json_dumps(stored_record),
-            )
-            session.add(capture)
-            created += 1
-            continue
-        current_payload = json_loads(target.payload_json)
-        current_key = json.dumps(current_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) if isinstance(current_payload, dict) else ""
-        next_key = json.dumps(stored_record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        if current_key == next_key:
-            skipped += 1
-            continue
-        target.mobile_id = stored_record["mobile_id"]
-        target.source_device = "web-xlsm-kpi"
-        target.user_name = "Importacion XLSM KPI"
-        target.equipment_code = str(stored_record.get("equipment_code") or "")
-        target.component_name = str(stored_record.get("component_name") or "")
-        target.work_date = str(stored_record.get("work_date") or "")
-        target.payload_json = json_dumps(stored_record)
-        target.received_at = utc_now()
-        target.desktop_imported_at = None
-        updated += 1
-    return {"created": created, "updated": updated, "skipped": skipped, "imported": len(records)}
 
 
 def portal_oil_group(eq: dict[str, Any]) -> str:
@@ -7534,6 +7250,121 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/version")
+def check_version(current_version: str = "") -> dict[str, Any]:
+    version_file = STATIC_DIR / "version.json"
+    if not version_file.exists():
+        return {"update_available": False, "error": "version.json not found"}
+    import json as _json
+    with open(version_file, "r", encoding="utf-8") as f:
+        server_version = _json.load(f)
+    update_available = False
+    if current_version and current_version != server_version.get("version_name", ""):
+        current_parts = [int(x) for x in current_version.split(".") if x.isdigit()]
+        server_parts = [int(x) for x in server_version.get("version_name", "0.0.0").split(".") if x.isdigit()]
+        current_parts.extend([0] * (3 - len(current_parts)))
+        server_parts.extend([0] * (3 - len(server_parts)))
+        update_available = server_parts > current_parts
+    return {
+        "update_available": update_available,
+        "current_version": current_version,
+        "server_version": server_version.get("version_name", ""),
+        "version_code": server_version.get("version_code", 0),
+        "apk_url": server_version.get("apk_url", ""),
+        "apk_size_mb": server_version.get("apk_size_mb", 0),
+        "mandatory": server_version.get("mandatory", False),
+        "changelog": server_version.get("changelog", []),
+        "release_date": server_version.get("release_date", ""),
+    }
+
+
+@app.get("/api/version/json")
+def version_json():
+    version_file = STATIC_DIR / "version.json"
+    if not version_file.exists():
+        return Response(status_code=404)
+    import json as _json
+    with open(version_file, "r", encoding="utf-8") as f:
+        return _json.load(f)
+
+
+@app.get("/downloads/{filename}")
+def download_apk(filename: str):
+    apk_dir = STATIC_DIR
+    apk_path = apk_dir / filename
+    if not apk_path.exists():
+        return Response(status_code=404, content="APK not found")
+    return FileResponse(
+        apk_path,
+        media_type="application/vnd.android.package-archive",
+        filename=filename,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/apk")
+def apk_download_page():
+    return Response(
+        content="""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MGA Mantenimiento - Descargar APK</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:linear-gradient(135deg,#0a1628 0%,#0f2744 50%,#0a1628 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;color:#e2e8f0}
+.card{max-width:440px;width:90%;background:rgba(255,255,255,.06);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:40px 32px;text-align:center;box-shadow:0 32px 64px rgba(0,0,0,.4)}
+.logo{width:80px;height:80px;border-radius:20px;background:linear-gradient(135deg,#0b69ff,#14b8a6);margin:0 auto 20px;display:grid;place-items:center;font-size:36px;font-weight:900;color:white;box-shadow:0 16px 40px rgba(11,105,255,.3)}
+h1{font-size:24px;font-weight:800;margin-bottom:4px;color:white}
+.subtitle{color:#94a3b8;font-size:14px;margin-bottom:24px}
+.version-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:12px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:#4ade80;font-size:13px;font-weight:700;margin-bottom:24px}
+.changelog{text-align:left;background:rgba(0,0,0,.2);border-radius:12px;padding:16px;margin-bottom:24px}
+.changelog h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:10px}
+.changelog li{font-size:13px;color:#cbd5e1;margin-bottom:6px;padding-left:4px;list-style:none}
+.changelog li::before{content:"\\2713 ";color:#22c55e;font-weight:700}
+.btn-download{display:inline-flex;align-items:center;gap:10px;padding:14px 32px;border-radius:14px;background:linear-gradient(135deg,#0b69ff,#2563eb);color:white;font-size:16px;font-weight:700;text-decoration:none;border:0;cursor:pointer;transition:all .2s;box-shadow:0 16px 40px rgba(11,105,255,.35);width:100%;justify-content:center}
+.btn-download:hover{transform:translateY(-2px);box-shadow:0 20px 50px rgba(11,105,255,.45)}
+.btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:12px 24px;border-radius:12px;background:rgba(255,255,255,.08);color:#94a3b8;font-size:13px;font-weight:600;text-decoration:none;border:1px solid rgba(255,255,255,.1);margin-top:12px;transition:all .2s}
+.btn-secondary:hover{background:rgba(255,255,255,.12);color:white}
+.footer{margin-top:24px;font-size:11px;color:#475569}
+.loading{display:none;text-align:center;padding:20px}
+.spinner{width:32px;height:32px;border:3px solid rgba(255,255,255,.1);border-top-color:#0b69ff;border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">MGA</div>
+  <h1>MGA Mantenimiento</h1>
+  <p class="subtitle">Plataforma de mantenimiento para mineria</p>
+  <div class="version-badge" id="versionBadge">Cargando...</div>
+  <div class="changelog" id="changelog"><h3>Novedades</h3><ul id="changelogList"></ul></div>
+  <a class="btn-download" id="downloadBtn" href="#">DESCARGAR APK</a>
+  <a class="btn-secondary" href="/">Volver al portal</a>
+  <div class="loading" id="loadingState"><div class="spinner"></div><p>Verificando version...</p></div>
+  <p class="footer">Android 6.0+ requerido | ~45 MB</p>
+</div>
+<script>
+async function init(){
+  try{
+    const r = await fetch('/api/version/json');
+    const v = await r.json();
+    document.getElementById('versionBadge').innerHTML = 'Version ' + esc(v.version_name) + ' | ' + esc(v.release_date);
+    document.getElementById('changelogList').innerHTML = (v.changelog||[]).map(c=>'<li>'+esc(c)+'</li>').join('');
+    document.getElementById('downloadBtn').href = v.apk_url || '/downloads/MGA_Captura_v3.1.0.apk';
+    document.getElementById('downloadBtn').textContent = 'DESCARGAR APK (' + (v.apk_size_mb||'?') + ' MB)';
+  }catch(e){ document.getElementById('versionBadge').textContent='Version 3.1.0'; }
+}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+init();
+</script>
+</body>
+</html>""",
+        media_type="text/html",
+    )
+
+
 @app.get("/favicon.ico")
 def favicon():
     logo = STATIC_DIR / "mga-corner-logo.jfif"
@@ -7900,65 +7731,6 @@ def get_oil_consumption_excel(
     )
 
 
-@app.get("/api/monthly-kpi-daily/xlsm")
-def get_monthly_kpi_daily_xlsm(
-    year: int = Query(default=0),
-    month: int = Query(default=0),
-) -> StreamingResponse:
-    now = utc_now()
-    year = year or now.year
-    month = month or now.month
-    if year < 2000 or year > 2100:
-        raise HTTPException(status_code=400, detail="Anio invalido.")
-    if month < 1 or month > 12:
-        raise HTTPException(status_code=400, detail="Mes invalido.")
-    with SessionLocal() as session:
-        start, end = month_bounds(year, month)
-        portal = portal_for_report_period(session, latest_portal_payload(session), start, end)
-    stream = build_monthly_kpi_daily_xlsm(portal, year, month)
-    month_name = MONTH_NAMES_ES_FULL[month - 1]
-    filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Diario_KPIs_Mantenimiento_Providencia_{month_name}_{year}.xlsm")
-    return Response(
-        content=stream.getvalue(),
-        media_type="application/vnd.ms-excel.sheet.macroEnabled.12",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Cache-Control": "no-store, max-age=0",
-        },
-    )
-
-
-@app.post("/api/monthly-kpi-daily/import")
-async def import_monthly_kpi_daily_xlsm(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
-    require_api_key(_auth)
-    payload = await request.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Archivo invalido.")
-    file_name = str(payload.get("file_name") or "").strip()
-    data = str(payload.get("data") or "")
-    if not data:
-        raise HTTPException(status_code=400, detail="Archivo vacio.")
-    if file_name and not file_name.lower().endswith((".xlsm", ".xlsx")):
-        raise HTTPException(status_code=400, detail="Solo se acepta Excel .xlsm o .xlsx.")
-    if "," in data:
-        data = data.split(",", 1)[1]
-    try:
-        raw = base64.b64decode(data)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="No se pudo decodificar el archivo.") from exc
-    year = int(parse_float(payload.get("year"), 0) or 0) or None
-    month = int(parse_float(payload.get("month"), 0) or 0) or None
-    if month is not None and (month < 1 or month > 12):
-        raise HTTPException(status_code=400, detail="Mes invalido.")
-    records = parse_kpi_daily_xlsm_records(raw, year, month)
-    if not records:
-        raise HTTPException(status_code=400, detail="No se encontraron capturas validas en las hojas diarias.")
-    with SessionLocal() as session:
-        summary = upsert_kpi_daily_xlsm_records(session, records)
-        session.commit()
-        return {"ok": True, **summary, "portal": latest_portal_payload(session)}
-
-
 @app.get("/api/kpi-format/excel")
 def get_kpi_format_excel(
     group: str = Query(default="Todos los equipos"),
@@ -8041,6 +7813,404 @@ def get_kpi_format_excel(
     )
 
 
+def build_monthly_kpi_daily_xlsm_text_fast(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
+    last_day = monthrange(year, month)[1]
+    start = date(year, month, 1).isoformat()
+    end = date(year, month, last_day).isoformat()
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9)
+    turns = parse_float(settings.get("turns_per_day"), 2)
+    daily_hours = shift_hours * turns if shift_hours and turns else 18
+    equipment = kpi_daily_active_equipment(portal)
+    equipment_by_code = {item["code"]: item for item in equipment}
+    aggregates = kpi_daily_aggregate_captures(portal, start, end)
+
+    with zipfile.ZipFile(KPI_DAILY_XLSM_TEMPLATE_PATH, "r") as zin:
+        sheet_paths = xlsm_sheet_paths(zin)
+        shared_strings = xlsm_shared_strings(zin)
+        sheet_roots: dict[str, ET.Element] = {}
+        for name, path in sheet_paths.items():
+            if name == "ASN" or name in {str(day) for day in range(1, 32)}:
+                sheet_roots[name] = ET.fromstring(zin.read(path))
+        template_row_map = xlsm_equipment_rows(sheet_roots["1"], shared_strings) if "1" in sheet_roots else {}
+        ordered_codes = [code for code in template_row_map if code in equipment_by_code]
+        ordered_seen = set(ordered_codes)
+        ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
+
+        replacements: dict[str, str] = {}
+        if "ASN" in sheet_paths:
+            path = sheet_paths["ASN"]
+            text = zin.read(path).decode("utf-8")
+            for row_idx, col_idx, value in (
+                (5, 2, excel_date_serial(date(year, month, 1))),
+                (5, 4, normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA"),
+                (5, 5, shift_hours),
+                (5, 6, turns),
+            ):
+                text = xlsm_replace_cell_text(text, row_idx, col_idx, value)
+            replacements[path] = text
+
+        for day in range(1, 32):
+            sheet_name = str(day)
+            path = sheet_paths.get(sheet_name)
+            root = sheet_roots.get(sheet_name)
+            if not path or root is None:
+                continue
+            text = zin.read(path).decode("utf-8")
+            writable_rows = xlsm_data_rows(root, shared_strings)
+            row_map = xlsm_equipment_rows(root, shared_strings)
+            if day <= last_day:
+                work_date = date(year, month, day).isoformat()
+                available_rows = [row for row in writable_rows if row not in row_map.values()]
+                used_rows: set[int] = set()
+                for code in ordered_codes:
+                    equipment_row = equipment_by_code.get(code)
+                    if not equipment_row:
+                        continue
+                    row_idx = row_map.get(code)
+                    if not row_idx:
+                        if not available_rows:
+                            break
+                        row_idx = available_rows.pop(0)
+                    if row_idx in used_rows:
+                        continue
+                    used_rows.add(row_idx)
+                    aggregate = aggregates.get((work_date, code), {})
+                    hi_values = aggregate.get("hi_values") or []
+                    hf_values = aggregate.get("hf_values") or []
+                    worked = parse_float(aggregate.get("worked"), 0)
+                    hi = min(hi_values) if hi_values else 0
+                    hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
+                    status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
+                    values = {
+                        "code": code,
+                        "description": equipment_row.get("description") or code,
+                        "hi": hi or None,
+                        "hf": hf or None,
+                        "period": daily_hours,
+                        "mp": parse_float(aggregate.get("mp"), 0) or None,
+                        "mc": parse_float(aggregate.get("mc"), 0) or None,
+                        "stops": parse_float(aggregate.get("stops"), 0) or None,
+                        "status": status or "Disponible",
+                        "observations": "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None,
+                    }
+                    for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+                        values[field] = parse_float(aggregate.get(field), 0) or None
+                    for field, value in values.items():
+                        text = xlsm_replace_cell_text(text, row_idx, KPI_DAILY_DATA_COLUMNS[field], value)
+            replacements[path] = text
+
+        output = BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+            for info in zin.infolist():
+                if info.filename == "xl/calcChain.xml":
+                    continue
+                data = replacements.get(info.filename)
+                if data is None:
+                    raw = zin.read(info.filename)
+                    if info.filename == "xl/_rels/workbook.xml.rels":
+                        text = raw.decode("utf-8")
+                        text = re.sub(r'<Relationship[^>]+Target="calcChain.xml"[^>]*/>', "", text)
+                        text = re.sub(r"<Relationship[^>]+calcChain[^>]*/>", "", text)
+                        raw = text.encode("utf-8")
+                    elif info.filename == "[Content_Types].xml":
+                        text = raw.decode("utf-8")
+                        text = text.replace(
+                            '<Override PartName="/xl/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/>',
+                            "",
+                        )
+                        raw = text.encode("utf-8")
+                    zout.writestr(info, raw)
+                else:
+                    zout.writestr(info, data.encode("utf-8"))
+    output.seek(0)
+    return output
+
+
+def xlsm_formula_text(cells: dict[str, ET.Element], row_idx: int, col_idx: int) -> str:
+    cell = cells.get(excel_cell_ref(row_idx, col_idx))
+    if cell is None:
+        return ""
+    ns = xlsm_xml_namespaces()
+    formula = cell.find("main:f", ns)
+    return formula.text or "" if formula is not None else ""
+
+
+def xlsm_data_rows(root: ET.Element, shared_strings: list[str], max_rows: int = 185) -> list[int]:
+    cells = xlsm_sheet_cells(root)
+    rows: list[int] = []
+    for row_idx in range(8, max_rows + 1):
+        code_cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["code"]))
+        desc_cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["description"]))
+        code = xlsm_cell_text(code_cell, shared_strings) if code_cell is not None else ""
+        description = xlsm_cell_text(desc_cell, shared_strings) if desc_cell is not None else ""
+        period_formula = xlsm_formula_text(cells, row_idx, KPI_DAILY_DATA_COLUMNS["period"])
+        if not code and description and "SUM(" in period_formula.upper():
+            continue
+        if not code and description:
+            text = normalized_ascii(description)
+            if any(token in text for token in ("SCOOP", "JUMBO", "TOTAL", "EQUIPO DE")):
+                continue
+        rows.append(row_idx)
+    return rows
+
+
+def xlsm_equipment_rows(root: ET.Element, shared_strings: list[str]) -> dict[str, int]:
+    cells = xlsm_sheet_cells(root)
+    mapping: dict[str, int] = {}
+    for row_idx in xlsm_data_rows(root, shared_strings):
+        cell = cells.get(excel_cell_ref(row_idx, KPI_DAILY_DATA_COLUMNS["code"]))
+        code = normalize_text(xlsm_cell_text(cell, shared_strings) if cell is not None else "")
+        if code and not code.startswith("="):
+            mapping.setdefault(code, row_idx)
+    return mapping
+
+
+def build_monthly_kpi_daily_xlsm_fast(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
+    template_bytes = KPI_DAILY_XLSM_TEMPLATE_PATH.read_bytes()
+    last_day = monthrange(year, month)[1]
+    start = date(year, month, 1).isoformat()
+    end = date(year, month, last_day).isoformat()
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9)
+    turns = parse_float(settings.get("turns_per_day"), 2)
+    daily_hours = shift_hours * turns if shift_hours and turns else 18
+    equipment = kpi_daily_active_equipment(portal)
+    equipment_by_code = {item["code"]: item for item in equipment}
+    aggregates = kpi_daily_aggregate_captures(portal, start, end)
+
+    with zipfile.ZipFile(BytesIO(template_bytes), "r") as zin:
+        sheet_paths = xlsm_sheet_paths(zin)
+        shared_strings = xlsm_shared_strings(zin)
+        sheet_roots: dict[str, ET.Element] = {}
+        for name, path in sheet_paths.items():
+            if name == "ASN" or name in {str(day) for day in range(1, 32)}:
+                root = ET.fromstring(zin.read(path))
+                xlsm_preserve_ignorable_namespace_declarations(root)
+                sheet_roots[name] = root
+        template_row_map = xlsm_equipment_rows(sheet_roots["1"], shared_strings) if "1" in sheet_roots else {}
+        ordered_codes = [code for code in template_row_map if code in equipment_by_code]
+        ordered_seen = set(ordered_codes)
+        ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
+
+        if "ASN" in sheet_roots:
+            asn = sheet_roots["ASN"]
+            asn_cells = xlsm_sheet_cells(asn)
+            xlsm_set_cell_cached(asn, asn_cells, 5, 2, excel_date_serial(date(year, month, 1)))
+            xlsm_set_cell_cached(asn, asn_cells, 5, 4, normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA")
+            xlsm_set_cell_cached(asn, asn_cells, 5, 5, shift_hours)
+            xlsm_set_cell_cached(asn, asn_cells, 5, 6, turns)
+
+        for day in range(1, 32):
+            sheet_name = str(day)
+            root = sheet_roots.get(sheet_name)
+            if root is None:
+                continue
+            cells = xlsm_sheet_cells(root)
+            writable_rows = xlsm_data_rows(root, shared_strings)
+            row_map = xlsm_equipment_rows(root, shared_strings)
+            for row_idx in writable_rows:
+                for col in KPI_DAILY_DATA_COLUMNS.values():
+                    xlsm_set_cell_cached(root, cells, row_idx, col, None)
+            if day > last_day:
+                continue
+            work_date = date(year, month, day).isoformat()
+            available_rows = [row for row in writable_rows if row not in row_map.values()]
+            used_rows: set[int] = set()
+            for code in ordered_codes:
+                equipment_row = equipment_by_code.get(code)
+                if not equipment_row:
+                    continue
+                row_idx = row_map.get(code)
+                if not row_idx:
+                    if not available_rows:
+                        break
+                    row_idx = available_rows.pop(0)
+                if row_idx in used_rows:
+                    continue
+                used_rows.add(row_idx)
+                aggregate = aggregates.get((work_date, code), {})
+                hi_values = aggregate.get("hi_values") or []
+                hf_values = aggregate.get("hf_values") or []
+                worked = parse_float(aggregate.get("worked"), 0)
+                hi = min(hi_values) if hi_values else 0
+                hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
+                status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["code"], code)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["description"], equipment_row.get("description") or code)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["hi"], hi or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["hf"], hf or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["period"], daily_hours)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["mp"], parse_float(aggregate.get("mp"), 0) or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["mc"], parse_float(aggregate.get("mc"), 0) or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["stops"], parse_float(aggregate.get("stops"), 0) or None)
+                for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+                    xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS[field], parse_float(aggregate.get(field), 0) or None)
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["status"], status or "Disponible")
+                xlsm_set_cell_cached(root, cells, row_idx, KPI_DAILY_DATA_COLUMNS["observations"], "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None)
+
+        output = BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+            for info in zin.infolist():
+                data = zin.read(info.filename)
+                sheet_name = next((name for name, path in sheet_paths.items() if path == info.filename), None)
+                if sheet_name in sheet_roots:
+                    data = ET.tostring(sheet_roots[sheet_name], encoding="utf-8", xml_declaration=True)
+                zout.writestr(info, data)
+    output.seek(0)
+    return output
+
+
+def build_monthly_kpi_daily_xlsm_openpyxl(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
+    last_day = monthrange(year, month)[1]
+    start = date(year, month, 1).isoformat()
+    end = date(year, month, last_day).isoformat()
+    settings = portal.get("settings") if isinstance(portal.get("settings"), dict) else {}
+    shift_hours = parse_float(settings.get("shift_hours"), 9)
+    turns = parse_float(settings.get("turns_per_day"), 2)
+    daily_hours = shift_hours * turns if shift_hours and turns else 18
+    equipment = kpi_daily_active_equipment(portal)
+    equipment_by_code = {item["code"]: item for item in equipment}
+    aggregates = kpi_daily_aggregate_captures(portal, start, end)
+
+    wb = load_workbook(KPI_DAILY_XLSM_TEMPLATE_PATH, keep_vba=True, data_only=False)
+    if "ASN" in wb.sheetnames:
+        ws_asn = wb["ASN"]
+        ws_asn["B5"] = date(year, month, 1)
+        ws_asn["E5"] = shift_hours
+        ws_asn["F5"] = turns
+        ws_asn["D5"] = normalize_text(settings.get("mine") or settings.get("project") or "PROVIDENCIA") or "PROVIDENCIA"
+
+    template_row_map = kpi_daily_equipment_rows(wb["1"]) if "1" in wb.sheetnames else {}
+    ordered_codes = [code for code in template_row_map if code in equipment_by_code]
+    ordered_seen = set(ordered_codes)
+    ordered_codes.extend([item["code"] for item in equipment if item["code"] not in ordered_seen])
+
+    for day in range(1, 32):
+        sheet_name = str(day)
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        writable_rows = kpi_daily_sheet_rows(ws)
+        row_map = kpi_daily_equipment_rows(ws)
+        for row_idx in writable_rows:
+            kpi_daily_clear_row(ws, row_idx)
+        if day > last_day:
+            continue
+        work_date = date(year, month, day).isoformat()
+        available_rows = [row for row in writable_rows if row not in row_map.values()]
+        used_rows: set[int] = set()
+        for code in ordered_codes:
+            equipment_row = equipment_by_code.get(code)
+            if not equipment_row:
+                continue
+            row_idx = row_map.get(code)
+            if not row_idx:
+                if not available_rows:
+                    break
+                row_idx = available_rows.pop(0)
+            if row_idx in used_rows:
+                continue
+            used_rows.add(row_idx)
+            aggregate = aggregates.get((work_date, code), {})
+            hi_values = aggregate.get("hi_values") or []
+            hf_values = aggregate.get("hf_values") or []
+            worked = parse_float(aggregate.get("worked"), 0)
+            hi = min(hi_values) if hi_values else 0
+            hf = max(hf_values) if hf_values else (hi + worked if hi and worked else 0)
+            status = (aggregate.get("statuses") or [kpi_daily_date_status(portal, work_date, code)])[0]
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value = code
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value = equipment_row.get("description") or code
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hi"]).value = hi or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["hf"]).value = hf or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["period"]).value = daily_hours
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mp"]).value = parse_float(aggregate.get("mp"), 0) or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["mc"]).value = parse_float(aggregate.get("mc"), 0) or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["stops"]).value = parse_float(aggregate.get("stops"), 0) or None
+            for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+                ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS[field]).value = parse_float(aggregate.get(field), 0) or None
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["status"]).value = status or "Disponible"
+            ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["observations"]).value = "; ".join(dict.fromkeys(aggregate.get("observations") or [])) or None
+
+    stream = BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    return stream
+
+
+def build_monthly_kpi_daily_xlsm(portal: dict[str, Any], year: int, month: int) -> BytesIO:
+    try:
+        return build_monthly_kpi_daily_xlsm_text_fast(portal, year, month)
+    except HTTPException:
+        raise
+    except Exception:
+        return build_monthly_kpi_daily_xlsm_openpyxl(portal, year, month)
+
+
+@app.get("/api/monthly-kpi-daily/xlsm")
+def get_monthly_kpi_daily_xlsm(
+    year: int = Query(default=0),
+    month: int = Query(default=0),
+) -> StreamingResponse:
+    now = utc_now()
+    year = year or now.year
+    month = month or now.month
+    if year < 2000 or year > 2100:
+        raise HTTPException(status_code=400, detail="Anio invalido.")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Mes invalido.")
+    with SessionLocal() as session:
+        start, end = month_bounds(year, month)
+        portal = portal_for_report_period(session, latest_portal_payload(session), start, end)
+    stream = build_monthly_kpi_daily_xlsm(portal, year, month)
+    month_name = MONTH_NAMES_ES_FULL[month - 1]
+    filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Diario_KPIs_Mantenimiento_Providencia_{month_name}_{year}.xlsm")
+    return Response(
+        content=stream.getvalue(),
+        media_type="application/vnd.ms-excel.sheet.macroEnabled.12",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )
+
+
+@app.post("/api/monthly-kpi-daily/import")
+async def import_monthly_kpi_daily_xlsm(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Archivo invalido.")
+    file_name = str(payload.get("file_name") or "").strip()
+    data = str(payload.get("data") or "")
+    if not data:
+        raise HTTPException(status_code=400, detail="Archivo vacio.")
+    if file_name and not file_name.lower().endswith((".xlsm", ".xlsx")):
+        raise HTTPException(status_code=400, detail="Solo se acepta Excel .xlsm o .xlsx.")
+    if "," in data:
+        data = data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="No se pudo decodificar el archivo.") from exc
+    year = int(parse_float(payload.get("year"), 0) or 0) or None
+    month = int(parse_float(payload.get("month"), 0) or 0) or None
+    if month is not None and (month < 1 or month > 12):
+        raise HTTPException(status_code=400, detail="Mes invalido.")
+    records = parse_kpi_daily_xlsm_records(raw, year, month)
+    if not records:
+        raise HTTPException(status_code=400, detail="No se encontraron capturas validas en las hojas diarias.")
+    with SessionLocal() as session:
+        summary = upsert_kpi_daily_xlsm_records(session, records)
+        session.commit()
+        return {"ok": True, **summary, "portal": latest_portal_payload(session)}
+
 @app.get("/api/monthly-report/powerpoint")
 def get_monthly_report_powerpoint(
     year: int = Query(default=0),
@@ -8120,6 +8290,32 @@ def get_service_report_pdf(
         portal = latest_portal_payload(session)
     data = service_report_pdf_bytes(portal, start_iso, end_iso, period_label, equipment, search)
     filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Reporte_Servicios_PM_{period_label}_{start_iso}_a_{end_iso}.pdf")
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )
+
+
+@app.get("/api/service-history/pdf")
+def get_service_history_pdf(
+    period: str = Query(default="Mes"),
+    base: str = Query(default=""),
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    equipment: str = Query(default=""),
+    interval: str = Query(default=""),
+    service_type: str = Query(default=""),
+    search: str = Query(default=""),
+) -> StreamingResponse:
+    start_iso, end_iso, period_label = report_period_bounds(period, base, start, end)
+    with SessionLocal() as session:
+        portal = latest_portal_payload(session)
+    data = service_history_pdf_bytes(portal, start_iso, end_iso, period_label, equipment, interval, service_type, search)
+    filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"Servicios_Realizados_{period_label}_{start_iso}_a_{end_iso}.pdf")
     return StreamingResponse(
         BytesIO(data),
         media_type="application/pdf",
@@ -8473,8 +8669,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .tabs button:hover, .btn:hover { transform:translateY(-1px); box-shadow:0 10px 20px rgba(39,58,92,.14); }
     .tabs button { background:linear-gradient(180deg,#f4f7fb,#e9f0f7); color:#263447; border:1px solid transparent; }
     .tabs button.active { background:#ffffff; color:var(--blue); border-color:#b7c8e8; box-shadow:inset 0 -3px 0 var(--teal), 0 10px 20px rgba(39,58,92,.10); }
-    .btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
-    .btn.danger { background:linear-gradient(135deg,#a91d2c,var(--red)); }
+    .tabs .nav-sep { width:2px; min-width:2px; height:24px; background:var(--line); border:none; border-radius:1px; padding:0; cursor:default; flex-shrink:0; align-self:center; box-shadow:none; }
+.btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
+.btn.danger { background:linear-gradient(135deg,#a91d2c,var(--red)); }
+.btn.dark { background:linear-gradient(135deg,#0f172a,#334155); }
     .btn.small { padding:5px 8px; border-radius:5px; font-size:11px; white-space:nowrap; }
     .panel { position:relative; overflow:hidden; background:rgba(255,255,255,.97); border:1px solid rgba(215,224,234,.96); border-radius:12px; padding:16px; box-shadow:var(--shadow); }
     .panel::before { content:""; position:absolute; inset:0 0 auto; height:3px; background:linear-gradient(90deg,var(--blue2),var(--teal)); opacity:.86; }
@@ -8779,6 +8977,80 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .schedule-chip { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; border-radius:5px; padding:3px 5px; color:white; background:var(--blue); font-size:11px; }
     .schedule-chip.late { background:var(--red); }
     .schedule-chip.near { background:#b45309; }
+    .alm-wrap { border:1px solid var(--line); border-radius:10px; background:white; overflow:hidden; margin-top:8px; }
+    .alm-header { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:linear-gradient(90deg,var(--blue),var(--teal)); color:white; }
+    .alm-header h3 { margin:0; font-size:15px; }
+    .alm-nav { display:flex; gap:6px; }
+    .alm-nav button { background:rgba(255,255,255,.2); color:white; border:1px solid rgba(255,255,255,.3); border-radius:6px; padding:4px 12px; cursor:pointer; font-weight:700; font-size:13px; }
+    .alm-nav button:hover { background:rgba(255,255,255,.35); }
+    .alm-grid { display:grid; grid-template-columns:repeat(7, 1fr); gap:0; }
+    .alm-dow { background:var(--navy); color:white; text-align:center; padding:6px 2px; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+    .alm-day { min-height:80px; border:1px solid #e5e9f0; padding:4px 5px; display:flex; flex-direction:column; gap:3px; background:white; transition:background .15s; }
+    .alm-day:hover { background:#f0f7ff; }
+    .alm-day.weekend { background:#f8fafc; }
+    .alm-day.today { background:#eff6ff; border:2px solid var(--blue); }
+    .alm-day.other-month { background:#f1f5f9; opacity:.55; }
+    .alm-day-num { font-size:12px; font-weight:800; color:var(--navy); }
+    .alm-day.today .alm-day-num { color:var(--blue); }
+    .alm-today-badge { display:inline-block; background:var(--blue); color:white; font-size:8px; padding:1px 4px; border-radius:3px; font-weight:800; margin-left:3px; }
+    .alm-chip { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; border-radius:4px; padding:2px 4px; color:white; font-size:9px; font-weight:700; line-height:1.3; }
+    .alm-chip.prog { background:var(--blue); }
+    .alm-chip.prox { background:#b45309; }
+    .alm-chip.urg { background:var(--amber); }
+    .alm-chip.ven { background:var(--red); }
+    .alm-chip.done { background:var(--green); }
+    .alm-more { font-size:9px; color:var(--muted); font-weight:700; padding-left:2px; }
+    .alm-legend { display:flex; gap:14px; padding:8px 14px; border-top:1px solid var(--line); background:#f8fafc; flex-wrap:wrap; align-items:center; }
+    .alm-legend-item { display:flex; align-items:center; gap:4px; font-size:11px; color:var(--muted); }
+    .alm-legend-dot { width:10px; height:10px; border-radius:3px; flex-shrink:0; }
+    .alm-summary { font-size:11px; color:var(--navy); font-weight:700; margin-left:auto; }
+    .alm-actions { padding:6px 14px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; background:#fafbfd; }
+    .alm-actions button { padding:5px 14px; border-radius:6px; border:1px solid var(--line); background:white; color:var(--navy); font-size:11px; font-weight:700; cursor:pointer; }
+    .alm-actions button:hover { background:var(--blue); color:white; border-color:var(--blue); }
+    .op-card { position:relative; overflow:hidden; min-height:90px; border:1px solid var(--line); border-radius:10px; padding:12px; background:linear-gradient(135deg,#fff,#f8fbff); }
+    .op-card::before { content:""; position:absolute; inset:0 0 auto; height:3px; }
+    .kanban-board { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; min-height:500px; }
+    .kanban-col { background:#f8fafc; border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; }
+    .kanban-col.drag-over { background:#eff6ff; border-color:var(--blue); border-style:dashed; }
+    .kanban-col-head { padding:10px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; border-radius:10px 10px 0 0; }
+    .kanban-col-head h4 { margin:0; font-size:13px; color:var(--navy); }
+    .kanban-col-head .badge { background:var(--blue); color:white; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:700; }
+    .kanban-col[data-status="backlog"] .kanban-col-head { background:#f1f5f9; }
+    .kanban-col[data-status="programado"] .kanban-col-head { background:#eff6ff; }
+    .kanban-col[data-status="proceso"] .kanban-col-head { background:#fff7ed; }
+    .kanban-col[data-status="completado"] .kanban-col-head { background:#f0fdf4; }
+    .kanban-cards { flex:1; padding:8px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; min-height:60px; }
+    .kanban-card { background:white; border:1px solid var(--line); border-radius:8px; padding:10px; cursor:grab; transition:box-shadow .15s, transform .1s; }
+    .kanban-card:hover { box-shadow:0 3px 12px rgba(0,0,0,.1); }
+    .kanban-card.dragging { opacity:.5; transform:rotate(2deg); }
+    .kanban-card .kc-eq { font-weight:800; color:var(--navy); font-size:13px; }
+    .kanban-card .kc-comp { font-size:12px; color:var(--muted); margin-top:2px; }
+    .kanban-card .kc-meta { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; }
+    .kanban-card .kc-pill { font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; }
+    .kanban-card .kc-pill.high { background:#fee2e2; color:var(--red); }
+    .kanban-card .kc-pill.med { background:#fef3c7; color:#92400e; }
+    .kanban-card .kc-pill.low { background:#e0f2fe; color:#0369a1; }
+    .kanban-card .kc-pill.hours { background:#f0f9ff; color:var(--blue); }
+    .kanban-card .kc-pill.hours.ven { background:#fee2e2; color:var(--red); }
+    .kanban-card .kc-pill.hours.urg { background:#fef3c7; color:#92400e; }
+    .kanban-card .kc-pill.src { background:#f1f5f9; color:var(--navy); }
+    .kanban-card .kc-date { font-size:10px; color:var(--muted); margin-top:4px; }
+    .op-card.red::before { background:var(--red); }
+    .op-card.amber::before { background:var(--amber); }
+    .op-card.green::before { background:var(--green); }
+    .op-card.blue::before { background:var(--blue); }
+    .op-card.steel::before { background:var(--steel); }
+    .op-card span { display:block; color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; }
+    .op-card strong { display:block; margin-top:6px; color:var(--navy); font-size:28px; line-height:1; }
+    .op-card b { display:block; margin-top:4px; font-size:10px; font-weight:600; }
+    .op-action { display:flex; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid #f1f5f9; font-size:12px; }
+    .op-action:last-child { border-bottom:none; }
+    .op-action .pill { font-size:10px; }
+    .op-action .op-eq { font-weight:800; color:var(--navy); min-width:60px; }
+    .op-action .op-desc { color:var(--muted); flex:1; }
+    .op-action .op-val { font-weight:800; white-space:nowrap; }
+    .op-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:10px; margin-top:10px; }
+    @media print { .alm-actions, .alm-nav, .tabs, header, .panel.toolbar, .alm-wrap::before { display:none !important; } .alm-wrap { border:none; box-shadow:none; } .alm-day { min-height:60px; } body { background:white !important; } }
     .condition-cell { font-weight:800; text-align:center; }
     .cond-ok { background:#35f235; color:#063b16; }
     .cond-out { background:#ff1616; color:#210000; }
@@ -8865,7 +9137,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .warehouse-page main { width:100%; max-width:none; margin:0; padding:14px 24px 18px 252px; gap:14px; }
     .warehouse-page .tabs { position:fixed; left:0; top:76px; bottom:0; width:228px; z-index:20; display:flex; flex-direction:column; flex-wrap:nowrap; overflow:auto; gap:4px; padding:20px 14px; border:0; border-radius:0; background:linear-gradient(180deg,#092250,#123e7b); box-shadow:18px 0 34px rgba(7,31,73,.16); transition:transform .22s ease; }
     .warehouse-page .tabs::before { content:"OPERACION"; color:#b7c7e8; font-size:12px; font-weight:900; margin:0 8px 8px; letter-spacing:.05em; }
-    .warehouse-page .tabs button { width:100%; text-align:left; color:#e9f1ff; background:transparent; border:1px solid transparent; border-radius:10px; padding:11px 12px; }
+    .nav-section-label { color:#6b83a8; font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; padding:12px 12px 4px; margin-top:4px; border-top:1px solid rgba(255,255,255,.08); }
+    .nav-section-label:first-child { border-top:0; margin-top:0; }
+    .warehouse-page .tabs button { width:100%; text-align:left; color:#e9f1ff; background:transparent; border:1px solid transparent; border-radius:10px; padding:9px 12px; font-size:12px; }
     .warehouse-page .tabs button:hover { background:rgba(255,255,255,.09); box-shadow:none; }
     .warehouse-page .tabs button.active { background:linear-gradient(135deg,#0b69ff,#0756d8); color:white; border-color:rgba(255,255,255,.18); box-shadow:0 10px 20px rgba(3,20,48,.25); }
     .sidebar-toggle { position:fixed; left:16px; top:18px; z-index:50; width:38px; height:38px; border:1px solid #dbe5f2; border-radius:12px; background:white; color:#0b2f6f; box-shadow:0 10px 24px rgba(15,35,68,.12); cursor:pointer; font-size:20px; font-weight:900; line-height:1; }
@@ -8944,6 +9218,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
     .warehouse-page #inventario > .grid2 { grid-template-columns:1.25fr .9fr; }
     .warehouse-page #inventoryTable th, .warehouse-page #movementTable th, .warehouse-page #filtersTable th { background:#f3f7fc; color:#425982; }
     .warehouse-page #inventoryTable td, .warehouse-page #movementTable td, .warehouse-page #filtersTable td { color:#1d376b; }
+    .lubricantes-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; margin-top:12px; }
+    .lub-card { position:relative; overflow:hidden; padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:linear-gradient(135deg,#fff,#f8fbff); box-shadow:0 10px 24px rgba(15,23,42,.07); }
+    .lub-card.alerta { border-color:#fecaca; background:linear-gradient(135deg,#fff,#fef2f2); }
+    .lub-card .lub-code { display:inline-block; padding:3px 8px; border-radius:8px; background:#eef4ff; color:#0b69ff; font-size:11px; font-weight:900; letter-spacing:.4px; }
+    .lub-card h4 { margin:8px 0 10px; color:#071f49; font-size:14px; line-height:1.25; }
+    .lub-card .lub-stock { color:#047857; font-size:26px; font-weight:900; line-height:1; }
+    .lub-card.alerta .lub-stock { color:#dc2626; }
+    .lub-card .lub-unit { color:#64769a; font-size:13px; font-weight:800; }
+    .lub-card .lub-meta { display:flex; justify-content:space-between; gap:8px; margin-top:10px; padding-top:10px; border-top:1px dashed #dbe4f0; font-size:12px; color:#425982; }
+    .lub-card .lub-meta b { color:#10244a; }
+    .lub-badge { position:absolute; top:12px; right:12px; padding:4px 9px; border-radius:999px; font-size:11px; font-weight:900; }
+    .lub-badge.ok { background:#e8fff5; color:#00a86b; }
+    .lub-badge.low { background:#fee2e2; color:#dc2626; }
+    @media (max-width: 900px) { .lubricantes-grid { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width: 540px) { .lubricantes-grid { grid-template-columns:1fr; } }
     @media print {
       header, .tabs, #stats, .dashboard-controls, .no-print { display:none !important; }
       main { width:100%; padding:0; }
@@ -8960,9 +9249,295 @@ WAREHOUSE_HTML = r"""<!doctype html>
     @media (max-width: 900px) { .hero, .grid2 { display:block; } .brand { align-items:flex-start; } .corner-logo { width:96px; height:66px; margin-bottom:10px; } .toolbar, .movement-grid, .req-header-grid, .req-item-grid, .stats { grid-template-columns:1fr; } .exec-alert-grid, .profile-grid, .kpi-main-strip { grid-template-columns:repeat(2,minmax(120px,1fr)); } .capture-form-grid, .tire-track-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .tire-kpi-short { grid-template-columns:repeat(2,minmax(0,1fr)); } header input { min-width:0; margin-top:10px; } .key-card { margin-top:14px; min-width:0; } .tabs { overflow:auto; flex-wrap:nowrap; } .tabs button { flex:0 0 auto; } }
     @media (max-width: 540px) { main { padding:9px; } .panel { padding:12px; } .exec-alert-grid, .profile-grid, .kpi-main-strip, .capture-form-grid, .tire-track-form, .tire-kpi-short { grid-template-columns:1fr; } .capture-section-title, .capture-form-grid .wide, .tire-track-form .wide { grid-column:1; } .capture-actions { display:grid; grid-template-columns:1fr; } .capture-actions .btn { width:100%; } .exec-alert { align-items:flex-start; flex-direction:column; } }
     @media (max-width: 1050px) { .dashboard-grid, .kpi-format-board, .kpi-special-mode #kpiCards, .kpi-diesel-mode #kpiCards, .diesel-card-grid, .diesel-visual-grid { grid-template-columns:1fr; } .diesel-bar-row { grid-template-columns:1fr; } .diesel-bar-row strong, .diesel-bar-row em { text-align:left; } }
+    /* ===== DASHBOARD 2.0 STYLES ===== */
+    .d2-top { display:grid; grid-template-columns:repeat(6, 1fr); gap:10px; }
+    .d2-kpi { position:relative; overflow:hidden; display:grid; grid-template-columns:42px 1fr; gap:10px; align-items:center; min-height:94px; padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:linear-gradient(135deg,#fff,#f8fbff); box-shadow:0 12px 28px rgba(15,23,42,.08); cursor:pointer; transition:transform .16s ease, box-shadow .16s ease; }
+    .d2-kpi:hover { transform:translateY(-2px); box-shadow:0 16px 30px rgba(15,23,42,.12); }
+    .d2-kpi::after { content:""; position:absolute; inset:auto -30px -40px auto; width:100px; height:100px; border-radius:50%; opacity:.08; }
+    .d2-kpi-icon { width:38px; height:38px; display:grid; place-items:center; border-radius:10px; color:white; font-size:18px; }
+    .d2-kpi-icon.red { background:linear-gradient(135deg,#ef4444,#dc2626); }
+    .d2-kpi-icon.amber { background:linear-gradient(135deg,#f59e0b,#d97706); }
+    .d2-kpi-icon.green { background:linear-gradient(135deg,#22c55e,#16a34a); }
+    .d2-kpi-icon.blue { background:linear-gradient(135deg,#2563eb,#1d4ed8); }
+    .d2-kpi-icon.steel { background:linear-gradient(135deg,#475569,#334155); }
+    .d2-kpi-icon.teal { background:linear-gradient(135deg,#14b8a6,#0d9488); }
+    .d2-kpi-val { display:block; color:var(--navy); font-size:26px; font-weight:900; line-height:1; }
+    .d2-kpi-label { display:block; margin-top:3px; color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; }
+    .d2-kpi-sub { display:block; margin-top:2px; color:#475569; font-size:11px; }
+    .d2-mid { display:grid; grid-template-columns:1.4fr 1fr; gap:10px; }
+    .d2-bottom { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+    .d2-schedule { display:grid; grid-template-columns:repeat(7, 1fr); gap:6px; }
+    .d2-day { position:relative; min-height:100px; padding:8px; border:1px solid var(--line); border-radius:10px; background:white; cursor:pointer; transition:border-color .15s ease, box-shadow .15s ease; }
+    .d2-day:hover, .d2-day.today { border-color:var(--teal); box-shadow:0 4px 14px rgba(20,184,166,.12); }
+    .d2-day.today { background:linear-gradient(135deg,#f0fdfa,#ecfdf5); }
+    .d2-day-name { display:block; color:var(--muted); font-size:10px; font-weight:900; text-transform:uppercase; text-align:center; margin-bottom:4px; }
+    .d2-day-num { display:block; text-align:center; color:var(--navy); font-size:18px; font-weight:900; margin-bottom:6px; }
+    .d2-day-chip { display:block; padding:2px 5px; border-radius:5px; font-size:9px; font-weight:800; margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .d2-day-chip.pm { background:#dbeafe; color:#1e40af; }
+    .d2-day-chip.ot { background:#fee2e2; color:#991b1b; }
+    .d2-day-chip.ok { background:#dcfce7; color:#166534; }
+    .d2-donut { position:relative; display:grid; place-items:center; min-height:180px; }
+    .d2-donut-ring { position:relative; width:150px; height:150px; border-radius:50%; }
+    .d2-donut-center { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:80px; height:80px; border-radius:50%; background:white; display:grid; place-items:center; box-shadow:0 2px 8px rgba(15,23,42,.08); }
+    .d2-donut-center strong { color:var(--navy); font-size:22px; font-weight:900; }
+    .d2-donut-center span { display:block; color:var(--muted); font-size:9px; text-align:center; text-transform:uppercase; }
+    .d2-legend { display:grid; gap:6px; align-self:center; }
+    .d2-legend-item { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; color:#334155; }
+    .d2-legend-dot { width:10px; height:10px; border-radius:3px; flex:0 0 auto; }
+    .d2-legend-item small { color:var(--muted); font-weight:600; margin-left:auto; }
+    .d2-eq-out-card { display:flex; gap:10px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fef2f2; cursor:pointer; transition:background .12s; }
+    .d2-eq-out-card:hover { background:#fee2e2; }
+    .d2-eq-out-card .eq-icon { width:32px; height:32px; display:grid; place-items:center; border-radius:8px; background:linear-gradient(135deg,#ef4444,#dc2626); color:white; font-size:14px; flex:0 0 auto; }
+    .d2-eq-out-card .eq-info { min-width:0; }
+    .d2-eq-out-card .eq-info strong { display:block; color:var(--navy); font-size:13px; }
+    .d2-eq-out-card .eq-info span { display:block; color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .d2-alert-item { display:flex; gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:white; cursor:pointer; transition:background .12s; }
+    .d2-alert-item:hover { background:#fffbeb; }
+    .d2-alert-item .alert-dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+    .d2-alert-item .alert-dot.red { background:var(--red); }
+    .d2-alert-item .alert-dot.amber { background:var(--amber); }
+    .d2-alert-item .alert-info { min-width:0; flex:1; }
+    .d2-alert-item .alert-info strong { display:block; color:var(--navy); font-size:12px; }
+    .d2-alert-item .alert-info span { display:block; color:var(--muted); font-size:11px; }
+    .d2-metric { position:relative; overflow:hidden; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:white; }
+    .d2-metric::before { content:""; position:absolute; inset:0 0 auto; height:3px; background:var(--teal); }
+    .d2-metric.warn::before { background:var(--amber); }
+    .d2-metric.bad::before { background:var(--red); }
+    .d2-metric span { display:block; color:var(--muted); font-size:10px; font-weight:900; text-transform:uppercase; }
+    .d2-metric strong { display:block; margin-top:5px; color:var(--navy); font-size:22px; }
+    .d2-metric small { display:block; margin-top:3px; color:#475569; font-size:11px; }
+    .d2-metric-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+    .d2-sect-title { color:var(--navy); font-size:13px; font-weight:900; margin:0 0 8px; }
+    .d2-sect-sub { color:var(--muted); font-size:11px; margin:0 0 6px; font-weight:600; }
+    .d2-ot-row { display:grid; grid-template-columns:60px 1fr 1fr 90px 80px; gap:8px; align-items:center; padding:7px 10px; border-bottom:1px solid #f1f5f9; font-size:12px; cursor:pointer; transition:background .12s; }
+    .d2-ot-row:hover { background:#f8fafc; }
+    .d2-ot-row:last-child { border-bottom:0; }
+    .d2-inv-row { display:grid; grid-template-columns:80px 1fr 60px 60px 70px; gap:6px; align-items:center; padding:6px 10px; border-bottom:1px solid #f1f5f9; font-size:12px; }
+    .d2-inv-row:last-child { border-bottom:0; }
+    .pill.d2-critical { background:#fee2e2; color:#991b1b; }
+    .pill.d2-low { background:#fef3c7; color:#92400e; }
+    @media (max-width: 1180px) { .d2-top { grid-template-columns:repeat(3, 1fr); } .d2-mid { grid-template-columns:1fr; } .d2-bottom { grid-template-columns:1fr; } .d2-schedule { grid-template-columns:repeat(4, 1fr); } }
+    @media (max-width: 900px) { .d2-top { grid-template-columns:repeat(2, 1fr); } .d2-schedule { grid-template-columns:repeat(3, 1fr); } .d2-metric-grid { grid-template-columns:repeat(2, 1fr); } }
+    @media (max-width: 540px) { .d2-top { grid-template-columns:1fr; } .d2-schedule { grid-template-columns:1fr 1fr; } .d2-metric-grid { grid-template-columns:1fr; } }
+    /* ===== F1: WORKLOAD GRID ===== */
+    .wl-grid { display:grid; grid-template-columns:120px repeat(5,1fr); gap:2px; font-size:12px; }
+    .wl-header { background:var(--navy); color:white; padding:8px 6px; font-weight:900; text-align:center; font-size:11px; }
+    .wl-name { background:#f1f5f9; padding:8px 6px; font-weight:800; color:var(--navy); display:flex; align-items:center; }
+    .wl-cell { padding:6px; border:1px solid #f1f5f9; min-height:40px; display:flex; flex-direction:column; gap:2px; }
+    .wl-cell.overload { background:#fef2f2; }
+    .wl-cell.ok { background:#f0fdf4; }
+    .wl-cell.moderate { background:#fffbeb; }
+    .wl-bar { height:6px; border-radius:999px; background:#e5e7eb; overflow:hidden; }
+    .wl-bar-fill { height:100%; border-radius:999px; transition:width .3s ease; }
+    .wl-bar-fill.green { background:linear-gradient(90deg,#22c55e,#16a34a); }
+    .wl-bar-fill.yellow { background:linear-gradient(90deg,#f59e0b,#d97706); }
+    .wl-bar-fill.red { background:linear-gradient(90deg,#ef4444,#dc2626); }
+    .wl-cell-label { font-size:10px; color:var(--muted); }
+    .wl-capacity { background:#e0e7ff; color:#3730a3; font-weight:900; }
+    .wl-total { background:#dbeafe; color:var(--navy); font-weight:900; }
+    .wl-overload-badge { display:inline-block; padding:1px 5px; border-radius:4px; background:#fee2e2; color:#991b1b; font-size:9px; font-weight:800; }
+    /* ===== F2: EXPEDIENTE DIGITAL ===== */
+    .exp-hero { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .exp-stat { padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:white; }
+    .exp-stat span { display:block; color:var(--muted); font-size:10px; font-weight:900; text-transform:uppercase; }
+    .exp-stat strong { display:block; margin-top:4px; color:var(--navy); font-size:24px; }
+    .exp-stat small { display:block; margin-top:3px; color:#475569; font-size:11px; }
+    .exp-trend { display:flex; gap:4px; align-items:end; margin-top:8px; }
+    .exp-trend-bar { flex:1; border-radius:3px 3px 0 0; min-height:4px; }
+    .exp-history-item { display:grid; grid-template-columns:90px 100px 1fr; gap:8px; padding:7px 0; border-bottom:1px solid #f1f5f9; font-size:12px; }
+    .exp-history-item:last-child { border-bottom:0; }
+    .exp-cost-total { text-align:center; padding:14px; background:linear-gradient(135deg,#f0fdf4,#ecfdf5); border-radius:10px; border:1px solid #bbf7d0; }
+    .exp-cost-total strong { display:block; color:#166534; font-size:28px; }
+    .exp-cost-total span { display:block; color:#16a34a; font-size:11px; font-weight:800; }
+    .exp-recurrence { padding:8px 10px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; }
+    .exp-recurrence.alert { border-color:#fca5a5; background:#fef2f2; }
+    .exp-recurrence-bar { height:6px; border-radius:999px; background:#e5e7eb; overflow:hidden; }
+    .exp-recurrence-fill { height:100%; border-radius:999px; }
+    /* ===== F3: BACKLOG INTELIGENTE ===== */
+    .blg-summary { display:grid; grid-template-columns:repeat(8,1fr); gap:6px; margin-bottom:10px; }
+    .blg-summary-item { text-align:center; padding:8px 4px; border:1px solid var(--line); border-radius:8px; background:white; }
+    .blg-summary-item strong { display:block; color:var(--navy); font-size:18px; }
+    .blg-summary-item span { display:block; color:var(--muted); font-size:9px; font-weight:800; text-transform:uppercase; }
+    .blg-age-bar { display:flex; gap:2px; height:8px; border-radius:999px; overflow:hidden; margin-top:6px; }
+    .blg-age-seg { height:100%; }
+    .blg-recommend { display:inline-block; padding:2px 6px; border-radius:4px; background:#dbeafe; color:#1e40af; font-size:9px; font-weight:800; }
+    .blg-age-group { padding:10px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; }
+    .blg-age-group-title { font-weight:900; font-size:12px; color:var(--navy); margin-bottom:6px; }
+    /* ===== F4: CHECKLIST CON AUTO-OT ===== */
+    .chk-grid { display:grid; gap:8px; }
+    .chk-item { display:grid; grid-template-columns:1fr 100px; gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:white; }
+    .chk-item-label { font-size:12px; font-weight:700; color:#334155; }
+    .chk-select { padding:4px 8px; border:1px solid var(--line); border-radius:6px; font-size:12px; }
+    .chk-select.pass { border-color:#22c55e; background:#f0fdf4; }
+    .chk-select.fail { border-color:#ef4444; background:#fef2f2; }
+    .chk-auto-ot-panel { padding:12px; border:2px solid #fca5a5; border-radius:10px; background:#fef2f2; }
+    .chk-auto-ot-panel h4 { color:#991b1b; margin:0 0 6px; font-size:13px; }
+    /* ===== F5: PM MULTIPLES CONDICIONES ===== */
+    .pm-cond-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:8px; }
+    .pm-cond-card { padding:10px; border:1px solid var(--line); border-radius:8px; background:white; text-align:center; }
+    .pm-cond-card.active { border-color:var(--teal); background:#f0fdfa; }
+    .pm-cond-card span { display:block; color:var(--muted); font-size:10px; font-weight:800; text-transform:uppercase; }
+    .pm-cond-card strong { display:block; margin-top:4px; color:var(--navy); font-size:18px; }
+    .pm-cond-card small { display:block; margin-top:2px; color:#475569; font-size:11px; }
+    /* ===== F6: READINESS CHECK ===== */
+    .rdy-panel { padding:14px; border:1px solid var(--line); border-radius:12px; }
+    .rdy-panel.ready { border-color:#22c55e; background:#f0fdf4; }
+    .rdy-panel.not-ready { border-color:#ef4444; background:#fef2f2; }
+    .rdy-item { display:flex; gap:8px; align-items:center; padding:6px 0; font-size:12px; border-bottom:1px solid #f1f5f9; }
+    .rdy-item:last-child { border-bottom:0; }
+    .rdy-icon { font-size:16px; flex:0 0 auto; }
+    .rdy-item-info { flex:1; }
+    .rdy-item-info strong { display:block; color:var(--navy); }
+    .rdy-item-info span { color:var(--muted); font-size:11px; }
+    .rdy-actions { display:flex; gap:8px; margin-top:10px; }
+    /* ===== F7: OT-ALMACEN CONNECTION ===== */
+    .ot-cost-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:8px; }
+    .ot-cost-card { text-align:center; padding:10px; border:1px solid var(--line); border-radius:8px; }
+    .ot-cost-card span { display:block; color:var(--muted); font-size:10px; font-weight:800; text-transform:uppercase; }
+    .ot-cost-card strong { display:block; margin-top:4px; color:var(--navy); font-size:20px; }
+    .ot-cost-total { text-align:center; padding:12px; margin-top:8px; background:linear-gradient(135deg,#eff6ff,#dbeafe); border-radius:10px; border:1px solid #bfdbfe; }
+    .ot-cost-total strong { color:var(--blue); font-size:24px; }
+    /* ===== F8: RECURRENCE PANEL ===== */
+    .rec-grid { display:grid; gap:6px; }
+    .rec-item { display:grid; grid-template-columns:1fr auto 60px; gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
+    .rec-item.alert { border-color:#fca5a5; background:#fef2f2; }
+    .rec-item strong { font-size:12px; color:var(--navy); }
+    .rec-item span { font-size:11px; color:var(--muted); }
+    .rec-count { font-size:18px; font-weight:900; }
+    /* ===== F9: ENHANCED METRICS ===== */
+    .em-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+    .em-card { padding:10px; border:1px solid var(--line); border-radius:10px; background:white; text-align:center; }
+    .em-card::before { content:""; display:block; height:3px; border-radius:999px; margin-bottom:6px; background:var(--teal); }
+    .em-card.warn::before { background:var(--amber); }
+    .em-card.bad::before { background:var(--red); }
+    .em-card span { display:block; color:var(--muted); font-size:10px; font-weight:900; text-transform:uppercase; }
+    .em-card strong { display:block; margin-top:4px; color:var(--navy); font-size:20px; }
+    .em-card small { display:block; margin-top:2px; color:#475569; font-size:11px; }
+    .em-ranking { display:grid; gap:4px; }
+    .em-rank-row { display:grid; grid-template-columns:24px 1fr auto; gap:6px; align-items:center; padding:5px 8px; font-size:12px; }
+    .em-rank-num { width:20px; height:20px; display:grid; place-items:center; border-radius:6px; background:var(--navy); color:white; font-size:10px; font-weight:900; }
+    @media (max-width: 1180px) { .em-grid { grid-template-columns:repeat(2,1fr); } .exp-hero { grid-template-columns:1fr; } .blg-summary { grid-template-columns:repeat(4,1fr); } .ot-cost-grid { grid-template-columns:1fr; } }
+    @media (max-width: 540px) { .wl-grid { grid-template-columns:80px repeat(5,1fr); font-size:10px; } .em-grid { grid-template-columns:1fr; } .blg-summary { grid-template-columns:1fr 1fr; } .pm-cond-grid { grid-template-columns:1fr; } }
+    /* ===== UI/UX IMPROVEMENTS v2.1 ===== */
+    /* Toast notification system */
+    .mga-toast-container { position:fixed; top:84px; right:20px; z-index:9999; display:grid; gap:8px; pointer-events:none; }
+    .mga-toast { pointer-events:auto; display:flex; align-items:center; gap:10px; min-width:280px; max-width:420px; padding:12px 16px; border-radius:12px; background:white; border-left:4px solid var(--blue); box-shadow:0 14px 40px rgba(15,23,42,.18); color:#1f2937; font-size:13px; font-weight:600; animation:toastIn .3s ease; transition:opacity .3s, transform .3s; }
+    .mga-toast.success { border-left-color:#22c55e; }
+    .mga-toast.error { border-left-color:#ef4444; }
+    .mga-toast.warning { border-left-color:#f59e0b; }
+    .mga-toast.info { border-left-color:#0ea5e9; }
+    .mga-toast.leaving { opacity:0; transform:translateX(20px); }
+    @keyframes toastIn { from { opacity:0; transform:translateX(40px); } to { opacity:1; transform:translateX(0); } }
+    /* Loading overlay */
+    .mga-loading { position:fixed; inset:0; z-index:10000; display:grid; place-items:center; background:rgba(248,250,252,.85); backdrop-filter:blur(4px); }
+    .mga-loading-spinner { width:44px; height:44px; border:4px solid var(--line); border-top-color:var(--blue); border-radius:50%; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    /* Modal dialog */
+    dialog.modal-dialog { border:0; border-radius:16px; box-shadow:0 24px 64px rgba(15,23,42,.25); max-width:560px; width:92vw; padding:0; background:white; z-index:10010; }
+    dialog.modal-dialog::backdrop { background:rgba(15,23,42,.45); backdrop-filter:blur(4px); animation:fadeIn .2s ease; }
+    @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+    .modal-dialog .modal-header { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--line); border-radius:16px 16px 0 0; background:#f8fafc; }
+    .modal-dialog .modal-header h3 { margin:0; font-size:16px; font-weight:700; color:#1f2937; }
+    .modal-dialog .modal-close { background:none; border:0; font-size:22px; line-height:1; color:#64748b; cursor:pointer; padding:4px; border-radius:6px; min-width:32px; min-height:32px; }
+    .modal-dialog .modal-close:hover { background:#e2e8f0; color:#1f2937; }
+    .modal-dialog .modal-body { padding:20px; max-height:65vh; overflow:auto; }
+    .modal-dialog .modal-footer { display:flex; justify-content:flex-end; gap:10px; padding:16px 20px; border-top:1px solid var(--line); border-radius:0 0 16px 16px; background:#f8fafc; }
+    .modal-image-section { margin-bottom:20px; }
+    .modal-image-section label { display:block; font-weight:600; margin-bottom:8px; color:#334155; }
+    .image-preview-wrap { position:relative; border:2px dashed var(--line); border-radius:10px; padding:16px; text-align:center; background:#fafbfc; transition:border-color .2s; }
+    .image-preview-wrap:hover { border-color:var(--blue); }
+    .image-preview-wrap img { max-width:100%; max-height:240px; border-radius:8px; box-shadow:0 2px 8px #0002; }
+    .image-placeholder { color:#94a3b8; font-size:14px; padding:20px; }
+    .image-actions { display:flex; gap:10px; justify-content:center; margin-top:12px; flex-wrap:wrap; }
+    .modal-fields-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
+    .modal-fields-grid label { display:flex; flex-direction:column; gap:6px; }
+    .modal-fields-grid label.wide { grid-column:1/-1; }
+    .modal-fields-grid input, .modal-fields-grid textarea { padding:10px 12px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-family:inherit; background:white; transition:border-color .15s, box-shadow .15s; }
+    .modal-fields-grid input:focus, .modal-fields-grid textarea:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(14,165,233,.15); }
+    .modal-fields-grid label { font-size:12px; font-weight:600; color:#475569; }
+    @media (max-width: 600px) { .modal-fields-grid { grid-template-columns:1fr; } .image-actions { flex-direction:column; align-items:stretch; } }
+    /* Skeleton loading */
+    .skeleton { background:linear-gradient(90deg,#e8edf5 25%,#f0f4f9 50%,#e8edf5 75%); background-size:200% 100%; animation:shimmer 1.5s infinite; border-radius:6px; min-height:14px; }
+    @keyframes shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+    /* Empty state */
+    .empty-state { text-align:center; padding:32px 16px; color:#64748b; }
+    .empty-state-icon { font-size:40px; margin-bottom:8px; opacity:.5; }
+    .empty-state-text { font-size:13px; font-weight:600; margin-bottom:4px; color:#334155; }
+    .empty-state-hint { font-size:12px; }
+    /* Fix touch targets min 44px */
+    .tabs button, .btn, .btn.small, .sidebar-toggle { min-height:44px; min-width:44px; }
+    .btn.small { padding:8px 12px; font-size:12px; }
+    .warehouse-page .tabs button { min-height:44px; padding:11px 14px; }
+    .alm-nav button { min-height:44px; padding:10px 16px; }
+    .alm-actions button { min-height:44px; padding:10px 16px; }
+    /* Unified button system */
+    .btn, .btn.secondary, .btn.danger, .btn.ghost { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:44px; padding:10px 18px; border:0; border-radius:8px; font-size:13px; font-weight:700; cursor:pointer; transition:all .15s ease; text-decoration:none; }
+    .btn:disabled, .btn[disabled] { opacity:.5; cursor:not-allowed; transform:none; box-shadow:none; }
+    .btn:focus-visible, .tabs button:focus-visible, .sidebar-toggle:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+    .btn.secondary { background:white; color:var(--blue); border:1px solid var(--line); }
+    .btn.secondary:hover { background:#f0f7ff; border-color:var(--blue); }
+    .btn.danger { background:linear-gradient(135deg,#a91d2c,var(--red)); color:white; }
+    .btn.danger:hover { filter:brightness(.92); }
+    .btn.ghost { background:transparent; color:var(--muted); border:1px solid transparent; }
+    .btn.ghost:hover { background:#f1f5f9; color:var(--navy); }
+    /* Hover states for interactive elements */
+    .warehouse-category, .warehouse-feed-row, .warehouse-kpi, .exp-history-item, .rec-item, .rdy-item, .ot-cost-card, .em-card, .blg-age-group, .d2-inv-row, .d2-eq-out-card, .d2-alert-item, .d2-ot-row, .d2-kpi { transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+    .warehouse-category:hover, .warehouse-kpi:hover, .em-card:hover, .ot-cost-card:hover { transform:translateY(-2px); box-shadow:0 14px 34px rgba(15,35,68,.12); }
+    .warehouse-feed-row:hover, .exp-history-item:hover, .rec-item:hover, .rdy-item:hover, .d2-inv-row:hover, .d2-ot-row:hover, .d2-alert-item:hover { background:#f8fafc; }
+    .d2-eq-out-card:hover { border-color:var(--blue); }
+    .d2-kpi:hover { transform:translateY(-1px); box-shadow:0 8px 24px rgba(15,23,42,.10); }
+    /* Mobile responsive fixes */
+    @media (max-width: 900px) {
+      .warehouse-page .tabs { transform:translateX(-232px); z-index:100; }
+      .warehouse-page .tabs.mobile-open { transform:translateX(0); }
+      .sidebar-collapsed.warehouse-page .tabs { transform:translateX(-232px); }
+      .warehouse-page main { padding-left:16px !important; padding-right:16px; }
+      .warehouse-page .hero { padding-left:56px !important; grid-template-columns:1fr; min-height:auto; height:auto; }
+      .warehouse-page .hero-visual { display:none; }
+      .warehouse-kpis { grid-template-columns:repeat(2,1fr); }
+      .warehouse-quick { grid-template-columns:repeat(2,1fr); }
+      .warehouse-grid { grid-template-columns:1fr; }
+      .warehouse-bottom { grid-template-columns:1fr; }
+      .warehouse-category-grid { grid-template-columns:repeat(3,1fr); }
+      .kpi-main-strip { grid-template-columns:repeat(2,1fr); }
+      .hero { grid-template-columns:1fr !important; }
+      .hero-visual { display:none !important; }
+      .main-grid-2, .profile-section-grid { grid-template-columns:1fr !important; }
+    }
+    @media (max-width: 540px) {
+      .warehouse-page main { padding-left:12px !important; padding-right:12px; padding-top:10px; }
+      .warehouse-kpis { grid-template-columns:1fr; }
+      .warehouse-quick { grid-template-columns:1fr; }
+      .warehouse-category-grid { grid-template-columns:1fr 1fr; }
+      .kpi-main-strip { grid-template-columns:1fr; }
+      .toolbar { grid-template-columns:1fr; }
+    }
+    /* Improve color contrast */
+    .warehouse-kpi strong, .ops-card b, header h1 { color:#071f49 !important; }
+    .cond-ok { background:#dcfce7; color:#166534; }
+    .cond-out { background:#fee2e2; color:#991b1b; }
+    /* Typography scale */
+    .warehouse-kpi strong { font-size:28px; }
+    .warehouse-titlebar h2 { font-size:24px; }
+    .kpi-main-card strong { font-size:28px; }
+    /* Form validation feedback */
+    .input-error { border-color:#ef4444 !important; box-shadow:0 0 0 3px rgba(239,68,68,.15) !important; }
+    .input-success { border-color:#22c55e !important; box-shadow:0 0 0 3px rgba(34,197,94,.15) !important; }
+    .field-error { color:#ef4444; font-size:11px; font-weight:600; margin-top:4px; }
+    .field-hint { color:#64748b; font-size:11px; margin-top:3px; }
+    /* Nav accessibility */
+    .warehouse-page .tabs { role:tablist; }
+    .warehouse-page .tabs button[aria-selected="true"], .warehouse-page .tabs button.active { aria-current:page; }
+    /* Smooth transitions */
+    .view { animation:fadeIn .2s ease; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+    /* Mobile overlay */
+    .mobile-overlay { display:none; position:fixed; inset:0; z-index:99; background:rgba(0,0,0,.45); }
+    .mobile-overlay.active { display:block; }
   </style>
 </head>
 <body class="warehouse-page">
+  <div class="mobile-overlay" id="mobileOverlay" onclick="toggleMobileMenu()"></div>
   <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Ocultar / mostrar menu" aria-label="Ocultar o mostrar barra lateral">☰</button>
   <header class="hero">
     <div class="brand">
@@ -8985,32 +9560,99 @@ WAREHOUSE_HTML = r"""<!doctype html>
     <div class="key-card"><label>Clave para editar<input id="apiKey" type="password" placeholder="Pegar clave aqui"></label></div>
   </header>
   <main>
-    <nav class="tabs">
-      <button class="active" data-tab="dashboard">Dashboard KPI</button>
-      <button data-tab="fichaEquipo">Ficha equipo</button>
-      <button data-tab="catalogoEquipos">Modulo equipos</button>
-      <button data-tab="mensual">Reporte mensual/semanal</button>
-      <button data-tab="preventivos">PR Preventivos</button>
-      <button data-tab="backlog">Backlog</button>
-      <button data-tab="ordenesTrabajo">Ordenes trabajo</button>
-      <button data-tab="servicios">Servicios realizados</button>
-      <button data-tab="ejecucionPreventivos">Ejecucion preventivos</button>
-      <button data-tab="serviciosEspeciales">Servicios especiales</button>
-      <button data-tab="bitacora">Bitacora</button>
-      <button data-tab="captura">Captura diaria</button>
-      <button data-tab="disponibilidad">Disponibilidad</button>
-      <button data-tab="requisiciones">Requisiciones</button>
-      <button data-tab="seguimientoReq">Seguimiento req.</button>
-      <button data-tab="mangueras">Mangueras</button>
-      <button data-tab="diesel">Diesel</button>
-      <button data-tab="llantasTrack">Seguimiento llantas</button>
-      <button data-tab="refacciones">Refacciones equipo</button>
-      <button data-tab="equipos">Filtros por equipo</button>
-      <button data-tab="inventario">Concentrado / movimientos</button>
-      <button data-tab="auditoria">Auditoria</button>
-      <button data-tab="importar">Importar / exportar</button>
+    <nav class="tabs" id="mainNav">
+      <div class="nav-section-label">FAVORITOS</div>
+      <button class="active" data-tab="dashboard" data-group="fav" title="Dashboard principal">&#9632; Dashboard</button>
+      <button data-tab="kanban" data-group="fav" title="Programacion semanal">&#9654; Kanban</button>
+      <button data-tab="ordenesTrabajo" data-group="fav" title="Ordenes de trabajo">&#9998; OT</button>
+      <button data-tab="inventario" data-group="fav" title="Almacen">&#9881; Inventario</button>
+      <button data-tab="catalogoEquipos" data-group="fav" title="Catalogo">&#9878; Equipos</button>
+      <div class="nav-section-label">PLANEACION</div>
+      <button data-tab="preventivos" data-group="planeacion">PR Preventivos</button>
+      <button data-tab="backlog" data-group="planeacion">Backlog</button>
+      <button data-tab="ejecucionPreventivos" data-group="planeacion">Ejecucion PM</button>
+      <button data-tab="fichaEquipo" data-group="planeacion">Ficha equipo</button>
+      <div class="nav-section-label">MANTENIMIENTO</div>
+      <button data-tab="catalogoEquiposFull" data-group="mantto">Catalogo equipos</button>
+      <button data-tab="servicios" data-group="mantto">Servicios</button>
+      <button data-tab="serviciosEspeciales" data-group="mantto">Serv. especiales</button>
+      <button data-tab="captura" data-group="mantto">Captura diaria</button>
+      <button data-tab="bitacora" data-group="mantto">Bitacora</button>
+      <button data-tab="disponibilidad" data-group="mantto">Disponibilidad</button>
+      <div class="nav-section-label">ALMACEN</div>
+      <button data-tab="equipos" data-group="almacen">Filtros</button>
+      <button data-tab="lubricantes" data-group="almacen">Lubricantes</button>
+      <button data-tab="refacciones" data-group="almacen">Refacciones</button>
+      <button data-tab="mangueras" data-group="almacen">Mangueras</button>
+      <div class="nav-section-label">FLOTA</div>
+      <button data-tab="diesel" data-group="flota">Diesel</button>
+      <button data-tab="llantasTrack" data-group="flota">Llantas</button>
+      <div class="nav-section-label">COMPRAS</div>
+      <button data-tab="requisiciones" data-group="compras">Requisiciones</button>
+      <button data-tab="seguimientoReq" data-group="compras">Seguimiento</button>
+      <div class="nav-section-label">REPORTES</div>
+      <button data-tab="mensual" data-group="reportes">Reportes</button>
+      <button data-tab="auditoria" data-group="reportes">Auditoria</button>
+      <button data-tab="importar" data-group="reportes">Importar</button>
+      <div class="nav-section-label">APP</div>
+      <a href="/apk" target="_blank" style="display:flex;align-items:center;gap:8px;padding:11px 14px;border-radius:10px;background:linear-gradient(135deg,#0b69ff,#2563eb);color:white;font-size:13px;font-weight:700;text-decoration:none;margin-top:4px;min-height:44px;box-shadow:0 8px 20px rgba(11,105,255,.3);transition:all .15s" onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 12px 28px rgba(11,105,255,.4)'" onmouseout="this.style.transform='';this.style.boxShadow='0 8px 20px rgba(11,105,255,.3)'">&#128241; Descargar APK</a>
     </nav>
     <section class="stats" id="stats"></section>
+    <section id="lubricantes" class="view">
+      <div class="panel toolbar">
+        <label>Desde<input id="lubStart" type="date"></label>
+        <label>Hasta<input id="lubEnd" type="date"></label>
+        <button class="btn secondary" id="lubWeekBtn">Semana</button>
+        <button class="btn secondary" id="lubMonthBtn">Mes actual</button>
+        <button class="btn" id="lubRefreshBtn">Actualizar</button>
+        <label>Reporte<select id="lubReportScope"><option value="">General (todos)</option></select></label>
+        <button class="btn dark" id="lubReportPdfBtn">Reporte PDF</button>
+      </div>
+      <div class="stats" id="lubStats"></div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Stock actual y consumo por lubricante</h3><span class="muted" id="lubPeriodLabel"></span></div>
+        <div class="lubricantes-grid" id="lubricantesGrid"></div>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="subtle-title"><h3>Registrar movimiento</h3><span class="muted">Entrada / Salida de almacen</span></div>
+          <div class="movement-grid">
+            <label>Fecha<input id="lubDate" type="date"></label>
+            <label>Lubricante<select id="lubProduct"></select></label>
+            <label>Tipo<select id="lubType"><option>ENTRADA</option><option>SALIDA</option></select></label>
+            <label>Presentacion<select id="lubPresentation">
+              <option value="Tambor">Tambo 208 L</option>
+              <option value="Cubeta">Cubeta 19 L</option>
+              <option value="Garrafa">Garrafa 20 L</option>
+              <option value="Litro">Litro 1 L</option>
+              <option value="Grasa">Grasa 1 KG</option>
+            </select></label>
+            <label>Cantidad<input id="lubUnits" type="number" step="0.01" min="0.01" value="1"></label>
+            <label>Total equivalente L/KG<input id="lubLiters" type="number" step="0.01" min="0" value="208"></label>
+            <label>Equipo<input id="lubEquipment" placeholder="Eco / maquina"></label>
+            <label>Referencia<input id="lubReference" placeholder="OC, remision, servicio"></label>
+            <label class="wide">Notas<textarea id="lubNotes" rows="2"></textarea></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn secondary" id="lubFormClearBtn">Limpiar</button>
+            <button class="btn" id="lubSaveBtn">Guardar movimiento</button>
+          </div>
+          <div class="subtle-title" style="margin-top:16px"><h3>Minimo de stock</h3><span class="muted">Configuracion por lubricante</span></div>
+          <div class="movement-grid">
+            <label>Lubricante<select id="lubConfigProduct"></select></label>
+            <label>Nombre<input id="lubConfigName"></label>
+            <label>Minimo L<input id="lubConfigMin" type="number" step="0.01" min="0" value="0"></label>
+          </div>
+          <div class="req-actions">
+            <button class="btn" id="lubConfigSaveBtn">Guardar configuracion</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Kardex - ultimos movimientos</h3><span class="muted">Selecciona una fila para eliminar</span></div>
+          <div class="table-wrap" style="max-height:560px;"><table id="lubMovementsTable"></table></div>
+        </div>
+      </div>
+    </section>
     <section id="dashboard" class="view active">
       <div class="panel no-print" style="border:2px solid #2563eb;">
         <div class="subtle-title"><h3>Reportes PDF</h3><span class="muted">Nuevos reportes descargables</span></div>
@@ -9018,6 +9660,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <button class="btn" id="dashServicePdfBtn">PDF servicios preventivos</button>
           <button class="btn" id="dashLifePdfBtn">PDF vida util de equipos</button>
           <span class="muted">Tambien en las secciones Preventivos programados y Filtros.</span>
+        </div>
+      </div>
+      <div class="no-print" id="d2TopRow"></div>
+      <div class="d2-mid no-print">
+        <div class="panel" id="d2SchedulePanel">
+          <div class="subtle-title"><h3>Programacion semanal</h3><span class="muted" id="d2ScheduleDate"></span></div>
+          <div class="d2-schedule" id="d2Schedule"></div>
+        </div>
+        <div class="panel" id="d2DonutPanel">
+          <div class="subtle-title"><h3>Estado OT</h3><span class="muted" id="d2DonutNote"></span></div>
+          <div style="display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center">
+            <div class="d2-donut" id="d2Donut"></div>
+            <div class="d2-legend" id="d2DonutLegend"></div>
+          </div>
         </div>
       </div>
       <div class="panel no-print">
@@ -9029,6 +9685,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="exec-alert-grid" id="execCards"></div>
         <div class="exec-alert-list" id="execAlerts"></div>
       </div>
+      <div class="d2-bottom no-print">
+        <div class="panel" id="d2EquipOutPanel">
+          <div class="subtle-title"><h3>Equipos fuera de servicio</h3><span class="muted" id="d2EquipOutCount"></span></div>
+          <div id="d2EquipOut" style="display:grid;gap:7px"></div>
+        </div>
+        <div class="panel" id="d2AlertsPanel">
+          <div class="subtle-title"><h3>Alertas criticas</h3><span class="muted" id="d2AlertsCount"></span></div>
+          <div id="d2Alerts" style="display:grid;gap:6px"></div>
+        </div>
+        <div class="panel" id="d2MetricsPanel">
+          <div class="subtle-title"><h3>Indicadores clave</h3><span class="muted" id="d2MetricsNote"></span></div>
+          <div class="d2-metric-grid" id="d2Metrics"></div>
+        </div>
+      </div>
       <div class="panel dashboard-command no-print">
         <div class="subtle-title"><h3>Semaforo y Top 10 prioridades</h3><span class="muted" id="kpiCommandUpdated"></span></div>
         <div class="kpi-command-grid">
@@ -9039,6 +9709,30 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <div class="table-wrap">
             <table id="kpiSemaphoreTable"></table>
           </div>
+        </div>
+      </div>
+      <div class="d2-bottom no-print">
+        <div class="panel" id="d2RecentOTPanel">
+          <div class="subtle-title"><h3>OT recientes</h3><span class="muted" id="d2RecentOTNote"></span></div>
+          <div id="d2RecentOT"></div>
+        </div>
+        <div class="panel" id="d2InvCriticalPanel">
+          <div class="subtle-title"><h3>Inventario critico</h3><span class="muted" id="d2InvCriticalNote"></span></div>
+          <div id="d2InvCritical"></div>
+        </div>
+        <div class="panel" id="d2FullMetricsPanel">
+          <div class="subtle-title"><h3>Metricas de mantenimiento</h3><span class="muted" id="d2FullMetricsNote"></span></div>
+          <div class="em-grid" id="d2FullMetrics"></div>
+        </div>
+      </div>
+      <div class="d2-mid no-print">
+        <div class="panel" id="d2RecurrencePanel">
+          <div class="subtle-title"><h3>Reincidencia de fallas</h3><span class="muted" id="d2RecurrenceNote"></span></div>
+          <div class="rec-grid" id="d2Recurrence"></div>
+        </div>
+        <div class="panel" id="d2CostRankPanel">
+          <div class="subtle-title"><h3>Equipos mas costosos</h3><span class="muted" id="d2CostRankNote"></span></div>
+          <div class="em-ranking" id="d2CostRank"></div>
         </div>
       </div>
       <div class="dashboard-toolbar-stack no-print">
@@ -9087,10 +9781,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <button class="btn" id="renderFichaBtn">Actualizar ficha</button>
         <button class="btn secondary" id="fichaGoCaptureBtn">Capturar diario</button>
         <button class="btn secondary" id="fichaGoServiceBtn">Nuevo preventivo</button>
+        <button class="btn secondary" id="editFichaBtn">Editar ficha</button>
       </div>
       <div class="profile-hero">
         <div class="profile-card" id="fichaHeader"></div>
         <div class="profile-grid" id="fichaMetrics"></div>
+      </div>
+      <div class="panel">
+        <div class="subtle-title"><h3>Reincidencia de fallas (12 meses)</h3><span class="muted" id="fichaRecurrenceCount"></span></div>
+        <div class="rec-grid" id="fichaRecurrence"></div>
       </div>
       <div class="panel">
         <div class="subtle-title"><h3>Alertas del equipo</h3><span class="muted" id="fichaAlertCount"></span></div>
@@ -9117,6 +9816,44 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
       </div>
     </section>
+    <dialog id="editFichaModal" class="modal-dialog">
+      <form method="dialog">
+        <div class="modal-header">
+          <h3>Editar ficha equipo</h3>
+          <button type="button" class="modal-close" aria-label="Cerrar">&times;</button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="editFichaCode">
+          <div class="modal-image-section">
+            <label>Foto del equipo</label>
+            <div class="image-preview-wrap">
+              <img id="editFichaImagePreview" src="" alt="Foto equipo" style="display:none;max-width:100%;max-height:240px;border-radius:8px;box-shadow:0 2px 8px #0002;">
+              <div id="editFichaImagePlaceholder" class="image-placeholder">Sin foto</div>
+            </div>
+            <input type="file" id="editFichaImageInput" accept="image/*" style="display:none;">
+            <div class="image-actions">
+              <button type="button" class="btn secondary" id="editFichaImageSelectBtn">Seleccionar foto</button>
+              <button type="button" class="btn secondary" id="editFichaImageClearBtn" style="display:none;">Quitar foto</button>
+            </div>
+            <p class="muted small">Máx. 2 MB. Se redimensiona automáticamente a 800px.</p>
+          </div>
+          <div class="modal-fields-grid">
+            <label>Descripción<input id="editFichaDesc" placeholder="Descripción del equipo"></label>
+            <label>Familia / Grupo<input id="editFichaFamily" placeholder="Familia o grupo"></label>
+            <label>Tipo de equipo<input id="editFichaType" placeholder="Ej. JUMBO, CAMION, SCOOP..."></label>
+            <label>Marca<input id="editFichaBrand" placeholder="Marca"></label>
+            <label>Modelo<input id="editFichaModel" placeholder="Modelo"></label>
+            <label>Serie<input id="editFichaSerial" placeholder="Número de serie"></label>
+            <label>Ubicación<input id="editFichaLocation" placeholder="Ubicación / mina / área"></label>
+            <label class="wide">Notas<textarea id="editFichaNotes" rows="3" placeholder="Observaciones adicionales"></textarea></label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn secondary" id="editFichaCancelBtn">Cancelar</button>
+          <button type="submit" class="btn" id="editFichaSaveBtn">Guardar</button>
+        </div>
+      </form>
+    </dialog>
     <section id="catalogoEquipos" class="view">
       <div class="grid2">
         <div class="panel">
@@ -9168,13 +9905,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </select></label>
         <label>Ano<input id="monthlyYear" type="number" min="2000" max="2100"></label>
         <button class="btn" id="monthlyPptBtn">Descargar PowerPoint</button>
-        <button class="btn" id="monthlyKpiXlsmBtn">KPI diario XLSM mensual</button>
         <button class="btn secondary" id="monthlyOilExcelBtn">Aceites Excel mensual</button>
-      </div>
-      <div class="panel toolbar">
-        <input id="monthlyKpiXlsmFile" type="file" accept=".xlsm,.xlsx">
-        <button class="btn secondary" id="monthlyKpiXlsmImportBtn">Importar KPI diario Excel</button>
-        <span class="muted">Importa el mismo formato XLSM para actualizar capturas del mes.</span>
       </div>
       <div class="panel toolbar">
         <label>Fecha base semana<input id="weeklyBase" type="date"></label>
@@ -9186,6 +9917,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
       <div class="panel">
         <div class="subtle-title"><h3>Reporte mensual y semanal PowerPoint</h3><span class="muted" id="monthlyStatus"></span></div>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:4px 0;"><button class="btn" id="monthlyKpiXlsmBtn">KPI diario XLSM mensual</button><input id="monthlyKpiXlsmFile" type="file" accept=".xlsm,.xlsx"><button class="btn secondary" id="monthlyKpiXlsmImportBtn">Importar KPI diario Excel</button></div>
         <div class="stats">
           <div class="stat"><strong>Barrenacion</strong>KPI mensual</div>
           <div class="stat"><strong>Rezagado</strong>KPI mensual</div>
@@ -9242,6 +9974,21 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="panel">
         <div class="subtle-title"><h3 id="prTitle">Preventivos programados</h3><span class="muted" id="prCount"></span></div>
         <div class="schedule-strip" id="prCalendar"></div>
+        <div class="alm-wrap" id="almCalendar">
+          <div class="alm-header">
+            <h3 id="almTitle">Calendario de Preventivos</h3>
+            <div class="alm-nav">
+              <button id="almPrev">&lsaquo; Anterior</button>
+              <button id="almNext">Siguiente &rsaquo;</button>
+            </div>
+          </div>
+          <div class="alm-grid" id="almGrid"></div>
+          <div class="alm-legend" id="almLegend"></div>
+          <div class="alm-actions">
+            <button onclick="window.print()">Imprimir calendario</button>
+            <button id="almExportPng">Exportar imagen</button>
+          </div>
+        </div>
       </div>
       <div class="table-wrap"><table id="prTable"></table></div>
     </section>
@@ -9264,6 +10011,39 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="table-wrap"><table id="backlogSystemTable"></table></div>
       </div>
     </section>
+    <section id="kanban" class="view">
+      <div class="panel" id="workloadPanel">
+        <div class="subtle-title"><h3>Carga de trabajo semanal</h3><span class="muted" id="workloadWeek"></span></div>
+        <div id="workloadGrid"></div>
+      </div>
+      <div class="panel toolbar">
+        <label>Buscar<input id="kanbanSearch" placeholder="Equipo, componente, sistema"></label>
+        <label>Nivel<select id="kanbanLevel"><option value="">Todos</option><option>ALTA</option><option>MEDIA</option><option>BAJA</option></select></label>
+        <label>Origen<select id="kanbanSource"><option value="">Todos</option><option>Preventivo</option><option>Captura</option><option>OT</option><option>Requisicion</option></select></label>
+        <button class="btn" id="renderKanbanBtn">Actualizar</button>
+      </div>
+      <div class="panel" style="padding:12px;">
+        <div class="subtle-title"><h3>Tablero Kanban</h3><span class="muted" id="kanbanCount"></span></div>
+        <div class="kanban-board" id="kanbanBoard">
+          <div class="kanban-col" data-status="backlog">
+            <div class="kanban-col-head"><h4>Backlog</h4><span class="badge" id="kanbanBadge0">0</span></div>
+            <div class="kanban-cards" data-status="backlog"></div>
+          </div>
+          <div class="kanban-col" data-status="programado">
+            <div class="kanban-col-head"><h4>Programado</h4><span class="badge" id="kanbanBadge1">0</span></div>
+            <div class="kanban-cards" data-status="programado"></div>
+          </div>
+          <div class="kanban-col" data-status="proceso">
+            <div class="kanban-col-head"><h4>En proceso</h4><span class="badge" id="kanbanBadge2">0</span></div>
+            <div class="kanban-cards" data-status="proceso"></div>
+          </div>
+          <div class="kanban-col" data-status="completado">
+            <div class="kanban-col-head"><h4>Completado</h4><span class="badge" id="kanbanBadge3">0</span></div>
+            <div class="kanban-cards" data-status="completado"></div>
+          </div>
+        </div>
+      </div>
+    </section>
     <section id="ordenesTrabajo" class="view">
       <div class="grid2">
         <div class="panel">
@@ -9284,6 +10064,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label class="wide">Refacciones usadas<textarea id="woParts" rows="2" placeholder="Refacciones usadas"></textarea></label>
             <label class="wide">Lubricantes<textarea id="woLubricants" rows="2" placeholder="Lubricantes usados"></textarea></label>
             <label class="wide">Evidencia / firma<textarea id="woEvidence" rows="2" placeholder="Foto, firma, folio o evidencia"></textarea></label>
+            <label>Costo material ($)<input id="woCostMaterial" type="number" step="0.01" min="0" placeholder="0.00"></label>
+            <label>Costo mano de obra ($)<input id="woCostLabor" type="number" step="0.01" min="0" placeholder="0.00"></label>
+            <label>Costo externo ($)<input id="woCostExternal" type="number" step="0.01" min="0" placeholder="0.00"></label>
           </div>
           <div class="req-actions capture-actions">
             <button class="btn secondary" id="woNewBtn">Nueva OT</button>
@@ -9324,7 +10107,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="table-wrap"><table id="woTable"></table></div>
     </section>
     <section id="servicios" class="view">
-      <div class="panel toolbar">
+      <div class="panel toolbar" style="grid-template-columns:repeat(4, minmax(130px, 1fr));">
         <label>Equipo<select id="srvEquipment"></select></label>
         <label>Servicio<select id="srvInterval"><option value="">Todos</option><option>PM1</option><option>PM2</option><option>PM3</option><option>PM4</option><option>250H</option><option>500H</option><option>750H</option><option>1000H</option></select></label>
         <label>Tipo<select id="srvType"><option value="">Todos</option><option>Programado</option><option>No programado</option></select></label>
@@ -9332,6 +10115,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Hasta<input id="srvEnd" type="date"></label>
         <label>Buscar<input id="srvSearch" placeholder="Componente, OT, notas"></label>
         <button class="btn" id="renderSrvBtn">Consultar</button>
+        <button class="btn secondary" id="srvPdfBtn">PDF servicios realizados</button>
       </div>
       <div class="panel">
         <div class="subtle-title"><h3 id="srvTitle">Servicios realizados</h3><span class="muted" id="srvCount"></span></div>
@@ -9372,12 +10156,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label class="capture-fluid">Hidraulico VG100<input id="prevExecOilVg100" type="number" step="0.1" min="0" value="0"></label>
             <label class="capture-fluid">ATF<input id="prevExecAtf" type="number" step="0.1" min="0" value="0"></label>
             <div class="capture-section-title">Checklist de cierre</div>
-            <label class="inline-check"><input id="prevChkInspection" type="checkbox"><span id="prevChkInspectionLabel">Inspeccion realizada</span></label>
-            <label class="inline-check"><input id="prevChkFilters" type="checkbox"><span id="prevChkFiltersLabel">Filtros/refacciones aplicadas</span></label>
-            <label class="inline-check"><input id="prevChkLubrication" type="checkbox"><span id="prevChkLubricationLabel">Lubricacion registrada</span></label>
-            <label class="inline-check"><input id="prevChkElectrical" type="checkbox"><span id="prevChkElectricalLabel">Revision electrica</span></label>
-            <label class="inline-check"><input id="prevChkTest" type="checkbox"><span id="prevChkTestLabel">Prueba final</span></label>
-            <label class="inline-check"><input id="prevChkSupervisor" type="checkbox"><span id="prevChkSupervisorLabel">Validado por supervisor</span></label>
+            <div class="chk-grid" id="chkEnhancedGrid">
+              <div class="chk-item"><span class="chk-item-label">Inspeccion visual</span><select class="chk-select" data-chk="inspection"><option value="pass">Aprobado</option><option value="fail">Fallo</option><option value="skip">Omitir</option></select></div>
+              <div class="chk-item"><span class="chk-item-label">Filtros/refacciones</span><select class="chk-select" data-chk="filters"><option value="pass">Aprobado</option><option value="fail">Fallo</option><option value="skip">Omitir</option></select></div>
+              <div class="chk-item"><span class="chk-item-label">Lubricacion</span><select class="chk-select" data-chk="lubrication"><option value="pass">Aprobado</option><option value="fail">Fallo</option><option value="skip">Omitir</option></select></div>
+              <div class="chk-item"><span class="chk-item-label">Revision electrica</span><select class="chk-select" data-chk="electrical"><option value="pass">Aprobado</option><option value="fail">Fallo</option><option value="skip">Omitir</option></select></div>
+              <div class="chk-item"><span class="chk-item-label">Prueba final</span><select class="chk-select" data-chk="test"><option value="pass">Aprobado</option><option value="fail">Fallo</option><option value="skip">Omitir</option></select></div>
+              <div class="chk-item"><span class="chk-item-label">Validacion supervisor</span><select class="chk-select" data-chk="supervisor"><option value="pass">Aprobado</option><option value="fail">Fallo</option><option value="skip">Omitir</option></select></div>
+            </div>
+            <div class="chk-auto-ot-panel" id="chkAutoOTPanel" style="display:none"></div>
             <label class="wide">Evidencia / firma<textarea id="prevExecEvidence" rows="2" placeholder="Folio, foto, firma o evidencia del cierre"></textarea></label>
             <label class="wide">Observaciones<textarea id="prevExecNotes" rows="3" placeholder="Trabajo realizado, pendientes o condicion encontrada"></textarea></label>
           </div>
@@ -9389,6 +10176,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn secondary" id="prevExecPrintBtn">PDF / imprimir</button>
             <button class="btn secondary" id="prevExecViewHistoryBtn">Ver servicios realizados</button>
           </div>
+          <div class="rdy-panel" id="pmReadinessPanel" style="margin-top:10px;display:none"></div>
         </div>
         <div class="panel">
           <div class="subtle-title"><h3>Servicios abiertos</h3><span class="muted" id="prevExecOpenCount"></span></div>
@@ -9532,7 +10320,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <label>Equipo<input id="dispEditEquipment" readonly></label>
           <label>No ECO<input id="dispEditEco" readonly></label>
           <label>Fecha actualizacion<input id="dispEditDate" type="date"></label>
-          <label>Condicion<select id="dispEditCondition"><option>DISPONIBLE</option><option>FUERA</option><option>FUERA DE SERVICIO</option><option>NO DISPONIBLE</option><option>OPERATIVA</option><option>STAND BY</option><option>REPARACION</option></select></label>
+          <label>Condicion<select id="dispEditCondition"><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>NO DISPONIBLE</option><option>OPERATIVA</option><option>STAND BY</option><option>REPARACION</option></select></label>
           <label>Resaltar obs.<select id="dispEditHighlight"><option value="0">No</option><option value="1">Si</option></select></label>
           <label class="wide">Observaciones<textarea id="dispEditObservations" rows="2" placeholder="Motivo, trabajo pendiente o comentario de operacion"></textarea></label>
         </div>
@@ -9543,7 +10331,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
       <div class="panel toolbar">
         <label>Categoria / equipo<input id="dispSearch" placeholder="Buscar"></label>
-        <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
+        <label>Condicion<select id="dispStatus"><option value="">Todas</option><option>DISPONIBLE</option><option>FUERA DE SERVICIO</option><option>OPERATIVA</option></select></label>
         <button class="btn" id="renderDispBtn">Actualizar</button>
       </div>
       <div class="table-wrap"><table id="dispTable"></table></div>
@@ -9756,7 +10544,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Tipo<select id="tireTrackType"><option>INSPECCION</option><option>MOVIMIENTO</option><option>MODIFICACION</option><option>MONTAJE</option><option>ROTACION</option><option>REPARACION</option><option>DESMONTAJE</option><option>BAJA</option></select></label>
             <label>Serie llanta<input id="tireTrackCode" list="tireTrackCodes" placeholder="Serie / codigo"><datalist id="tireTrackCodes"></datalist></label>
             <label>Equipo<select id="tireTrackEquipment"></select></label>
-            <label>Posicion<input id="tireTrackPosition" placeholder="Ej. DEL IZQ"></label>
+            <label>Posicion<select id="tireTrackPosition"><option value="">Seleccionar</option><option>Posicion 1</option><option>Posicion 2</option><option>Posicion 3</option><option>Posicion 4</option><option>Posicion 5</option><option>Posicion 6</option><option>Posicion 7</option><option>Posicion 8</option><option>Posicion 9</option><option>Posicion 10</option></select></label>
             <label>Estatus<select id="tireTrackMountStatus"><option>MONTADA</option><option>ALMACEN</option><option>REPARACION</option><option>BAJA</option></select></label>
             <label>Marca<input id="tireTrackBrand"></label>
             <label>Modelo<input id="tireTrackModel"></label>
@@ -9817,6 +10605,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button type="button" data-warehouse-action="SALIDA"><b>↑</b>Salida de filtros</button>
             <button type="button" data-warehouse-action="KARDEX"><b>▦</b>Kardex</button>
             <button type="button" data-warehouse-action="REPORTE"><b>▤</b>Reporte inventario</button>
+            <button type="button" data-warehouse-action="REQUISICION" id="autoRequisitionBtn" style="background:linear-gradient(135deg,#b45309,#92400e);color:white;"><b>⚡</b>Requisicion por faltantes</button>
           </div>
         </div>
       </div>
@@ -9828,6 +10617,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn secondary" id="exportBtn">Exportar Excel</button>
           </div>
           <div class="table-wrap" style="margin-top:10px;"><table id="inventoryTable"></table></div>
+        </div>
+        <div class="panel">
+          <div class="subtle-title"><h3>Faltantes por equipo</h3><span class="muted" id="shortageCount"></span></div>
+          <div id="shortageSummary" style="max-height:240px;overflow-y:auto;"></div>
+          <button class="btn" id="generateRequisitionBtn" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#b45309,#92400e);color:white;">Generar requisicion por faltantes</button>
         </div>
         <div class="panel">
           <h3>Entrada / salida / ajuste</h3>
@@ -9999,12 +10793,13 @@ WAREHOUSE_HTML = r"""<!doctype html>
   </main>
   <script>
     let data = { equipment: [], inventory: [], movements: [], summary: {} };
-    let portal = { equipment: [], preventives: [], service_history: [], preventive_execution: {records: []}, special_services: {records: []}, work_orders: {records: []}, parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, captures: [], availability: [], settings: {}, period: {}, products: [] };
+    let portal = { equipment: [], preventives: [], service_history: [], preventive_execution: {records: []}, special_services: {records: []}, work_orders: {records: []}, parts_manuals: {manuals: [], rows: [], summary: {}}, audit_log: [], backlog: {items: [], summary: {}, systems: []}, kanban: {cards: {}, overrides: {}}, captures: [], availability: [], settings: {}, period: {}, products: [] };
     let products = [];
     let requisitions = [];
-    let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
-    let diesel = { equipment: [], records: [], days: [], rows: [], totals: {}, start: "", end: "", meta_lh: 25 };
-    let epp = { items: [], movements: [], deliveries: [], workers: [], summary: {} };
+let hoses = { records: [], summary: [], totals: {}, start: "", end: "", period_days: 0 };
+let diesel = { equipment: [], records: [], days: [], rows: [], totals: {}, start: "", end: "", meta_lh: 25 };
+let epp = { items: [], movements: [], deliveries: [], workers: [], summary: {} };
+let lubricants = { start: "", end: "", catalog: [], movements: [] };
     let currentEppWorkerId = null;
     let currentReqId = null;
     let currentReqItemIndex = null;
@@ -10066,7 +10861,19 @@ WAREHOUSE_HTML = r"""<!doctype html>
         return text;
       }
     }
-    function showError(error){ alert(error.message || String(error)); }
+    function showError(error){ showToast(error.message || String(error), "error"); }
+    let _toastContainer;
+    function showToast(msg, type="info", duration=4000){
+      if(!_toastContainer){ _toastContainer=document.createElement("div"); _toastContainer.className="mga-toast-container"; document.body.appendChild(_toastContainer); }
+      const t=document.createElement("div"); t.className="mga-toast "+esc(type);
+      const icons={success:"&#10003;",error:"&#10007;",warning:"&#9888;",info:"&#8505;"};
+      t.innerHTML=`<span>${icons[type]||""}</span><span>${esc(msg)}</span>`;
+      _toastContainer.appendChild(t);
+      setTimeout(()=>{ t.classList.add("leaving"); setTimeout(()=>t.remove(),300); }, duration);
+    }
+    let _loadingEl;
+    function showLoading(){ if(_loadingEl) return; _loadingEl=document.createElement("div"); _loadingEl.className="mga-loading"; _loadingEl.innerHTML=`<div class="mga-loading-spinner"></div>`; document.body.appendChild(_loadingEl); }
+    function hideLoading(){ if(_loadingEl){ _loadingEl.remove(); _loadingEl=null; } }
     function esc(v){ return String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
     function num(v){ const n = Number(v || 0); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
     function one(v){ return `${Number(v || 0).toFixed(1)}`; }
@@ -10176,6 +10983,12 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = String(v || "").replace(/\s+/g, " ").trim();
       return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
     }
+    function daysBetween(dateStr1, dateStr2){
+      const d1 = new Date(dateStr1 || "2000-01-01");
+      const d2 = new Date(dateStr2 || new Date().toISOString().slice(0,10));
+      return Math.floor((d2 - d1) / 86400000);
+    }
+    function daysSince(dateStr){ return daysBetween(dateStr, new Date().toISOString().slice(0,10)); }
     function serviceFiltersText(row){
       if(row.filters_text) return String(row.filters_text);
       if(Array.isArray(row.filters_used)){
@@ -10730,13 +11543,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>`;
     }
     function activateTab(tabId){
+      const viewId = tabId === "catalogoEquiposFull" ? "catalogoEquipos" : tabId;
       const button = document.querySelector(`.tabs button[data-tab="${tabId}"]`);
       if(!button) return;
       document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       button.classList.add("active");
-      $(tabId).classList.add("active");
-      $("stats").style.display = tabId === "dashboard" ? "" : "none";
+      $(viewId).classList.add("active");
+      $("stats").style.display = viewId === "dashboard" ? "" : "none";
+      if(viewId === "kanban") renderKanban();
+      if(viewId === "lubricantes") loadLubricantes().catch(showError);
     }
     function executiveAlerts(){
       const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
@@ -10932,8 +11748,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const spareShort = spareRows.filter(row => ["FALTANTE","SIN INVENTARIO"].includes(String(row.inventory_status || "").toUpperCase()));
       const tireCritical = tireRows.filter(row => ["CRITICA","PROXIMA"].includes(String(row.control_status || "").toUpperCase()));
       const lastCapture = captures[0] || {};
+      const eqPhoto = eq.photo_data || "";
       $("fichaHeader").innerHTML = `
         <h3>${esc(code)}</h3>
+        ${eqPhoto ? `<img src="${esc(eqPhoto)}" alt="${esc(code)}" class="ficha-photo" style="max-width:180px;max-height:180px;border-radius:8px;box-shadow:0 2px 8px #0002;margin:8px 0;">` : ""}
         <p><b>${esc(eq.description || eq.family || "Equipo sin descripcion")}</b></p>
         <p>Periodo: ${esc(start)} a ${esc(end)}</p>
         <p>Ultima captura: ${esc(lastCapture.work_date || "S/D")} ${esc(lastCapture.status || "")}</p>
@@ -10950,14 +11768,18 @@ WAREHOUSE_HTML = r"""<!doctype html>
           <button class="btn secondary" type="button" data-profile-tab="refacciones">Refacciones</button>
           <button class="btn secondary" type="button" data-profile-tab="llantasTrack">Llantas</button>
         </div>`;
+      const eqMetrics = getEquipmentMetrics(code);
+      const nextPM = preventives.length ? preventives.sort((a,b) => Number(a.hours_remaining||999) - Number(b.hours_remaining||999))[0] : null;
       $("fichaMetrics").innerHTML = [
-        ["Hrs trabajadas", one(worked)],
-        ["Hrs MP", one(mp)],
-        ["Hrs MC", one(mc)],
-        ["Paradas", stops],
-        ["Aceites L", one(oilRow.total_liters || 0)],
-        ["OT abiertas", openOrders.length],
-      ].map(([label,value]) => `<div class="profile-metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("");
+        ["Disponibilidad", pct(eqMetrics.disponibilidad), eqMetrics.disponibilidad < 85 ? "bad" : ""],
+        ["MTBF", `${one(eqMetrics.mtbf)} h`, eqMetrics.mtbf < 200 ? "warn" : ""],
+        ["MTTR", `${one(eqMetrics.mttr)} h`, eqMetrics.mttr > 5 ? "warn" : ""],
+        ["Hrs trabajadas", one(eqMetrics.worked)],
+        ["Hrs MP / MC", `${one(eqMetrics.mp)} / ${one(eqMetrics.mc)}`],
+        ["Costo total", `$${one(eqMetrics.totalCost)}`],
+        ["OT abiertas", openOrders.length, openOrders.length > 0 ? "warn" : ""],
+        ["Proximo PM", nextPM ? `${esc(nextPM.service_interval||"")} - ${one(nextPM.hours_remaining)}h` : "S/D", nextPM && Number(nextPM.hours_remaining) < 25 ? "bad" : ""],
+      ].map(([label, value, tone]) => `<div class="profile-metric${tone ? " " + tone : ""}"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("");
       const alerts = [
         ...openOrders.slice(0,4).map(row => ({tone:row.priority === "URGENTE" || row.priority === "ALTA" ? "bad" : "warn", label:"OT", text:`${row.folio || ""} ${row.priority || ""}: ${row.description || ""}`})),
         ...overdue.slice(0,4).map(row => ({tone:"bad", label:"PM", text:`${row.service_interval || ""} ${row.component || ""}: ${row.status || ""}, faltan ${one(row.hours_remaining || 0)} h`})),
@@ -10983,6 +11805,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("fichaPartsCount").textContent = `${partRows.length} registro(s)`;
       $("fichaPartsTable").innerHTML = `<thead><tr><th>Tipo</th><th>Codigo</th><th>Descripcion</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>` +
         (partRows.map(row => `<tr><td>${esc(row.kind)}</td><td>${esc(row.code)}</td><td>${esc(shortText(row.desc, 100))}</td><td>${esc(row.status)}</td><td>${esc(row.extra)}</td></tr>`).join("") || `<tr><td colspan="5">Sin refacciones o llantas relacionadas.</td></tr>`) + `</tbody>`;
+      const recurrence = renderEquipmentRecurrence(code);
+      $("fichaRecurrenceCount").textContent = `${recurrence.length} sistema(s) con reincidencia`;
+      $("fichaRecurrence").innerHTML = recurrence.length ? recurrence.map(r => `<div class="exp-recurrence${r.alert ? " alert" : ""}"><div><strong>${esc(r.system)}</strong><span>${r.count} falla(s) en 12 meses</span></div><div class="exp-recurrence-bar" style="width:80px"><div class="exp-recurrence-fill" style="width:${Math.min((r.count/8)*100,100)}%;background:${r.alert ? "var(--red)" : "var(--teal)"}"></div></div></div>`).join("") : `<div style="text-align:center;padding:10px;color:var(--muted);font-size:12px">Sin reincidencias registradas</div>`;
       document.querySelectorAll("[data-profile-tab]").forEach(button => button.addEventListener("click", () => activateTab(button.dataset.profileTab)));
       document.querySelectorAll("[data-profile-ot]").forEach(button => button.addEventListener("click", () => {
         newWorkOrder({
@@ -10994,6 +11819,118 @@ WAREHOUSE_HTML = r"""<!doctype html>
         });
       }));
     }
+
+    async function openEditFichaModal(){
+      const code = selectedFichaCode();
+      if(!code) return alert("Selecciona un equipo primero.");
+      const eq = portalEquipment().find(item => normalizedText(item.code || item.equipment_code) === normalizedText(code)) || {};
+      const modal = $("editFichaModal");
+      modal.querySelector("#editFichaCode").value = code;
+      modal.querySelector("#editFichaDesc").value = eq.description || "";
+      modal.querySelector("#editFichaFamily").value = eq.family || "";
+      modal.querySelector("#editFichaType").value = eq.equipment_type || "";
+      modal.querySelector("#editFichaBrand").value = eq.brand || "";
+      modal.querySelector("#editFichaModel").value = eq.model || "";
+      modal.querySelector("#editFichaSerial").value = eq.serial || "";
+      modal.querySelector("#editFichaLocation").value = eq.location || "";
+      modal.querySelector("#editFichaNotes").value = eq.notes || "";
+      const preview = modal.querySelector("#editFichaImagePreview");
+      const placeholder = modal.querySelector("#editFichaImagePlaceholder");
+      const clearBtn = modal.querySelector("#editFichaImageClearBtn");
+      const photo = eq.photo_data || "";
+      if(photo){
+        preview.src = photo;
+        preview.style.display = "block";
+        placeholder.style.display = "none";
+        clearBtn.style.display = "inline-flex";
+      }else{
+        preview.src = "";
+        preview.style.display = "none";
+        placeholder.style.display = "block";
+        clearBtn.style.display = "none";
+      }
+      modal.showModal();
+    }
+
+    function handleEditFichaImageSelect(e){
+      const file = e.target.files?.[0];
+      if(!file) return;
+      if(!file.type.startsWith("image/")) return alert("Solo archivos de imagen.");
+      if(file.size > 2 * 1024 * 1024) return alert("La imagen excede 2 MB.");
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 800;
+          let {width, height} = img;
+          if(width > maxDim || height > maxDim){
+            if(width > height){ height = Math.round(height * maxDim / width); width = maxDim; }
+            else { width = Math.round(width * maxDim / height); height = maxDim; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+          const modal = $("editFichaModal");
+          const preview = modal.querySelector("#editFichaImagePreview");
+          const placeholder = modal.querySelector("#editFichaImagePlaceholder");
+          const clearBtn = modal.querySelector("#editFichaImageClearBtn");
+          preview.src = dataUrl;
+          preview.style.display = "block";
+          placeholder.style.display = "none";
+          clearBtn.style.display = "inline-flex";
+          preview.dataset.rawDataUrl = dataUrl;
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function clearEditFichaImage(){
+      const modal = $("editFichaModal");
+      const preview = modal.querySelector("#editFichaImagePreview");
+      const placeholder = modal.querySelector("#editFichaImagePlaceholder");
+      const clearBtn = modal.querySelector("#editFichaImageClearBtn");
+      const input = modal.querySelector("#editFichaImageInput");
+      preview.src = "";
+      preview.style.display = "none";
+      placeholder.style.display = "block";
+      clearBtn.style.display = "none";
+      input.value = "";
+      delete preview.dataset.rawDataUrl;
+    }
+
+    async function saveEditFicha(){
+      const modal = $("editFichaModal");
+      const code = modal.querySelector("#editFichaCode").value;
+      if(!code) return alert("Codigo de equipo requerido.");
+      const preview = modal.querySelector("#editFichaImagePreview");
+      const photoData = preview.dataset.rawDataUrl || (preview.src ? preview.src : "");
+      const payload = {
+        description: modal.querySelector("#editFichaDesc").value.trim(),
+        family: modal.querySelector("#editFichaFamily").value.trim(),
+        equipment_type: modal.querySelector("#editFichaType").value.trim(),
+        brand: modal.querySelector("#editFichaBrand").value.trim(),
+        model: modal.querySelector("#editFichaModel").value.trim(),
+        serial: modal.querySelector("#editFichaSerial").value.trim(),
+        location: modal.querySelector("#editFichaLocation").value.trim(),
+        notes: modal.querySelector("#editFichaNotes").value.trim(),
+        photo_data: photoData,
+      };
+      Object.keys(payload).forEach(k => { if(payload[k] === "") delete payload[k]; });
+      if(Object.keys(payload).length === 0) return alert("No hay cambios para guardar.");
+      const response = await fetch(`/api/equipment/${encodeURIComponent(code)}/meta`, {method:"PUT", headers:headers(true), body:JSON.stringify(payload)});
+      if(!response.ok) throw new Error(await apiError(response));
+      const result = await response.json();
+      if(result.portal) portal = result.portal;
+      modal.close();
+      showToast("Ficha actualizada correctamente", "success");
+      renderPortalSelectors();
+      renderEquipmentProfile();
+      renderEquipmentCatalog();
+    }
+
     const workOrderMaintenancePlans = {
       R1600G: {
         name: "Caterpillar R1600G",
@@ -11642,6 +12579,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("woParts").value = prefill.parts_used || "";
       $("woLubricants").value = prefill.lubricants_used || "";
       $("woEvidence").value = prefill.evidence_note || "";
+      $("woCostMaterial").value = prefill.cost_material || "";
+      $("woCostLabor").value = prefill.cost_labor || "";
+      $("woCostExternal").value = prefill.cost_external || "";
       $("woStatus").textContent = prefill.folio ? `Editando ${prefill.folio}` : "Nueva OT";
       activateTab("ordenesTrabajo");
     }
@@ -11665,6 +12605,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
         parts_used: $("woParts").value.trim(),
         lubricants_used: $("woLubricants").value.trim(),
         evidence_note: $("woEvidence").value.trim(),
+        cost_material: parseFloat($("woCostMaterial").value) || 0,
+        cost_labor: parseFloat($("woCostLabor").value) || 0,
+        cost_external: parseFloat($("woCostExternal").value) || 0,
       };
     }
     function fillWorkOrder(row){
@@ -11697,15 +12640,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const process = all.filter(row => String(row.status || "").toUpperCase().includes("PROCESO")).length;
       const urgent = all.filter(row => !workOrderClosed(row) && ["URGENTE","ALTA"].includes(String(row.priority || "").toUpperCase())).length;
       const closed = all.filter(workOrderClosed).length;
+      const totalMat = all.reduce((s,r) => s + Number(r.cost_material||0), 0);
+      const totalLab = all.reduce((s,r) => s + Number(r.cost_labor||0), 0);
+      const totalExt = all.reduce((s,r) => s + Number(r.cost_external||0), 0);
+      const totalCost = totalMat + totalLab + totalExt;
       $("woSummaryText").textContent = `${rows.length} mostrada(s)`;
       $("woSummaryCards").innerHTML = [
         ["Abiertas", open, open ? "warn" : ""],
         ["En proceso", process, process ? "warn" : ""],
         ["Urgentes/altas", urgent, urgent ? "bad" : ""],
         ["Cerradas/cancel.", closed, ""],
+        ["Costo total", "$" + totalCost.toLocaleString("es-MX",{minimumFractionDigits:2}), totalCost > 0 ? "info" : ""],
       ].map(([label,value,tone]) => `<div class="exec-card ${tone}"><strong>${value}</strong><span>${esc(label)}</span><small>Ordenes de trabajo</small></div>`).join("");
-      $("woTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Origen</th><th>Prioridad</th><th>Estatus</th><th>Responsable</th><th>Descripcion</th><th>Accion</th></tr></thead><tbody>` +
-        (rows.map(row => `<tr data-wo-id="${esc(row.id || row.folio || "")}" style="cursor:pointer"><td>${esc(row.folio || "")}</td><td>${esc(row.date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.origin || "")}</td><td><span class="pill ${workOrderClass(row)}">${esc(row.priority || "")}</span></td><td><span class="pill ${workOrderClass(row)}">${esc(row.status || "")}</span></td><td>${esc(row.responsible || row.mechanic || "")}</td><td>${esc(shortText(row.description || "", 120))}</td><td>${esc(shortText(row.action || "", 100))}</td></tr>`).join("") || `<tr><td colspan="9">Sin ordenes de trabajo.</td></tr>`) + `</tbody>`;
+      $("woTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Origen</th><th>Prioridad</th><th>Estatus</th><th>Responsable</th><th>Costo</th><th>Descripcion</th><th>Accion</th></tr></thead><tbody>` +
+        (rows.map(row => { const tc = Number(row.cost_material||0)+Number(row.cost_labor||0)+Number(row.cost_external||0); return `<tr data-wo-id="${esc(row.id || row.folio || "")}" style="cursor:pointer"><td>${esc(row.folio || "")}</td><td>${esc(row.date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.origin || "")}</td><td><span class="pill ${workOrderClass(row)}">${esc(row.priority || "")}</span></td><td><span class="pill ${workOrderClass(row)}">${esc(row.status || "")}</span></td><td>${esc(row.responsible || row.mechanic || "")}</td><td>${tc > 0 ? "$"+tc.toLocaleString("es-MX",{minimumFractionDigits:2}) : "-"}</td><td>${esc(shortText(row.description || "", 120))}</td><td>${esc(shortText(row.action || "", 100))}</td></tr>`; }).join("") || `<tr><td colspan="10">Sin ordenes de trabajo.</td></tr>`) + `</tbody>`;
       document.querySelectorAll("[data-wo-id]").forEach(row => row.addEventListener("click", () => {
         const record = workOrderRows().find(item => String(item.id || item.folio || "") === String(row.dataset.woId || ""));
         if(record) fillWorkOrder(record);
@@ -11726,6 +12674,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderExecutiveBoard();
       renderEquipmentProfile();
       renderBacklog();
+      renderKanban();
       if(result.record) fillWorkOrder(result.record);
       $("woStatus").textContent = close ? "OT cerrada." : "OT guardada.";
     }
@@ -11785,6 +12734,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
           return `<tr><td>${esc(i.part_key || i.part_number)}</td><td>${esc(warehouseCategory(i))}</td><td>${esc(i.part_number)}</td><td>${esc(i.description)}</td><td>${esc(i.equipment || i.equipment_codes)}</td><td><span class="pill ${cls}">${num(i.quantity)}</span></td><td>${num(i.min_stock)}</td><td>${esc(i.location)}</td><td><span class="pill ${cls}">${state}</span></td><td>${esc(String(i.updated_at || "").slice(0,10))}</td></tr>`;
         }).join("") +
         `</tbody>`;
+      renderShortageSummary();
     }
     function renderMovements(){
       const rows = data.movements || [];
@@ -11795,6 +12745,62 @@ WAREHOUSE_HTML = r"""<!doctype html>
           return `<tr><td>${esc(m.movement_date)}</td><td>${esc(m.part_number)}</td><td><span class="pill ${cls}">${esc(m.movement_type)}</span></td><td>${num(m.quantity)}</td><td>${num(m.balance_after)}</td><td>${esc(m.equipment_code || "")}</td><td>${esc(m.reference)}</td></tr>`;
         }).join("") +
         `</tbody>`;
+    }
+    function renderShortageSummary(){
+      const inventory = data.inventory || [];
+      const eq = allPortalEquipment();
+      const shortageItems = inventory.filter(i => {
+        const qty = Number(i.quantity || 0);
+        const min = Number(i.min_stock || 0);
+        return min > 0 && qty < min;
+      });
+      const noStockItems = inventory.filter(i => Number(i.quantity || 0) <= 0);
+      const total = shortageItems.length + noStockItems.length;
+      if($("shortageCount")) $("shortageCount").textContent = total > 0 ? `${total} parte(s) con faltante` : "Todo en orden";
+      const lines = [];
+      shortageItems.slice(0,10).forEach(i => {
+        const shortage = Number(i.min_stock||0) - Number(i.quantity||0);
+        lines.push(`<div style="display:flex;justify-content:space-between;padding:4px 8px;border-bottom:1px solid var(--line);font-size:11px;"><span><strong>${esc(i.part_number||"")}</strong> ${esc(shortText(i.description||"",40))}</span><span style="color:var(--amber);font-weight:700;">Stock ${num(i.quantity)} / min ${num(i.min_stock)} (-${shortage})</span></div>`);
+      });
+      noStockItems.slice(0,5).forEach(i => {
+        lines.push(`<div style="display:flex;justify-content:space-between;padding:4px 8px;border-bottom:1px solid var(--line);font-size:11px;"><span><strong>${esc(i.part_number||"")}</strong> ${esc(shortText(i.description||"",40))}</span><span style="color:var(--red);font-weight:700;">SIN STOCK</span></div>`);
+      });
+      if(!lines.length) lines.push(`<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No hay faltantes detectados</div>`);
+      if($("shortageSummary")) $("shortageSummary").innerHTML = lines.join("");
+    }
+    async function generateRequisitionFromShortages(){
+      if(!hasApiKey(true)) return;
+      const inventory = data.inventory || [];
+      const eq = allPortalEquipment();
+      const shortageItems = inventory.filter(i => {
+        const qty = Number(i.quantity || 0);
+        const min = Number(i.min_stock || 0);
+        return (min > 0 && qty < min) || qty <= 0;
+      });
+      if(!shortageItems.length) return alert("No hay faltantes de inventario para generar requisicion.");
+      if(!confirm(`Generar requisicion con ${shortageItems.length} partida(s) faltante(s)?`)) return;
+      const items = shortageItems.map((i, idx) => ({
+        quantity: Math.max(Number(i.min_stock||0) - Number(i.quantity||0), 1),
+        unit: i.unit || "PZA",
+        part_number: i.part_number || "",
+        description: `${i.description||""} | Equipo: ${i.equipment||""} | Stock: ${Number(i.quantity||0)} / min: ${Number(i.min_stock||0)}`,
+        sort_order: idx + 1,
+      }));
+      const payload = {
+        request_date: toIsoDate(new Date()),
+        equipment: shortageItems.map(i => i.equipment||"").filter(Boolean).join(", ").slice(0,120),
+        priority: "URGENTE",
+        status: "Abierta",
+        notes: `Requisicion generada automaticamente por faltantes de inventario (${shortageItems.length} partida(s)).`,
+        items: items,
+      };
+      try{
+        const resp = await fetch("/api/requisitions", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+        if(!resp.ok) throw new Error(await apiError(resp));
+        const result = await resp.json();
+        alert(`Requisicion ${result.folio || ""} generada con ${items.length} partida(s).`);
+        load();
+      }catch(ex){ alert("Error al generar requisicion: " + ex.message); }
     }
     function eppSelectedCode(){ return ($("eppCode").value || "").trim().toUpperCase(); }
     function eppStatusClass(status){
@@ -12033,9 +13039,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = String(status || "").toUpperCase();
       return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP") || text.includes("REPARACION") || text.includes("REPARACIÓN") || text.includes("MANTENIMIENTO");
     }
-    function kpiExcludedStatus(status){
-      return normalizedText(status).includes("FUERA");
-    }
     function normalizedText(value){
       return String(value || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     }
@@ -12085,7 +13088,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const text = normalizedText(value);
       if(!text) return "";
       if(text.includes("STAND")) return "Stand By";
-      if(kpiExcludedStatus(text)) return "FUERA";
       if(unavailable(text)) return "No Disponible";
       if(text.includes("DISPONIBLE")) return "Disponible";
       if(text.includes("OPERATIVA")) return "Operativa";
@@ -12205,16 +13207,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         row.mp = Math.max(Number(source.mp || 0) * factors.mp, 0);
         row.mc = Math.max(Number(source.mc || 0) * factors.mc, 0);
         row.stops = Math.max(Math.round(Number(source.stops || 0) * factors.stops), 0);
-        row.excluded = kpiExcludedStatus(row.status);
-        row.out = row.excluded || (row.worked <= 0 && unavailable(row.status));
+        row.out = row.worked <= 0 && unavailable(row.status);
         const values = row.out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops, missionHours);
         Object.assign(row, values);
         row.availabilityText = row.out ? "FUERA" : pct(row.availability);
         row.utilizationText = row.out ? "FUERA" : pct(row.utilization);
         return row;
       });
-      const totalRows = rows.filter(row => !row.excluded && !kpiExcludedStatus(row.status));
-      const totals = totalRows.reduce((acc, row) => {
+      const totals = rows.reduce((acc, row) => {
         acc.period += Number(row.period || 0); acc.worked += Number(row.worked || 0); acc.mp += Number(row.mp || 0); acc.mc += Number(row.mc || 0); acc.stops += Number(row.stops || 0); acc.available += Number(row.available || 0);
         return acc;
       }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
@@ -12233,9 +13233,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     }
     function setMultiOptions(selectId, options){
       const select = $(selectId);
-      const current = new Set([...select.selectedOptions].map(opt => opt.value));
+      if(!select) return;
+      const selected = new Set([...select.selectedOptions].map(opt => opt.value));
       select.innerHTML = options.map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join("");
-      [...select.options].forEach(opt => { opt.selected = current.has(opt.value); });
+      [...select.options].forEach(opt => { opt.selected = selected.has(opt.value); });
     }
     function allPortalEquipment(){
       const rows = Array.isArray(portal.equipment) ? portal.equipment : [];
@@ -12255,15 +13256,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
         const worked = Number(sourceRow.worked ?? sourceRow.worked_hours ?? 0);
         const availabilityText = String(sourceRow.availabilityText || sourceRow.availability_text || "").trim();
         const utilizationText = String(sourceRow.utilizationText || sourceRow.utilization_text || "").trim();
-        const status = sourceRow.status || (availabilityText.toUpperCase() === "FUERA" || utilizationText.toUpperCase() === "FUERA" ? "FUERA" : "");
-        const out = availabilityText.toUpperCase() === "FUERA" || utilizationText.toUpperCase() === "FUERA" || kpiExcludedStatus(status);
+        const out = availabilityText.toUpperCase() === "FUERA" || utilizationText.toUpperCase() === "FUERA";
         const availability = Number(sourceRow.availability || 0);
         const utilization = Number(sourceRow.utilization || 0);
         return {
           code: sourceRow.code || "",
           description: sourceRow.description || "",
           family: sourceRow.family || "",
-          status: kpiExcludedStatus(status) ? "FUERA" : status,
+          status: sourceRow.status || (out ? "FUERA" : ""),
           period,
           worked,
           mp,
@@ -12276,34 +13276,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
           tmpr: Number(sourceRow.tmpr || 0),
           reliability: Number(sourceRow.reliability || 0),
           out,
-          excluded: kpiExcludedStatus(status),
           availabilityText: availabilityText || (out ? "FUERA" : pct(availability)),
           utilizationText: utilizationText || (out ? "FUERA" : pct(utilization)),
         };
       }) : [];
-      const settings = portal.settings || {};
-      const missionHours = Number(settings.reliability_mission_hours || settings.mission_hours || 12);
-      const totalRows = rows.filter(row => !row.excluded && !kpiExcludedStatus(row.status));
-      const totals = totalRows.reduce((acc, row) => {
-        acc.period += Number(row.period || 0);
-        acc.worked += Number(row.worked || 0);
-        acc.mp += Number(row.mp || 0);
-        acc.mc += Number(row.mc || 0);
-        acc.stops += Number(row.stops || 0);
-        acc.available += Number(row.available || 0);
-        return acc;
-      }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
-      totals.availability = totals.period ? (totals.available / totals.period) * 100 : 0;
-      totals.utilization = totals.available ? (totals.worked / totals.available) * 100 : 0;
-      totals.tmef = totals.stops ? (totals.worked ? totals.worked / totals.stops : 0) : totals.worked;
-      totals.tmpr = totals.stops ? totals.mc / totals.stops : 0;
-      totals.reliability = totals.tmef && missionHours ? Math.max(Math.min(Math.exp(-(missionHours / totals.tmef)) * 100, 100), 0) : (totals.worked > 0 && !totals.stops ? 100 : 0);
       return {
         group: source.group || group,
         start,
         end,
         rows,
-        totals,
+        totals: source.totals || {period:0, worked:0, mp:0, mc:0, stops:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0},
         source: "desktop-kpi-report",
       };
     }
@@ -12582,13 +13564,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const rows = Object.values(grouped).sort((a,b) => a.code.localeCompare(b.code)).map(row => {
         if(row.availabilityStatus) row.status = row.availabilityStatus;
         else if(row.captureStatus) row.status = row.captureStatus;
-        const excluded = kpiExcludedStatus(row.status);
-        const out = excluded || (row.worked <= 0 && (row.unavailableCount > 0 || unavailable(row.status)));
+        const out = row.worked <= 0 && (row.unavailableCount > 0 || unavailable(row.status));
         const m = out ? {available:0, availability:0, utilization:0, tmef:0, tmpr:0, reliability:0} : metric(row.period, row.worked, row.mp, row.mc, row.stops, missionHours);
-        return {...row, ...m, out, excluded, availabilityText: out ? "FUERA" : pct(m.availability), utilizationText: out ? "FUERA" : pct(m.utilization)};
+        return {...row, ...m, out, availabilityText: out ? "FUERA" : pct(m.availability), utilizationText: out ? "FUERA" : pct(m.utilization)};
       });
-      const totalRows = rows.filter(row => !row.excluded && !kpiExcludedStatus(row.status));
-      const totals = totalRows.reduce((acc, row) => {
+      const totals = rows.reduce((acc, row) => {
         acc.period += row.period; acc.worked += row.worked; acc.mp += row.mp; acc.mc += row.mc; acc.stops += row.stops; acc.available += row.available;
         return acc;
       }, {period:0, worked:0, mp:0, mc:0, stops:0, available:0});
@@ -13277,7 +14257,377 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("kpiTable").className = "diesel-table";
       $("kpiTable").innerHTML = dieselTableHtml(report);
     }
+    function renderOperationalDashboard(){
+      const today = new Date().toISOString().slice(0,10);
+      const todayObj = new Date();
+      const in7 = new Date(todayObj); in7.setDate(in7.getDate()+7);
+      const in7str = in7.toISOString().slice(0,10);
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
+      const prevToday = preventives.filter(r => r.projected_date === today);
+      const prevVencidos = preventives.filter(r => ["VENCIDO","URGENTE"].includes(String(r.status||"").toUpperCase()) && r.projected_date && r.projected_date <= today);
+      const prevProximos = preventives.filter(r => r.projected_date && r.projected_date > today && r.projected_date <= in7str && !["VENCIDO","URGENTE"].includes(String(r.status||"").toUpperCase()));
+      const otOpen = (portal.backlog?.items || []).filter(r => String(r.flow_status||"").toLowerCase() !== "cerrado" && String(r.flow_status||"").toLowerCase() !== "atendido");
+      const otCriticas = otOpen.filter(r => Number(r.score||0) >= 70);
+      const backlogTotal = otOpen.length;
+      const stocks = portal.stocks || portal.filter_stocks || [];
+      const filtrosBajo = stocks.filter(r => Number(r.quantity||0) < Number(r.min_stock||r.minimum||0));
+      const invShortages = (data.inventory||[]).filter(i => Number(i.quantity||0) <= 0 || (Number(i.min_stock||0) > 0 && Number(i.quantity||0) < Number(i.min_stock||0)));
+      const totalShortages = filtrosBajo.length + invShortages.length;
+      const equipOut = (portal.equipment||[]).filter(r => String(r.status||"").toUpperCase() === "FUERA" || String(r.state||"").toUpperCase() === "FUERA");
+      $("d2TopRow").innerHTML = `<div class="d2-top">${[
+        `<div class="d2-kpi" onclick="activateTab('preventivos')"><div class="d2-kpi-icon blue">&#9878;</div><div><span class="d2-kpi-val">${prevToday.length}</span><span class="d2-kpi-label">PM Hoy</span><span class="d2-kpi-sub">Preventivos programados</span></div></div>`,
+        `<div class="d2-kpi" onclick="activateTab('preventivos')"><div class="d2-kpi-icon red">&#9888;</div><div><span class="d2-kpi-val">${prevVencidos.length}</span><span class="d2-kpi-label">PM Vencidos</span><span class="d2-kpi-sub">Requieren atencion</span></div></div>`,
+        `<div class="d2-kpi" onclick="activateTab('preventivos')"><div class="d2-kpi-icon amber">&#9200;</div><div><span class="d2-kpi-val">${prevProximos.length}</span><span class="d2-kpi-label">PM Proximos 7d</span><span class="d2-kpi-sub">Por programar</span></div></div>`,
+        `<div class="d2-kpi" onclick="activateTab('kanban')"><div class="d2-kpi-icon steel">&#9998;</div><div><span class="d2-kpi-val">${backlogTotal}</span><span class="d2-kpi-label">OT Abiertas</span><span class="d2-kpi-sub">${otCriticas.length} criticas</span></div></div>`,
+        `<div class="d2-kpi" onclick="activateTab('catalogoEquipos')"><div class="d2-kpi-icon green">&#9878;</div><div><span class="d2-kpi-val">${(portal.equipment||[]).length - equipOut.length}</span><span class="d2-kpi-label">Equipos OK</span><span class="d2-kpi-sub">${equipOut.length} fuera</span></div></div>`,
+        `<div class="d2-kpi" onclick="activateTab('inventario')"><div class="d2-kpi-icon teal">&#9881;</div><div><span class="d2-kpi-val">${totalShortages}</span><span class="d2-kpi-label">Faltantes inv.</span><span class="d2-kpi-sub">${filtrosBajo.length} catalogo + ${invShortages.length} almacen</span></div></div>`,
+      ].join("")}</div>`;
+    }
+    function renderWeeklySchedule(){
+      const today = new Date();
+      const dayOfWeek = today.getDay();
+      const monday = new Date(today); monday.setDate(today.getDate() - ((dayOfWeek + 6) % 7));
+      const days = ["LUN","MAR","MIE","JUE","VIE","SAB","DOM"];
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
+      const otRows = workOrderRows().filter(r => String(r.flow_status||"").toLowerCase() !== "cerrado");
+      let html = "";
+      for(let i = 0; i < 7; i++){
+        const d = new Date(monday); d.setDate(monday.getDate() + i);
+        const ds = d.toISOString().slice(0,10);
+        const isToday = ds === today.toISOString().slice(0,10);
+        const pmToday = preventives.filter(r => r.projected_date === ds);
+        const otToday = otRows.filter(r => r.date === ds);
+        let chips = "";
+        pmToday.slice(0,3).forEach(r => { chips += `<div class="d2-day-chip pm">${esc(r.equipment_code)} ${esc(shortText(r.component||"",16))}</div>`; });
+        otToday.slice(0,2).forEach(r => { chips += `<div class="d2-day-chip ot">${esc(r.code||r.equipment_code||"")} ${esc(shortText(r.detail||"",14))}</div>`; });
+        if(!chips) chips = `<div class="d2-day-chip ok">Sin carga</div>`;
+        html += `<div class="d2-day${isToday ? " today" : ""}" onclick="d2SelectDay('${ds}')"><span class="d2-day-name">${days[i]}</span><span class="d2-day-num">${d.getDate()}</span>${chips}</div>`;
+      }
+      $("d2Schedule").innerHTML = html;
+      $("d2ScheduleDate").textContent = `${monday.toISOString().slice(0,10)} al ${new Date(monday.getTime()+6*86400000).toISOString().slice(0,10)}`;
+    }
+    function d2SelectDay(ds){ /* placeholder for day detail modal */ }
+    function renderOTDonut(){
+      const rows = workOrderRows();
+      const statuses = { EN_PROCESO:0, PROGRAMADO:0, EN_ESPERA:0, ABIERTO:0, CERRADO:0 };
+      rows.forEach(r => {
+        const s = String(r.flow_status||r.status||"").toLowerCase();
+        if(s === "en proceso") statuses.EN_PROCESO++;
+        else if(s === "programado") statuses.PROGRAMADO++;
+        else if(s === "en espera") statuses.EN_ESPERA++;
+        else if(s === "cerrado") statuses.CERRADO++;
+        else statuses.ABIERTO++;
+      });
+      const total = rows.length || 1;
+      const colors = ["#3b82f6","#22c55e","#f59e0b","#ef4444","#94a3b8"];
+      const vals = [statuses.EN_PROCESO, statuses.PROGRAMADO, statuses.EN_ESPERA, statuses.ABIERTO, statuses.CERRADO];
+      const labels = ["En proceso","Programado","En espera","Abierto","Cerrado"];
+      let pctAccum = 0;
+      let gradientParts = [];
+      vals.forEach((v, i) => { const pct = (v/total)*100; gradientParts.push(`${colors[i]} ${pctAccum}% ${pctAccum + pct}%`); pctAccum += pct; });
+      $("d2Donut").innerHTML = `<div class="d2-donut-ring" style="background:conic-gradient(${gradientParts.join(",")})"><div class="d2-donut-center"><strong>${rows.length}</strong><span>Total OT</span></div></div>`;
+      $("d2DonutLegend").innerHTML = labels.map((l, i) => `<div class="d2-legend-item"><span class="d2-legend-dot" style="background:${colors[i]}"></span>${l}<small>${vals[i]} (${Math.round((vals[i]/total)*100)}%)</small></div>`).join("");
+      $("d2DonutNote").textContent = `${rows.length} ordenes totales`;
+    }
+    function renderEquipOutCards(){
+      const equipOut = (portal.equipment||[]).filter(r => String(r.status||"").toUpperCase() === "FUERA" || String(r.state||"").toUpperCase() === "FUERA");
+      $("d2EquipOutCount").textContent = `${equipOut.length} equipo(s)`;
+      if(!equipOut.length){ $("d2EquipOut").innerHTML = `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Todos los equipos operando</div>`; return; }
+      $("d2EquipOut").innerHTML = equipOut.slice(0,6).map(r => {
+        const code = esc(r.code || r.equipment_code || "");
+        const desc = esc(shortText(r.description || "", 30));
+        const model = esc(r.model || r.family || "");
+        return `<div class="d2-eq-out-card" onclick="if($('fichaEquipment')) $('fichaEquipment').value='${code}'; renderEquipmentProfile(); activateTab('fichaEquipo')"><div class="eq-icon">&#9888;</div><div class="eq-info"><strong>${code} ${model}</strong><span>${desc}</span></div></div>`;
+      }).join("");
+    }
+    function renderCriticalAlerts(){
+      const today = new Date().toISOString().slice(0,10);
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
+      const prevVencidos = preventives.filter(r => ["VENCIDO","URGENTE"].includes(String(r.status||"").toUpperCase()) && r.projected_date && r.projected_date <= today);
+      const otOpen = (portal.backlog?.items || []).filter(r => String(r.flow_status||"").toLowerCase() !== "cerrado" && String(r.flow_status||"").toLowerCase() !== "atendido" && Number(r.score||0) >= 70);
+      const stocks = portal.stocks || portal.filter_stocks || [];
+      const filtrosBajo = stocks.filter(r => Number(r.quantity||0) < Number(r.min_stock||r.minimum||0));
+      const invShortages = (data.inventory||[]).filter(i => Number(i.quantity||0) <= 0 || (Number(i.min_stock||0) > 0 && Number(i.quantity||0) < Number(i.min_stock||0)));
+      const alerts = [];
+      prevVencidos.slice(0,3).forEach(r => {       alerts.push(`<div class="d2-alert-item" onclick="activateTab('preventivos')"><span class="alert-dot red"></span><div class="alert-info"><strong>PM vencido: ${esc(r.equipment_code)}</strong><span>${esc(r.component)} — ${esc(r.meter_type)} — ${Number(r.hours_remaining||0).toFixed(0)}h atrasado</span></div></div>`); });
+      otOpen.slice(0,3).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('kanban')"><span class="alert-dot red"></span><div class="alert-info"><strong>OT critica: ${esc(r.equipment_code||r.code||"")}</strong><span>Score ${Number(r.score||0).toFixed(0)} — ${esc(shortText(r.detail||r.description||"",40))}</span></div></div>`); });
+      filtrosBajo.slice(0,2).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Stock bajo: ${esc(r.name||r.sku||"")}</strong><span>Stock ${Number(r.quantity||0)} / min ${Number(r.min_stock||r.minimum||0)}</span></div></div>`); });
+      invShortages.slice(0,2).forEach(i => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Faltante: ${esc(i.part_number||"")}</strong><span>${esc(shortText(i.description||"",35))} — ${Number(i.quantity||0) <= 0 ? "Sin stock" : "Faltan "+Math.max(Number(i.min_stock||0)-Number(i.quantity||0),1)}</span></div></div>`); });
+      $("d2AlertsCount").textContent = `${alerts.length} alerta(s)`;
+      $("d2Alerts").innerHTML = alerts.length ? alerts.join("") : `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Sin alertas criticas</div>`;
+    }
+    function renderDashboardMetrics(){
+      const equipTotal = (portal.equipment||[]).length || 1;
+      const equipOut = (portal.equipment||[]).filter(r => String(r.status||"").toUpperCase() === "FUERA" || String(r.state||"").toUpperCase() === "FUERA").length;
+      const disponibilidad = ((equipTotal - equipOut) / equipTotal) * 100;
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
+      const completed = preventives.filter(r => String(r.status||"").toUpperCase() === "COMPLETADO" || String(r.status||"").toUpperCase() === "CERRADO").length;
+      const totalPM = preventives.length || 1;
+      const cumplimiento = (completed / totalPM) * 100;
+      const otRows = workOrderRows();
+      const correctivos = otRows.filter(r => String(r.type||"").toLowerCase().includes("correctiv") || String(r.origin||"").toLowerCase().includes("correctiv")).length;
+      const preventivosOt = otRows.length - correctivos;
+      const ratioCvP = otRows.length ? Math.round((correctivos / otRows.length) * 100) : 0;
+      $("d2Metrics").innerHTML = [
+        `<div class="d2-metric"><span>Disponibilidad</span><strong>${pct(disponibilidad)}</strong><small>${equipTotal - equipOut} de ${equipTotal} equipos</small></div>`,
+        `<div class="d2-metric${cumplimiento < 80 ? " warn" : ""}"><span>Cumplimiento PM</span><strong>${pct(cumplimiento)}</strong><small>${completed} de ${preventives.length} completados</small></div>`,
+        `<div class="d2-metric${ratioCvP > 60 ? " bad" : ""}"><span>Correctivos %</span><strong>${ratioCvP}%</strong><small>${correctivos} correctivos / ${preventivosOt} preventivos</small></div>`,
+      ].join("");
+      $("d2MetricsNote").textContent = `Resumen operativo`;
+    }
+    function renderRecentOT(){
+      const rows = workOrderRows().sort((a,b) => (b.date||"").localeCompare(a.date||"")).slice(0,5);
+      $("d2RecentOTNote").textContent = `Ultimas ${rows.length} OT`;
+      if(!rows.length){ $("d2RecentOT").innerHTML = `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Sin OT registradas</div>`; return; }
+      let html = `<div style="display:grid;grid-template-columns:60px 1fr 1fr 90px 80px;gap:8px;padding:4px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase"><span>Folio</span><span>Equipo</span><span>Descripcion</span><span>Estado</span><span>Prioridad</span></div>`;
+      rows.forEach(r => {
+        const status = String(r.flow_status||r.status||"").toLowerCase();
+        const tone = status === "cerrado" ? "ok" : (status === "en proceso" ? "warn" : (status === "completado" ? "ok" : "bad"));
+        html += `<div class="d2-ot-row" onclick="fillWorkOrder({code:'${esc(r.code||"")}',equipment_code:'${esc(r.equipment_code||r.code||"")}',flow_status:'${esc(r.flow_status||r.status||"")}'}); activateTab('ordenesTrabajo')"><span style="font-weight:800;color:var(--navy)">${esc(r.code||"")}</span><span>${esc(r.equipment_code||r.code||"")}</span><span style="color:var(--muted)">${esc(shortText(r.detail||r.description||"",30))}</span><span><span class="pill ${tone}" style="font-size:10px">${esc(r.flow_status||r.status||"")}</span></span><span style="font-weight:800">${esc(r.priority||"")}</span></div>`;
+      });
+      $("d2RecentOT").innerHTML = html;
+    }
+    function renderInventoryCritical(){
+      const inv = (data.inventory||[]).filter(i => Number(i.min_stock||0) > 0 && Number(i.quantity||0) < Number(i.min_stock||0)).slice(0,6);
+      $("d2InvCriticalNote").textContent = `${inv.length} parte(s) criticas`;
+      if(!inv.length){ $("d2InvCritical").innerHTML = `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Sin partes criticas</div>`; return; }
+      let html = `<div style="display:grid;grid-template-columns:80px 1fr 60px 60px 70px;gap:6px;padding:4px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase"><span>Codigo</span><span>Descripcion</span><span>Exis.</span><span>Min.</span><span>Estado</span></div>`;
+      inv.forEach(i => {
+        const isZero = Number(i.quantity||0) <= 0;
+        html += `<div class="d2-inv-row" onclick="activateTab('inventario')"><span style="font-weight:800;color:var(--navy)">${esc(i.part_number||"")}</span><span style="color:var(--muted)">${esc(shortText(i.description||"",30))}</span><span>${Number(i.quantity||0)}</span><span>${Number(i.min_stock||0)}</span><span><span class="pill ${isZero ? "d2-critical" : "d2-low"}" style="font-size:10px">${isZero ? "SIN" : "BAJO"}</span></span></div>`;
+      });
+      $("d2InvCritical").innerHTML = html;
+    }
+    function renderFullMetrics(){
+      const otRows = workOrderRows();
+      let totalMC = 0, totalMP = 0, totalStops = 0;
+      otRows.forEach(r => { totalMC += Number(r.mc||0); totalMP += Number(r.mp||0); totalStops += Number(r.stops||r.total_stops||0); });
+      const preventives = preventiveRowsWithWebClosures(portal.preventives || []);
+      const executed = preventiveExecutionRows();
+      const equipTotal = (portal.equipment||[]).length || 1;
+      const equipOut = (portal.equipment||[]).filter(r => String(r.status||"").toUpperCase() === "FUERA").length;
+      const disponibilidad = ((equipTotal - equipOut) / equipTotal) * 100;
+      const completed = executed.filter(r => isPreventiveClosed(r)).length;
+      const totalPM = preventives.length || 1;
+      const cumplimiento = (completed / totalPM) * 100;
+      let avgMTBF = 0, avgMTTR = 0;
+      if(executed.length > 0){ let t = 0; executed.forEach(e => { t += Number(e.completed_meter||0); }); avgMTBF = t / executed.length; }
+      if(otRows.length > 0){ let t = 0; otRows.forEach(r => { t += Number(r.mc||0) + Number(r.mp||0); }); avgMTTR = t / otRows.length; }
+      let totalCost = 0;
+      otRows.forEach(r => { totalCost += Number(r.cost_material||0) + Number(r.cost_labor||0) + Number(r.cost_external||0); });
+      const costPerOT = otRows.length ? totalCost / otRows.length : 0;
+      const correctivos = otRows.filter(r => String(r.origin||"").toLowerCase().includes("correctiv") || String(r.origin||"").toLowerCase().includes("checklist")).length;
+      const ratioCvP = otRows.length ? Math.round((correctivos / otRows.length) * 100) : 0;
+      $("d2FullMetrics").innerHTML = [
+        `<div class="em-card"><span>Disponibilidad</span><strong>${pct(disponibilidad)}</strong><small>${equipTotal - equipOut} de ${equipTotal}</small></div>`,
+        `<div class="em-card${cumplimiento < 80 ? " warn" : ""}"><span>Cumplimiento PM</span><strong>${pct(cumplimiento)}</strong><small>${completed} completados</small></div>`,
+        `<div class="em-card"><span>MTBF</span><strong>${one(avgMTBF)} h</strong><small>Promedio entre fallas</small></div>`,
+        `<div class="em-card"><span>MTTR</span><strong>${one(avgMTTR)} h</strong><small>Tiempo promedio repuesto</small></div>`,
+        `<div class="em-card${ratioCvP > 60 ? " bad" : ""}"><span>Correctivos %</span><strong>${ratioCvP}%</strong><small>${correctivos} de ${otRows.length} OTs</small></div>`,
+        `<div class="em-card"><span>Costo por OT</span><strong>$${one(costPerOT)}</strong><small>Promedio ${otRows.length} OTs</small></div>`,
+        `<div class="em-card"><span>MP vs MC</span><strong>${one(totalMP)} / ${one(totalMC)}</strong><small>Horas preventivo / correctivo</small></div>`,
+        `<div class="em-card"><span>Costo Total</span><strong>$${one(totalCost)}</strong><small>Periodo actual</small></div>`,
+      ].join("");
+      $("d2FullMetricsNote").textContent = `Periodo actual`;
+      renderCostRanking(otRows);
+    }
+    function renderCostRanking(otRows){
+      const byEq = {};
+      otRows.forEach(r => {
+        const code = r.equipment_code || r.code || "";
+        if(!code) return;
+        if(!byEq[code]) byEq[code] = {code, cost:0, count:0};
+        byEq[code].cost += Number(r.cost_material||0) + Number(r.cost_labor||0) + Number(r.cost_external||0);
+        byEq[code].count++;
+      });
+      const ranked = Object.values(byEq).sort((a,b) => b.cost - a.cost).slice(0,6);
+      $("d2CostRankNote").textContent = `Top ${ranked.length} por costo`;
+      $("d2CostRank").innerHTML = ranked.length ? ranked.map((r, i) => `<div class="em-rank-row"><div class="em-rank-num">${i+1}</div><strong>${esc(r.code)}</strong><span>$${one(r.cost)} (${r.count} OTs)</span></div>`).join("") : `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Sin costos registrados</div>`;
+    }
+    function renderFailureRecurrence(){
+      const otRows = workOrderRows();
+      const byEqSys = {};
+      const now = new Date();
+      const y12m = new Date(now); y12m.setFullYear(y12m.getFullYear()-1);
+      const y12mStr = y12m.toISOString().slice(0,10);
+      otRows.filter(r => String(r.origin||"").toLowerCase().includes("correctiv") || String(r.origin||"").toLowerCase().includes("checklist") || String(r.flow_status||"").toLowerCase() !== "cerrado").forEach(r => {
+        const date = r.date || "";
+        if(date && date < y12mStr) return;
+        const code = r.equipment_code || r.code || "";
+        const sys = r.system || r.component || "Sin clasificar";
+        const key = `${code}||${sys}`;
+        if(!byEqSys[key]) byEqSys[key] = {code, system:sys, count:0, months:{}};
+        byEqSys[key].count++;
+        const m = date.slice(0,7) || "s/f";
+        byEqSys[key].months[m] = (byEqSys[key].months[m]||0) + 1;
+      });
+      const items = Object.values(byEqSys).sort((a,b) => b.count - a.count).slice(0,8);
+      $("d2RecurrenceNote").textContent = `${items.length} reincidencia(s) en 12 meses`;
+      $("d2Recurrence").innerHTML = items.length ? items.map(r => {
+        const alert = r.count >= 3;
+        const maxCount = items[0]?.count || 1;
+        const barWidth = (r.count / maxCount) * 100;
+        return `<div class="rec-item${alert ? " alert" : ""}"><div><strong>${esc(r.code)}</strong><span>${esc(r.system)}</span></div><span class="rec-count" style="color:${alert ? "var(--red)" : "var(--navy)"}">${r.count}</span><div class="exp-recurrence-bar"><div class="exp-recurrence-fill" style="width:${barWidth}%;background:${alert ? "var(--red)" : "var(--teal)"}"></div></div></div>`;
+      }).join("") : `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Sin reincidencias en 12 meses</div>`;
+    }
+    function renderWorkloadGrid(){
+      const today = new Date();
+      const dayOfWeek = today.getDay();
+      const monday = new Date(today); monday.setDate(today.getDate() - ((dayOfWeek + 6) % 7));
+      const days = ["LUN","MAR","MIE","JUE","VIE"];
+      const dates = [];
+      for(let i = 0; i < 5; i++){ const d = new Date(monday); d.setDate(monday.getDate() + i); dates.push(d.toISOString().slice(0,10)); }
+      $("workloadWeek").textContent = `${dates[0]} al ${dates[4]}`;
+      const mechanics = new Set();
+      const otRows = workOrderRows();
+      const execRows = preventiveExecutionRows();
+      otRows.forEach(r => { if(r.mechanic || r.responsible) mechanics.add(r.mechanic || r.responsible); });
+      execRows.forEach(r => { if(r.mechanic) mechanics.add(r.mechanic); });
+      if(!mechanics.size){ mechanics.add("Sin asignar"); }
+      const capacity = 8;
+      let html = `<div class="wl-grid"><div class="wl-header"></div>`;
+      days.forEach(d => { html += `<div class="wl-header">${d}</div>`; });
+      Array.from(mechanics).sort().forEach(name => {
+        html += `<div class="wl-name">${esc(shortText(name,14))}</div>`;
+        let weekTotal = 0;
+        dates.forEach(ds => {
+          let hrs = 0;
+          otRows.forEach(r => {
+            if((r.mechanic || r.responsible) !== name) return;
+            const otDate = r.date || "";
+            if(otDate === ds) hrs += 4;
+          });
+          execRows.forEach(r => {
+            if(r.mechanic !== name) return;
+            const pmDate = r.service_date || "";
+            if(pmDate === ds) hrs += 4;
+          });
+          weekTotal += hrs;
+          const pctLoad = Math.min((hrs / capacity) * 100, 120);
+          const tone = pctLoad > 100 ? "red" : pctLoad > 70 ? "yellow" : "green";
+          const cellTone = pctLoad > 100 ? "overload" : pctLoad > 70 ? "moderate" : "ok";
+          html += `<div class="wl-cell ${cellTone}"><div class="wl-cell-label">${hrs}h / ${capacity}h</div><div class="wl-bar"><div class="wl-bar-fill ${tone}" style="width:${Math.min(pctLoad,100)}%"></div></div>${pctLoad > 100 ? `<span class="wl-overload-badge">SOBRECARGA</span>` : ""}</div>`;
+        });
+      });
+      html += `</div>`;
+      $("workloadGrid").innerHTML = html;
+    }
+    function renderPMReadinessPanel(){
+      const code = $("prevExecEquipment")?.value || "";
+      const service = $("prevExecServiceType")?.value || "PM1";
+      if(!code){ $("pmReadinessPanel").style.display = "none"; return; }
+      const eq = portalEquipment().find(e => (e.code || e.equipment_code) === code) || {};
+      const isOut = String(eq.status||"").toUpperCase() === "FUERA";
+      const stocks = portal.stocks || portal.filter_stocks || [];
+      const inv = data.inventory || [];
+      const serviceParts = {"PM1":["Filtro aceite","Filtro aire"],"PM2":["Filtro aceite","Filtro aire","Filtro hidraulico"],"PM3":["Filtro aceite","Filtro aire","Filtro hidraulico","Aceite 15W40"],"PM4":["Filtro aceite","Filtro aire","Filtro hidraulico","Aceite 15W40","Filtro transmision"]};
+      const required = serviceParts[service] || serviceParts.PM1;
+      const partsStatus = required.map(name => {
+        const inStock = stocks.find(s => String(s.name||"").toLowerCase().includes(name.toLowerCase())) || inv.find(i => String(i.description||"").toLowerCase().includes(name.toLowerCase()));
+        return {name, available: inStock ? Number(inStock.quantity||0) > 0 : false, qty: inStock ? Number(inStock.quantity||0) : 0};
+      });
+      const allPartsReady = partsStatus.every(p => p.available);
+      const ready = allPartsReady && !isOut;
+      $("pmReadinessPanel").style.display = "block";
+      $("pmReadinessPanel").className = `rdy-panel ${ready ? "ready" : "not-ready"}`;
+      let html = `<div style="font-weight:900;color:var(--navy);margin-bottom:8px;font-size:13px">Readiness check — ${esc(service)} — ${esc(code)}</div>`;
+      html += `<div class="rdy-item"><span class="rdy-icon">${isOut ? "🔴" : "🟢"}</span><div class="rdy-item-info"><strong>Equipo</strong><span>${isOut ? "FUERA DE SERVICIO" : "Disponible"}</span></div></div>`;
+      partsStatus.forEach(p => {
+        html += `<div class="rdy-item"><span class="rdy-icon">${p.available ? "🟢" : "🔴"}</span><div class="rdy-item-info"><strong>${esc(p.name)}</strong><span>${p.available ? `Disponible (${p.qty})` : "FALTANTE"}</span></div></div>`;
+      });
+      html += `<div class="rdy-item"><span class="rdy-icon">${ready ? "🟢" : "🔴"}</span><div class="rdy-item-info"><strong>Resultado</strong><span>${ready ? "LISTO PARA PROGRAMAR" : "NO LISTO — Verificar faltantes"}</span></div></div>`;
+      if(!allPartsReady){
+        const missing = partsStatus.filter(p => !p.available).map(p => p.name).join(", ");
+        html += `<div class="rdy-actions"><button class="btn secondary" onclick="activateTab('inventario')">Ver inventario</button></div>`;
+      }
+      $("pmReadinessPanel").innerHTML = html;
+    }
+    function enhancedChecklistPayload(){
+      const checklist = {};
+      document.querySelectorAll("#chkEnhancedGrid .chk-select").forEach(sel => {
+        checklist[sel.dataset.chk] = sel.value;
+      });
+      return checklist;
+    }
+    function enhancedChecklistCount(row){
+      const cl = row?.checklist || {};
+      let pass = 0, fail = 0;
+      Object.values(cl).forEach(v => { if(v === "pass" || v === true) pass++; if(v === "fail") fail++; });
+      return {pass, fail, total: pass + fail};
+    }
+    function checklistFailures(row){
+      const cl = row?.checklist || {};
+      const fails = [];
+      const labels = {inspection:"Inspeccion visual",filters:"Filtros/refacciones",lubrication:"Lubricacion",electrical:"Revision electrica",test:"Prueba final",supervisor:"Validacion supervisor"};
+      Object.entries(cl).forEach(([k,v]) => { if(v === "fail") fails.push(labels[k] || k); });
+      return fails;
+    }
+    async function createAutoOTFromChecklist(equipmentCode, failures, serviceType){
+      const desc = `Fallo en checklist ${serviceType}: ${failures.join(", ")}`;
+      const payload = {
+        id: "",
+        folio: "",
+        date: new Date().toISOString().slice(0,10),
+        equipment_code: equipmentCode,
+        equipment_description: (portalEquipment().find(e => (e.code||e.equipment_code) === equipmentCode) || {}).description || "",
+        origin: "CHECKLIST_PM",
+        priority: "ALTA",
+        status: "ABIERTA",
+        responsible: "",
+        mechanic: "",
+        supervisor: "",
+        description: desc,
+        action: "",
+        parts_used: "",
+        lubricants_used: "",
+        evidence_note: "",
+        cost_material: 0,
+        cost_labor: 0,
+        cost_external: 0,
+      };
+      try {
+        const response = await fetch("/api/work-orders/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+        if(response.ok) { const result = await response.json(); if(result.portal) portal = result.portal; }
+      } catch(e) {}
+    }
+    function getEquipmentMetrics(code){
+      const otRows = rowsForEquipment(workOrderRows(), code);
+      const execRows = rowsForEquipment(preventiveExecutionRows(), code);
+      const captures = rowsForEquipment(portal.captures || [], code);
+      const mp = captures.reduce((s,r) => s + Number(r.mp_hours||0), 0);
+      const mc = captures.reduce((s,r) => s + Number(r.mc_hours||0), 0);
+      const worked = captures.reduce((s,r) => s + Number(r.worked_hours||0), 0);
+      const stops = captures.reduce((s,r) => s + Number(r.stops||0), 0);
+      let totalCost = 0;
+      otRows.forEach(r => { totalCost += Number(r.cost_material||0) + Number(r.cost_labor||0) + Number(r.cost_external||0); });
+      const correctivos = otRows.filter(r => String(r.origin||"").toLowerCase().includes("correctiv") || String(r.origin||"").toLowerCase().includes("checklist")).length;
+      const disponibilidad = captures.length > 0 ? ((captures.length - captures.filter(r => unavailable(r.status)).length) / captures.length) * 100 : 100;
+      const mtbf = correctivos > 0 ? worked / correctivos : worked;
+      const mttr = correctivos > 0 ? mc / correctivos : 0;
+      return {mp, mc, worked, stops, totalCost, correctivos, disponibilidad, mtbf, mttr, otCount: otRows.length, pmCount: execRows.length};
+    }
+    function renderEquipmentRecurrence(code){
+      const otRows = rowsForEquipment(workOrderRows(), code).filter(r => String(r.origin||"").toLowerCase().includes("correctiv") || String(r.origin||"").toLowerCase().includes("checklist"));
+      const now = new Date();
+      const y12m = new Date(now); y12m.setFullYear(y12m.getFullYear()-1);
+      const recent = otRows.filter(r => (r.date || "") >= y12m.toISOString().slice(0,10));
+      const bySys = {};
+      recent.forEach(r => { const sys = r.system || r.component || "General"; bySys[sys] = (bySys[sys]||0) + 1; });
+      const items = Object.entries(bySys).sort((a,b) => b[1] - a[1]);
+      return items.map(([sys, count]) => ({system:sys, count, alert: count >= 3}));
+    }
     function renderDashboard(){
+      renderOperationalDashboard();
+      renderWeeklySchedule();
+      renderOTDonut();
+      renderEquipOutCards();
+      renderCriticalAlerts();
+      renderDashboardMetrics();
+      renderRecentOT();
+      renderInventoryCritical();
+      renderFullMetrics();
+      renderFailureRecurrence();
+      renderWorkloadGrid();
       const selectedGroup = $("kpiGroup").value || "";
       if($("kpiExcelBtn")) $("kpiExcelBtn").textContent = selectedGroup === "KPI Aceites" ? "Consumos aceites Excel" : "Excel editable";
       const commandReport = simulatedKpiReport(calculateKpiRows("Todos los equipos", $("kpiStart").value, $("kpiEnd").value));
@@ -13377,10 +14727,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     function updatePreventiveChecklistTemplate(){
       const service = $("prevExecServiceType").value || "PM1";
       const labels = preventiveChecklistTemplates[service] || preventiveChecklistTemplates.PM1;
-      preventiveChecklistInputs.forEach((item, idx) => {
-        const label = $(`${item[0]}Label`);
-        if(label) label.textContent = labels[idx] || item[2];
-      });
+      const grid = $("chkEnhancedGrid");
+      if(!grid) return;
+      const items = grid.querySelectorAll(".chk-item-label");
+      items.forEach((el, idx) => { if(labels[idx]) el.textContent = labels[idx]; });
     }
     function preventiveSelectedInterval(){
       const service = $("prevExecServiceType")?.value || "PM1";
@@ -13506,13 +14856,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         .join("; ");
     }
     function preventiveChecklistPayload(){
-      const checklist = {};
-      preventiveChecklistInputs.forEach(item => { checklist[item[1]] = Boolean($(item[0]).checked); });
-      return checklist;
+      return enhancedChecklistPayload();
     }
     function preventiveChecklistCount(row){
-      const checklist = row?.checklist || {};
-      return preventiveChecklistInputs.filter(item => Boolean(checklist[item[1]])).length;
+      const result = enhancedChecklistCount(row);
+      return result.pass;
     }
     function resetManualPreventiveForm(){
       currentManualPreventiveRecord = null;
@@ -13642,14 +14990,101 @@ WAREHOUSE_HTML = r"""<!doctype html>
         }).join("");
       }
       $("prTable").innerHTML = `<thead><tr><th>Origen</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
-        result.rows.map(row => `<tr data-pr-id="${esc(row.id || "")}" class="${row.source === "manual_web" ? "manual-row" : ""}"><td>${row.source === "manual_web" ? "Manual" : "Auto"}</td><td>${esc(row.equipment_code)}</td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td>${one(row.hours_remaining)}</td><td>${esc(preventiveDisplayDate(row))}</td><td><span class="pill ${row.status === "PROGRAMADO" ? "ok" : (row.status === "PROXIMO" ? "warn" : "bad")}">${esc(row.status)}</span></td></tr>`).join("") +
+        result.rows.map(row => {
+          const hrs = Number(row.hours_remaining || 0);
+          const st = String(row.status || "").toUpperCase();
+          const pillCls = st === "PROGRAMADO" ? "ok" : st === "PROXIMO" ? "warn" : "bad";
+          const hrsColor = hrs < 0 ? "var(--red)" : hrs < 20 ? "#f59e0b" : hrs < 50 ? "#b45309" : hrs < 100 ? "var(--amber)" : "var(--blue)";
+          const hrsLabel = hrs < 0 ? `${Math.abs(hrs).toFixed(0)}h vencido` : `${hrs.toFixed(0)}h restan`;
+          return `<tr data-pr-id="${esc(row.id || "")}" class="${row.source === "manual_web" ? "manual-row" : ""}" style="border-left:3px solid ${hrsColor}"><td>${row.source === "manual_web" ? "Manual" : "Auto"}</td><td><b>${esc(row.equipment_code)}</b></td><td>${esc(row.equipment_description)}</td><td>${esc(row.component)}</td><td>${esc(row.meter_type)}</td><td>${one(row.current_meter)}</td><td>${one(row.last_service_meter)}</td><td>${one(row.next_service_meter)}</td><td style="color:${hrsColor};font-weight:700">${hrsLabel}</td><td>${esc(preventiveDisplayDate(row))}</td><td><span class="pill ${pillCls}">${esc(row.status)}</span></td></tr>`;
+        }).join("") +
         `</tbody>`;
       document.querySelectorAll("[data-pr-id]").forEach(tr => tr.addEventListener("click", () => {
         const id = tr.dataset.prId || "";
         const record = result.rows.find(row => String(row.id || "") === String(id));
         if(record && record.source === "manual_web") fillManualPreventiveForm(record);
       }));
+      renderAlmanaqueCalendar(result.rows);
     }
+    let almCurrentMonth = new Date().getMonth();
+    let almCurrentYear = new Date().getFullYear();
+    function renderAlmanaqueCalendar(rows){
+      const MES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+      const DOW = ["Lun","Mar","Mie","Jue","Vie","Sab","Dom"];
+      const year = almCurrentYear, month = almCurrentMonth;
+      $("almTitle").textContent = `${MES[month]} ${year} — Calendario de Preventivos`;
+      const first = new Date(year, month, 1);
+      const last = new Date(year, month + 1, 0);
+      const startDow = (first.getDay() + 6) % 7;
+      const totalDays = last.getDate();
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+      const grouped = {};
+      (rows || []).forEach(r => {
+        const d = preventiveCalendarDate(r);
+        if(d && !grouped[d]) grouped[d] = [];
+        if(d) grouped[d].push(r);
+      });
+      let html = DOW.map(d => `<div class="alm-dow">${d}</div>`).join("");
+      const totalCells = startDow + totalDays;
+      const totalRows = Math.ceil(totalCells / 7);
+      for(let i = 0; i < totalCells; i++){
+        const dayNum = i - startDow + 1;
+        const isCurrentMonth = dayNum >= 1 && dayNum <= totalDays;
+        let cellDate, dateStr;
+        if(isCurrentMonth){
+          cellDate = new Date(year, month, dayNum);
+          dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(dayNum).padStart(2,"0")}`;
+        } else if(dayNum < 1){
+          const prevLast = new Date(year, month, 0).getDate();
+          const prevDay = prevLast + dayNum;
+          cellDate = new Date(year, month - 1, prevDay);
+          dateStr = `${cellDate.getFullYear()}-${String(cellDate.getMonth()+1).padStart(2,"0")}-${String(prevDay).padStart(2,"0")}`;
+        } else {
+          cellDate = new Date(year, month + 1, dayNum - totalDays);
+          dateStr = `${cellDate.getFullYear()}-${String(cellDate.getMonth()+1).padStart(2,"0")}-${String(cellDate.getDate()).padStart(2,"0")}`;
+        }
+        const dow = (cellDate.getDay() + 6) % 7;
+        const isWeekend = dow >= 5;
+        const isToday = dateStr === todayStr;
+        const classes = ["alm-day"];
+        if(isWeekend) classes.push("weekend");
+        if(isToday) classes.push("today");
+        if(!isCurrentMonth) classes.push("other-month");
+        const dayChips = grouped[dateStr] || [];
+        const maxShow = 3;
+        let chipsHtml = dayChips.slice(0, maxShow).map(r => {
+          const st = String(r.status || "").toUpperCase();
+          const cls = st === "VENCIDO" ? "ven" : st === "URGENTE" ? "urg" : st === "PROXIMO" ? "prox" : st === "PROGRAMADO" ? "prog" : "done";
+          return `<span class="alm-chip ${cls}" title="${esc(r.equipment_code)} - ${esc(r.component)} | ${st}">${esc(r.equipment_code)} ${esc(r.component||"").substring(0,10)}</span>`;
+        }).join("");
+        if(dayChips.length > maxShow) chipsHtml += `<span class="alm-more">+${dayChips.length - maxShow} mas</span>`;
+        html += `<div class="${classes.join(" ")}"><span class="alm-day-num">${String(dayNum).padStart(2,"0")}${isToday ? '<span class="alm-today-badge">HOY</span>' : ""}</span>${chipsHtml}</div>`;
+      }
+      $("almGrid").innerHTML = html;
+      const legend = [
+        {label:"Completado", cls:"done", color:"#22c55e"},
+        {label:"Vencido", cls:"ven", color:"#ef4444"},
+        {label:"Urgente", cls:"urg", color:"#f59e0b"},
+        {label:"Proximo", cls:"prox", color:"#b45309"},
+        {label:"Programado", cls:"prog", color:"#2563eb"},
+      ];
+      $("almLegend").innerHTML = legend.map(l => `<span class="alm-legend-item"><span class="alm-legend-dot" style="background:${l.color}"></span>${l.label}</span>`).join("") +
+        `<span class="alm-summary">${(rows||[]).length} servicios preventivos en ${MES[month]}</span>`;
+    }
+    $("almPrev").addEventListener("click", () => { almCurrentMonth--; if(almCurrentMonth < 0){almCurrentMonth = 11; almCurrentYear--;} renderPreventives(); });
+    $("almNext").addEventListener("click", () => { almCurrentMonth++; if(almCurrentMonth > 11){almCurrentMonth = 0; almCurrentYear++;} renderPreventives(); });
+    $("almExportPng").addEventListener("click", () => {
+      const el = $("almGrid").closest(".alm-wrap");
+      if(!el) return;
+      const printWin = window.open("", "_blank");
+      const styles = Array.from(document.querySelectorAll("style")).map(s => s.outerHTML).join("\n");
+      printWin.document.write("<html><head><title>Calendario Preventivos</title>" + styles + "<style>@media print{.alm-actions,.alm-nav{display:none!important;}}</style></head><body style='padding:20px;background:white;'>");
+      printWin.document.write(el.outerHTML);
+      printWin.document.write("</body></html>");
+      printWin.document.close();
+      setTimeout(() => printWin.print(), 500);
+    });
     function calculateBacklogRows(start, end){
       const rows = [];
       const addRow = (row) => rows.push({...row, level: row.level || backlogLevel(Number(row.score || 0))});
@@ -13764,10 +15199,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
       };
       $("backlogTitle").textContent = `Backlog priorizado | ${start} a ${end}`;
       $("backlogCount").textContent = `${rows.length} registro(s)`;
+      const today = new Date().toISOString().slice(0,10);
+      const age07 = rows.filter(r => { const d = r.date || r.due_date || ""; return d && d >= today.slice(0,7) ? false : daysBetween(d, today) <= 7; }).length;
+      const age830 = rows.filter(r => { const d = r.date || r.due_date || ""; const age = daysBetween(d, today); return age > 7 && age <= 30; }).length;
+      const age3160 = rows.filter(r => { const d = r.date || r.due_date || ""; const age = daysBetween(d, today); return age > 30 && age <= 60; }).length;
+      const age60 = rows.filter(r => { const d = r.date || r.due_date || ""; return daysBetween(d, today) > 60; }).length;
       $("backlogStats").innerHTML = [
         ["Total", stats.total], ["Alta", stats.high], ["Media", stats.medium], ["Baja", stats.low],
-        ["Pend.", stats.pending], ["Proceso", stats.process], ["Atend.", stats.attended], ["Canc.", stats.cancelled],
-      ].map(([k,v]) => `<div class="stat"><strong>${v}</strong>${esc(k)}</div>`).join("");
+        ["0-7d", age07], ["8-30d", age830], ["31-60d", age3160], [">60d", age60],
+      ].map(([k,v]) => `<div class="stat"><strong>${v}</strong>${esc(k)}</div>`).join("") +
+        `<div style="grid-column:1/-1;margin-top:6px"><div class="blg-age-bar"><div class="blg-age-seg" style="width:${stats.total?((age07/stats.total)*100):0}%;background:#22c55e"></div><div class="blg-age-seg" style="width:${stats.total?((age830/stats.total)*100):0}%;background:#f59e0b"></div><div class="blg-age-seg" style="width:${stats.total?((age3160/stats.total)*100):0}%;background:#f97316"></div><div class="blg-age-seg" style="width:${stats.total?((age60/stats.total)*100):0}%;background:#ef4444"></div></div></div>`;
       const systems = {};
       rows.forEach(row => {
         const key = row.system || "Sin clasificar";
@@ -13781,6 +15222,114 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("backlogSystemTable").innerHTML = `<thead><tr><th>Sistema</th><th>Total</th><th>Altas</th><th>Puntaje</th></tr></thead><tbody>` +
         systemRows.map(row => `<tr><td>${esc(row.system)}</td><td>${row.count}</td><td>${row.high}</td><td>${one(row.score)}</td></tr>`).join("") +
         `</tbody>`;
+    }
+    function kanbanCardId(item){ return `kb_${item.source}_${item.equipment_code}_${item.component}_${item.due_date || item.date || ""}`.replace(/[^a-zA-Z0-9_-]/g,"_"); }
+    function kanbanCardHtml(item){
+      const hrs = item.hours_remaining;
+      let hrsClass = "";
+      if(hrs != null){ hrsClass = hrs < 0 ? "ven" : hrs < 50 ? "urg" : ""; }
+      const lvlClass = item.level === "ALTA" ? "high" : item.level === "MEDIA" ? "med" : "low";
+      const isOT = item.source === "OT";
+      const otId = item.work_order_id || "";
+      return `<div class="kanban-card" draggable="true" data-id="${esc(kanbanCardId(item))}" data-source="${esc(item.source||"")}" data-equipment="${esc(item.equipment_code||"")}" data-component="${esc(item.component||"")}" data-due="${esc(item.due_date||item.date||"")}" data-ot="${esc(otId)}">
+        <div class="kc-eq">${esc(item.equipment_code || "")}</div>
+        <div class="kc-comp">${esc(item.component || item.detail || "")}</div>
+        <div class="kc-meta">
+          <span class="kc-pill ${lvlClass}">${esc(item.level || "")}</span>
+          <span class="kc-pill src">${esc(item.source || "")}</span>
+          ${hrs != null ? `<span class="kc-pill hours ${hrsClass}">${hrs < 0 ? Math.abs(hrs).toFixed(0)+"h ven" : hrs.toFixed(0)+"h rest"}</span>` : ""}
+        </div>
+        ${item.due_date ? `<div class="kc-date">Vence: ${esc(item.due_date)}</div>` : ""}
+        <div class="kc-actions" style="margin-top:6px;display:flex;gap:4px;">
+          ${isOT ? `<button class="btn small" onclick="kanbanEditOT('${esc(otId)}')" style="font-size:10px;padding:2px 8px;">Editar OT</button>` : `<button class="btn small" onclick="kanbanCreateOT(this)" style="font-size:10px;padding:2px 8px;">Crear OT</button>`}
+        </div>
+      </div>`;
+    }
+    function kanbanCreateOT(btn){
+      const card = btn.closest(".kanban-card");
+      if(!card) return;
+      newWorkOrder({
+        equipment_code: card.dataset.equipment || "",
+        origin: "CAPTURA",
+        priority: "MEDIA",
+        description: (card.dataset.component || "") + (card.dataset.due ? " | Vence: " + card.dataset.due : ""),
+      });
+    }
+    function kanbanEditOT(otId){
+      if(!otId) return;
+      const rec = (portal.work_orders || {}).records || [];
+      const match = rec.find(r => String(r.folio||r.id) === String(otId));
+      if(match) fillWorkOrder(match);
+      else newWorkOrder({equipment_code:"", description:""});
+    }
+    function renderKanban(){
+      const start = (portal.period || {}).start || toIsoDate(new Date());
+      const end = (portal.period || {}).end || start;
+      const level = $("kanbanLevel").value;
+      const source = $("kanbanSource").value;
+      const search = normalizedText($("kanbanSearch").value);
+      let items = calculateBacklogRows(start, end);
+      if(level) items = items.filter(r => r.level === level);
+      if(source) items = items.filter(r => r.source === source);
+      if(search) items = items.filter(r => normalizedText([r.equipment_code,r.equipment_description,r.component,r.system,r.detail,r.action,r.source].join(" ")).includes(search));
+      const overrides = (portal.kanban || {}).overrides || {};
+      const statusMap = {backlog:"backlog", programado:"programado", proceso:"proceso", completado:"completado"};
+      const flowToStatus = {"Pendiente":"backlog","En proceso":"proceso","Atendido":"completado","Cancelado":"completado"};
+      const buckets = {backlog:[], programado:[], proceso:[], completado:[]};
+      items.forEach(item => {
+        const id = kanbanCardId(item);
+        let st = overrides[id] || flowToStatus[item.flow_status || ""] || "backlog";
+        if(!buckets[st]) st = "backlog";
+        buckets[st].push(item);
+      });
+      const order = ["backlog","programado","proceso","completado"];
+      const labels = {backlog:"Backlog",programado:"Programado",proceso:"En proceso",completado:"Completado"};
+      $("kanbanCount").textContent = `${items.length} tarjeta(s)`;
+      order.forEach((st, i) => {
+        const col = document.querySelectorAll(".kanban-cards[data-status='"+st+"']")[0];
+        if(!col) return;
+        col.innerHTML = buckets[st].length ? buckets[st].map(kanbanCardHtml).join("") : `<div style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">Sin tarjetas</div>`;
+        const badge = document.getElementById("kanbanBadge"+i);
+        if(badge) badge.textContent = buckets[st].length;
+      });
+      document.querySelectorAll(".kanban-card").forEach(card => {
+        card.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", card.dataset.id); card.classList.add("dragging"); });
+        card.addEventListener("dragend", () => card.classList.remove("dragging"));
+      });
+    }
+    function kanbanInitDragDrop(){
+      document.querySelectorAll(".kanban-cards").forEach(zone => {
+        zone.addEventListener("dragover", e => { e.preventDefault(); zone.closest(".kanban-col").classList.add("drag-over"); });
+        zone.addEventListener("dragleave", () => zone.closest(".kanban-col").classList.remove("drag-over"));
+        zone.addEventListener("drop", async e => {
+          e.preventDefault();
+          zone.closest(".kanban-col").classList.remove("drag-over");
+          const cardId = e.dataTransfer.getData("text/plain");
+          const newStatus = zone.dataset.status;
+          if(!cardId || !newStatus) return;
+          if(!portal.kanban) portal.kanban = {cards:{}, overrides:{}};
+          if(!portal.kanban.overrides) portal.kanban.overrides = {};
+          portal.kanban.overrides[cardId] = newStatus;
+          const card = document.querySelector(`.kanban-card[data-id="${cardId}"]`);
+          const otId = card ? card.dataset.ot : "";
+          const stMap = {backlog:"ABIERTA", programado:"ABIERTA", proceso:"EN PROCESO", completado:"CERRADA"};
+          const newOtStatus = stMap[newStatus] || "ABIERTA";
+          if(otId && hasApiKey(true)){
+            try{
+              const rec = ((portal.work_orders||{}).records||[]).find(r => String(r.folio||r.id) === String(otId));
+              if(rec){
+                const payload = {id:rec.id, folio:rec.folio, equipment_code:rec.equipment_code, description:rec.description||"", origin:rec.origin||"MANUAL", priority:rec.priority||"MEDIA", status:newOtStatus, action:rec.action||"", responsible:rec.responsible||"", mechanic:rec.mechanic||"", supervisor:rec.supervisor||"", parts_used:rec.parts_used||"", lubricants_used:rec.lubricants_used||"", evidence_note:rec.evidence_note||""};
+                const resp = await fetch("/api/work-orders/records",{method:"POST",headers:headers(true),body:JSON.stringify(payload)});
+                if(resp.ok){ const r = await resp.json(); if(r.portal) portal = r.portal; }
+              }
+            }catch(ex){ console.error("OT status update failed", ex); }
+          }
+          savePortalSnapshot();
+          renderKanban();
+          renderWorkOrders();
+          renderBacklog();
+        });
+      });
     }
     function filteredServiceHistory(){
       const selected = $("srvEquipment").value;
@@ -13933,7 +15482,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       const payload = preventiveExecutionPayload();
       if(close) payload.status = "CERRADO";
       if(!payload.equipment_code) return alert("Selecciona un equipo.");
-      if(close && Object.values(payload.checklist || {}).filter(Boolean).length < preventiveChecklistInputs.length && !confirm("El checklist de cierre no esta completo. ¿Cerrar servicio de todos modos?")) return;
+      const chkResult = enhancedChecklistCount(payload);
+      if(close && chkResult.fail > 0 && !confirm(`Hay ${chkResult.fail} fallo(s) en el checklist. Se generara(n) OT(s) correctiva(s). ¿Cerrar servicio de todos modos?`)) return;
+      if(close && chkResult.total > 0 && chkResult.pass < chkResult.total - 1 && !confirm("El checklist de cierre no esta completo. ¿Cerrar servicio de todos modos?")) return;
       if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. ¿Guardar asi?")) return;
       const shouldDeductParts = close && !isPreventiveClosed(currentPreventiveExecutionRecord || {});
       const response = await fetch("/api/preventive-execution/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
@@ -13949,6 +15500,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("prevExecStatus").textContent = close ? "Servicio cerrado y enviado a Servicios realizados." : "Servicio guardado.";
       const reportRecord = {...payload, ...(result.record || {})};
       if(result.record) fillPreventiveExecutionForm(result.record);
+      if(close && chkResult.fail > 0){
+        const fails = checklistFailures(payload);
+        await createAutoOTFromChecklist(payload.equipment_code, fails, payload.service_type);
+        $("prevExecStatus").textContent += ` OT(s) correctiva(s) generadas por fallos en checklist.`;
+      }
       if(shouldDeductParts && payload.parts_used){
         const deducted = await deductServiceParts(payload.parts_used, {equipment_code:payload.equipment_code, service_interval:payload.service_type, reference:payload.folio || payload.id, created_by:payload.mechanic || payload.supervisor, notes:"Salida automatica por cierre preventivo"});
         if(deducted.count) {
@@ -13957,6 +15513,40 @@ WAREHOUSE_HTML = r"""<!doctype html>
         }
       }
       if(close){
+        const nextInfo = preventiveNextServiceInfo(reportRecord);
+        if(nextInfo.meter > 0){
+          const existingNext = (portal.preventives || []).find(r =>
+            r.equipment_code === reportRecord.equipment_code &&
+            String(r.service_interval || "").toUpperCase() === nextInfo.label.toUpperCase() &&
+            !["VENCIDO","URGENTE"].includes(String(r.status || "").toUpperCase())
+          );
+          if(!existingNext){
+            const newPrev = {
+              id: "auto-" + Date.now(),
+              equipment_code: reportRecord.equipment_code,
+              equipment_description: reportRecord.equipment_description || "",
+              component: reportRecord.component || reportRecord.attribute_type || "GENERAL",
+              service_interval: nextInfo.label,
+              service_name: nextInfo.key,
+              current_meter: Number(reportRecord.completed_meter || 0),
+              last_service_meter: Number(reportRecord.completed_meter || 0),
+              next_service_meter: nextInfo.meter,
+              hours_remaining: nextInfo.meter - Number(reportRecord.completed_meter || 0),
+              projected_date: "",
+              status: "PROGRAMADO",
+              source: "auto_pm_cycle",
+              created_at: new Date().toISOString(),
+            };
+            if(!portal.preventives) portal.preventives = [];
+            portal.preventives.push(newPrev);
+            $("prevExecStatus").textContent = `Servicio cerrado. Siguiente PM: ${nextInfo.label} al horometro ${one(nextInfo.meter)}.`;
+          } else {
+            $("prevExecStatus").textContent = `Servicio cerrado. Siguiente PM ${nextInfo.label} ya esta programado.`;
+          }
+        } else {
+            $("prevExecStatus").textContent = "Servicio cerrado.";
+        }
+        await savePortalSnapshot();
         printPreventiveExecution(reportRecord);
       }
     }
@@ -15468,6 +17058,125 @@ WAREHOUSE_HTML = r"""<!doctype html>
       clearHoseRecord();
       await refreshHoses();
     }
+    function fillLubricantSelectors(){
+      const catalog = lubricants.catalog || [];
+      const current = $("lubProduct").value;
+      const currentConfig = $("lubConfigProduct").value;
+      const currentScope = $("lubReportScope").value;
+      const options = catalog.map(row => `<option value="${row.id}">${esc(row.code)} - ${esc(row.name)}</option>`).join("");
+      $("lubProduct").innerHTML = options;
+      $("lubConfigProduct").innerHTML = options;
+      $("lubReportScope").innerHTML = `<option value="">General (todos)</option>` + catalog.map(row => `<option value="${esc(row.code)}">${esc(row.code)} - ${esc(row.name)}</option>`).join("");
+      if(current && catalog.some(row => String(row.id) === current)) $("lubProduct").value = current;
+      if(currentConfig && catalog.some(row => String(row.id) === currentConfig)) $("lubConfigProduct").value = currentConfig;
+      if(currentScope && catalog.some(row => row.code === currentScope)) $("lubReportScope").value = currentScope;
+    }
+    async function loadLubricantes(){
+      if(!$("lubStart").value){ const now = new Date(); $("lubStart").value = toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)); }
+      if(!$("lubEnd").value) $("lubEnd").value = toIsoDate(new Date());
+      const params = new URLSearchParams({start:$("lubStart").value, end:$("lubEnd").value});
+      const r = await fetch(`/api/lubricantes?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok) throw new Error(await apiError(r));
+      lubricants = await r.json();
+      renderLubricantes();
+    }
+    function renderLubricantes(){
+      const catalog = lubricants.catalog || [];
+      if(!$("lubDate").value) $("lubDate").value = toIsoDate(new Date());
+      fillLubricantSelectors();
+      const lowCount = catalog.filter(row => row.alerta_stock_bajo).length;
+      const totalStock = catalog.reduce((acc,row) => acc + Number(row.stock_actual || 0), 0);
+      const totalConsumed = catalog.reduce((acc,row) => acc + Number(row.consumido_periodo || 0), 0);
+      $("lubStats").innerHTML = [
+        ["Lubricantes", catalog.length],
+        ["Stock total", `${num(totalStock)} L`],
+        ["Consumido periodo", `${num(totalConsumed)} L`],
+        ["Alertas stock bajo", lowCount],
+      ].map(([k,v]) => `<div class="stat"><strong>${esc(v)}</strong>${esc(k)}</div>`).join("");
+      $("lubPeriodLabel").textContent = `${$("lubStart").value} a ${$("lubEnd").value}`;
+      $("lubricantesGrid").innerHTML = catalog.map(row => `
+        <article class="lub-card ${row.alerta_stock_bajo ? "alerta" : ""}">
+          <span class="lub-badge ${row.alerta_stock_bajo ? "low" : "ok"}">${row.alerta_stock_bajo ? "STOCK BAJO" : "OK"}</span>
+          <span class="lub-code">${esc(row.code)}</span>
+          <h4>${esc(row.name)}</h4>
+          <div><span class="lub-stock">${num(row.stock_actual)}</span> <span class="lub-unit">${esc(row.unit)} en stock</span></div>
+          <div class="lub-meta">
+            <span>Entradas<br><b>${num(row.entradas_periodo)} ${esc(row.unit)}</b></span>
+            <span>Consumo bitacora<br><b>${num(row.consumido_bitacora)} ${esc(row.unit)}</b></span>
+            <span>Salidas manuales<br><b>${num(row.salidas_manuales)} ${esc(row.unit)}</b></span>
+            <span>Minimo<br><b>${num(row.min_stock)} ${esc(row.unit)}</b></span>
+          </div>
+        </article>`).join("") || `<p class="muted">Sin lubricantes en el catalogo.</p>`;
+      renderLubricantMovements();
+    }
+    function renderLubricantMovements(){
+      const rows = lubricants.movements || [];
+      $("lubMovementsTable").innerHTML = `<thead><tr><th>Fecha</th><th>Tipo</th><th>Lubricante</th><th>Presentacion</th><th>Litros/KG</th><th>Equipo</th><th>Referencia</th><th>Notas</th><th>Accion</th></tr></thead><tbody>` +
+        rows.map((row, idx) => `<tr><td>${esc(String(row.movement_date || "").slice(0,10))}</td><td>${esc(row.movement_type)}</td><td>${esc(row.product_code)} - ${esc(row.product_name)}</td><td>${row.presentation ? `${esc(row.presentation)}${Number(row.units||0) > 0 ? ` x${num(row.units)}` : ""}` : "-"}</td><td style="color:${Number(row.liters||0) >= 0 ? "#047857" : "#dc2626"};font-weight:800">${Number(row.liters||0) > 0 ? "+" : ""}${num(row.liters)}</td><td>${esc(row.equipment || "-")}</td><td>${esc(row.reference || "-")}</td><td>${esc(row.notes || "-")}</td><td><button type="button" class="btn danger small" data-lub-delete="${idx}">Eliminar</button></td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("[data-lub-delete]").forEach(button => button.addEventListener("click", () => deleteLubricantMovementAt(Number(button.dataset.lubDelete)).catch(showError)));
+    }
+    const LUB_PRESENTATION_FACTORS = {Tambor:208, Cubeta:19, Garrafa:20, Litro:1, Grasa:1};
+    function lubPresentationFactor(){ return LUB_PRESENTATION_FACTORS[$("lubPresentation").value] || 1; }
+    function lubRecalcLiters(){
+      $("lubLiters").value = (Number($("lubUnits").value || 0) * lubPresentationFactor()).toFixed(2);
+    }
+    async function saveLubricantMovementWeb(){
+      if(!hasApiKey(true)) return;
+      const productId = Number($("lubProduct").value || 0);
+      const units = Number($("lubUnits").value || 0);
+      const presentation = $("lubPresentation").value;
+      let liters = Number($("lubLiters").value || 0);
+      if(!(liters > 0) && units > 0) liters = units * lubPresentationFactor();
+      if(!productId) return alert("Selecciona un lubricante.");
+      if(!(units > 0) && !(liters > 0)) return alert("Captura cantidad o litros mayores a cero.");
+      const payload = {
+        product_id: productId,
+        movement_type: $("lubType").value,
+        presentation,
+        units: units > 0 ? units : null,
+        liters_per_unit: lubPresentationFactor(),
+        liters,
+        movement_date: $("lubDate").value,
+        equipment: $("lubEquipment").value.trim(),
+        reference: $("lubReference").value.trim(),
+        notes: $("lubNotes").value.trim(),
+      };
+      const r = await fetch("/api/lubricantes/movement", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
+      if(!r.ok) return alert(await apiError(r));
+      const result = await r.json();
+      showToast(`${result.movement_type} registrada: ${result.product_name} | Stock: ${num(result.stock_actual)} L${result.alerta_stock_bajo ? " (STOCK BAJO)" : ""}`, result.alerta_stock_bajo ? "warning" : "success");
+      ["lubEquipment","lubReference","lubNotes"].forEach(id => $(id).value = "");
+      $("lubUnits").value = "1";
+      lubRecalcLiters();
+      await loadLubricantes();
+    }
+    async function deleteLubricantMovementAt(index){
+      const row = (lubricants.movements || [])[index];
+      if(!row) return alert("Selecciona un movimiento para eliminar.");
+      if(!row.id) return alert("El consumo de bitacora se calcula automaticamente desde las capturas y no se puede eliminar aqui.");
+      if(!hasApiKey(true)) return;
+      if(!confirm(`Se eliminara el movimiento ${row.movement_type} de ${row.product_name} por ${row.liters} L.`)) return;
+      const r = await fetch("/api/lubricantes/movement/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id:row.id})});
+      if(!r.ok) return alert(await apiError(r));
+      showToast("Movimiento eliminado.", "info");
+      await loadLubricantes();
+    }
+    function onLubConfigChange(){
+      const row = (lubricants.catalog || []).find(item => String(item.id) === $("lubConfigProduct").value);
+      if(!row) return;
+      $("lubConfigName").value = row.name || "";
+      $("lubConfigMin").value = row.min_stock || 0;
+    }
+    async function saveLubricantConfig(){
+      if(!hasApiKey(true)) return;
+      const productId = Number($("lubConfigProduct").value || 0);
+      if(!productId) return alert("Selecciona un lubricante.");
+      const r = await fetch("/api/lubricantes/product", {method:"POST", headers:headers(true), body:JSON.stringify({id: productId, name: $("lubConfigName").value.trim(), min_stock: Number($("lubConfigMin").value || 0)})});
+      if(!r.ok) return alert(await apiError(r));
+      showToast("Configuracion de lubricante guardada.", "success");
+      await loadLubricantes();
+    }
     function dieselEquipmentKey(value){
       return String(value || "").trim().toUpperCase().replace(/\([^)]*\)/g, " ").replace(/[^A-Z0-9]+/g, "");
     }
@@ -15900,38 +17609,42 @@ WAREHOUSE_HTML = r"""<!doctype html>
       URL.revokeObjectURL(a.href);
       $("monthlyStatus").textContent = "PowerPoint generado";
     }
-    async function downloadServicePdf(){
-      const params = new URLSearchParams({
-        period: $("prPeriod").value || "Mes",
-        base: $("prBase").value || toIsoDate(new Date()),
-        equipment: [...$("serviceReportEquipment").selectedOptions].map(opt => opt.value).join(","),
-        search: $("prSearch").value || ""
-      });
-      const r = await fetch(`/api/service-report/pdf?${params}`, {headers: headers(), cache:"no-store"});
-      if(!r.ok) return alert(await apiError(r));
-      const blob = await r.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `Reporte_Servicios_${$("prPeriod").value || "Mes"}_${$("prBase").value || toIsoDate(new Date())}.pdf`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }
-    async function downloadLifePdf(){
-      const r = await fetch("/api/equipment-life/pdf", {headers: headers(), cache:"no-store"});
-      if(!r.ok) return alert(await apiError(r));
-      const blob = await r.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `Vida_Util_Equipos_${toIsoDate(new Date())}.pdf`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }
     async function downloadMonthlyOilExcel(){
       const month = Math.max(Math.min(Number($("monthlyMonth").value || (new Date()).getMonth() + 1), 12), 1);
       const year = Number($("monthlyYear").value || (new Date()).getFullYear());
       const start = `${year}-${String(month).padStart(2, "0")}-01`;
       const end = toIsoDate(new Date(year, month, 0));
       await downloadOilConsumptionExcel(start, end, "monthlyStatus");
+    }
+    function applyWeeklyPeriod(updateStatus=true){
+      const base = $("weeklyBase").value || $("weeklyStart").value || toIsoDate(new Date());
+      const [start, end] = periodRange("Semana", base);
+      $("weeklyStart").value = start;
+      $("weeklyEnd").value = end;
+      if(updateStatus) $("weeklyStatus").textContent = `Semana ${start} a ${end}`;
+    }
+    async function downloadWeeklyPowerPoint(){
+      if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
+      const start = $("weeklyStart").value;
+      const end = $("weeklyEnd").value;
+      $("weeklyStatus").textContent = "Generando reporte semanal...";
+      const params = new URLSearchParams({start, end});
+      const r = await fetch(`/api/weekly-report/powerpoint?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok){
+        $("weeklyStatus").textContent = "";
+        return alert(await apiError(r));
+      }
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Reporte_Semanal_${start}_${end}.pptx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      $("weeklyStatus").textContent = "PowerPoint semanal generado";
+    }
+    async function downloadWeeklyOilExcel(){
+      if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
+      await downloadOilConsumptionExcel($("weeklyStart").value, $("weeklyEnd").value, "weeklyStatus");
     }
     async function downloadMonthlyKpiXlsm(){
       const month = Math.max(Math.min(Number($("monthlyMonth").value || (new Date()).getMonth() + 1), 12), 1);
@@ -15989,28 +17702,51 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("weeklyEnd").value = end;
       if(updateStatus) $("weeklyStatus").textContent = `Semana ${start} a ${end}`;
     }
-    async function downloadWeeklyPowerPoint(){
-      if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
-      const start = $("weeklyStart").value;
-      const end = $("weeklyEnd").value;
-      $("weeklyStatus").textContent = "Generando reporte semanal...";
-      const params = new URLSearchParams({start, end});
-      const r = await fetch(`/api/weekly-report/powerpoint?${params}`, {headers: headers(), cache:"no-store"});
-      if(!r.ok){
-        $("weeklyStatus").textContent = "";
-        return alert(await apiError(r));
-      }
+
+    async function downloadServicePdf(){
+      const params = new URLSearchParams({
+        period: $("prPeriod").value || "Mes",
+        base: $("prBase").value || toIsoDate(new Date()),
+        equipment: [...$("serviceReportEquipment").selectedOptions].map(opt => opt.value).join(","),
+        search: $("prSearch").value || ""
+      });
+      const r = await fetch(`/api/service-report/pdf?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok) return alert(await apiError(r));
       const blob = await r.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `Reporte_Semanal_${start}_${end}.pptx`;
+      a.download = `Reporte_Servicios_PM_${$("prPeriod").value || "Mes"}_${$("prBase").value || toIsoDate(new Date())}.pdf`;
       a.click();
       URL.revokeObjectURL(a.href);
-      $("weeklyStatus").textContent = "PowerPoint semanal generado";
     }
-    async function downloadWeeklyOilExcel(){
-      if(!$("weeklyStart").value || !$("weeklyEnd").value) applyWeeklyPeriod(false);
-      await downloadOilConsumptionExcel($("weeklyStart").value, $("weeklyEnd").value, "weeklyStatus");
+    async function downloadLifePdf(){
+      const r = await fetch("/api/equipment-life/pdf", {headers: headers(), cache:"no-store"});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Vida_Util_Equipos_PM_${toIsoDate(new Date())}.pdf`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+    async function downloadServiceHistoryPdf(){
+      const params = new URLSearchParams({
+        period: "Rango",
+        start: $("srvStart").value || "",
+        end: $("srvEnd").value || "",
+        equipment: $("srvEquipment").value || "",
+        interval: $("srvInterval").value || "",
+        service_type: $("srvType").value || "",
+        search: $("srvSearch").value || ""
+      });
+      const r = await fetch(`/api/service-history/pdf?${params}`, {headers: headers(), cache:"no-store"});
+      if(!r.ok) return alert(await apiError(r));
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Servicios_Realizados_${$("srvStart").value || "Inicio"}_${$("srvEnd").value || "Fin"}.pdf`;
+      a.click();
+      URL.revokeObjectURL(a.href);
     }
     function renderAll(){
       renderStats();
@@ -16042,13 +17778,28 @@ WAREHOUSE_HTML = r"""<!doctype html>
       renderWarehouseDashboard();
     }
     $("sidebarToggle").addEventListener("click", () => {
+      if(window.innerWidth <= 900){
+        toggleMobileMenu();
+        return;
+      }
       const collapsed = !document.body.classList.contains("sidebar-collapsed");
       localStorage.setItem("mgaWarehouseSidebarCollapsed", collapsed ? "1" : "0");
       applySidebarState();
     });
-    document.querySelectorAll(".tabs button").forEach(btn => btn.addEventListener("click", () => {
-      activateTab(btn.dataset.tab);
-    }));
+    function toggleMobileMenu(){
+      const tabs = document.querySelector(".warehouse-page .tabs");
+      const overlay = $("mobileOverlay");
+      const isOpen = tabs.classList.contains("mobile-open");
+      if(isOpen){ tabs.classList.remove("mobile-open"); overlay.classList.remove("active"); }
+      else { tabs.classList.add("mobile-open"); overlay.classList.add("active"); }
+    }
+    document.querySelectorAll(".tabs button").forEach(btn => {
+      if(btn.classList.contains("nav-sep")) return;
+      btn.addEventListener("click", () => {
+        if(btn.dataset.tab) activateTab(btn.dataset.tab);
+        if(window.innerWidth <= 900) toggleMobileMenu();
+      });
+    });
     ["kpiGroup","kpiStart","kpiEnd"].forEach(id => $(id).addEventListener("change", renderDashboard));
     ["fichaEquipment","fichaStart","fichaEnd"].forEach(id => $(id).addEventListener("change", renderEquipmentProfile));
     $("renderFichaBtn").addEventListener("click", renderEquipmentProfile);
@@ -16065,6 +17816,17 @@ WAREHOUSE_HTML = r"""<!doctype html>
       if(code) $("prevExecEquipment").value = code;
       activateTab("ejecucionPreventivos");
     });
+    $("editFichaBtn").addEventListener("click", () => openEditFichaModal());
+    const editFichaModal = $("editFichaModal");
+    if(editFichaModal){
+      editFichaModal.querySelector(".modal-close").addEventListener("click", () => editFichaModal.close());
+      editFichaModal.querySelector("#editFichaCancelBtn").addEventListener("click", () => editFichaModal.close());
+      editFichaModal.addEventListener("close", () => editFichaModal.returnValue = "");
+      editFichaModal.addEventListener("submit", (e) => { e.preventDefault(); saveEditFicha().catch(showError); });
+      editFichaModal.querySelector("#editFichaImageSelectBtn").addEventListener("click", () => editFichaModal.querySelector("#editFichaImageInput").click());
+      editFichaModal.querySelector("#editFichaImageInput").addEventListener("change", handleEditFichaImageSelect);
+      editFichaModal.querySelector("#editFichaImageClearBtn").addEventListener("click", clearEditFichaImage);
+    }
     ["eqCatalogFilterState","eqCatalogFilterType"].forEach(id => $(id).addEventListener("change", renderEquipmentCatalog));
     $("eqCatalogSearch").addEventListener("input", renderEquipmentCatalog);
     $("eqCatalogRefreshBtn").addEventListener("click", renderEquipmentCatalog);
@@ -16086,8 +17848,6 @@ WAREHOUSE_HTML = r"""<!doctype html>
       $("meetingModeBtn").textContent = document.body.classList.contains("meeting-mode") ? "Salir reunion" : "Modo reunion";
     });
     $("monthlyPptBtn").addEventListener("click", () => downloadMonthlyPowerPoint().catch(showError));
-    $("monthlyKpiXlsmBtn").addEventListener("click", () => downloadMonthlyKpiXlsm().catch(showError));
-    $("monthlyKpiXlsmImportBtn").addEventListener("click", () => importMonthlyKpiXlsm().catch(showError));
     $("monthlyOilExcelBtn").addEventListener("click", () => downloadMonthlyOilExcel().catch(showError));
     $("weeklyBase").addEventListener("change", () => applyWeeklyPeriod(true));
     $("weeklyApplyBtn").addEventListener("click", () => applyWeeklyPeriod(true));
@@ -16097,8 +17857,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
     $("servicePdfBtn").addEventListener("click", () => downloadServicePdf().catch(showError));
-    $("dashServicePdfBtn").addEventListener("click", () => downloadServicePdf().catch(showError));
-    $("dashLifePdfBtn").addEventListener("click", () => downloadLifePdf().catch(showError));
+$("monthlyKpiXlsmImportBtn").addEventListener("click", () => importMonthlyKpiXlsm().catch(showError));
+$("monthlyKpiXlsmBtn").addEventListener("click", () => downloadMonthlyKpiXlsm().catch(showError));
     $("manualPrService").addEventListener("change", () => {
       const hours = preventiveServiceHours[$("manualPrService").value] || 250;
       const last = Number($("manualPrLast").value || 0);
@@ -16114,6 +17874,10 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["backlogStart","backlogEnd","backlogLevel","backlogSource","backlogStatus"].forEach(id => $(id).addEventListener("change", renderBacklog));
     $("backlogSearch").addEventListener("input", renderBacklog);
     $("renderBacklogBtn").addEventListener("click", renderBacklog);
+    $("renderKanbanBtn").addEventListener("click", renderKanban);
+    ["kanbanLevel","kanbanSource"].forEach(id => $(id).addEventListener("change", renderKanban));
+    $("kanbanSearch").addEventListener("input", renderKanban);
+    kanbanInitDragDrop();
     ["woFilterEquipment","woFilterStatus","woFilterPriority"].forEach(id => $(id).addEventListener("change", renderWorkOrders));
     $("woSearch").addEventListener("input", renderWorkOrders);
     $("woRefreshBtn").addEventListener("click", renderWorkOrders);
@@ -16128,14 +17892,15 @@ WAREHOUSE_HTML = r"""<!doctype html>
     ["srvEquipment","srvInterval","srvType","srvStart","srvEnd"].forEach(id => $(id).addEventListener("change", renderServiceHistory));
     $("srvSearch").addEventListener("input", renderServiceHistory);
     $("renderSrvBtn").addEventListener("click", renderServiceHistory);
+    $("srvPdfBtn").addEventListener("click", () => downloadServiceHistoryPdf().catch(showError));
     $("prevExecNewBtn").addEventListener("click", resetPreventiveExecutionForm);
     $("prevExecSaveBtn").addEventListener("click", () => savePreventiveExecution(false).catch(showError));
     $("prevExecCloseBtn").addEventListener("click", () => savePreventiveExecution(true).catch(showError));
     $("prevExecDeleteBtn").addEventListener("click", () => deletePreventiveExecution().catch(showError));
     $("prevExecPrintBtn").addEventListener("click", printPreventiveExecution);
     $("prevExecViewHistoryBtn").addEventListener("click", () => document.querySelector('[data-tab="servicios"]')?.click());
-    $("prevExecEquipment").addEventListener("change", renderPreventiveManualPlan);
-    $("prevExecServiceType").addEventListener("change", () => { updatePreventiveChecklistTemplate(); renderPreventiveManualPlan(); });
+    $("prevExecEquipment").addEventListener("change", () => { renderPreventiveManualPlan(); renderPMReadinessPanel(); });
+    $("prevExecServiceType").addEventListener("change", () => { updatePreventiveChecklistTemplate(); renderPreventiveManualPlan(); renderPMReadinessPanel(); });
     preventiveOilInputs.forEach(item => $(item[0]).addEventListener("input", updatePreventiveOilTotal));
     ["specialSrvFilterModule","specialSrvFilterState"].forEach(id => $(id).addEventListener("change", renderSpecialServices));
     $("specialSrvSearch").addEventListener("input", renderSpecialServices);
@@ -16201,6 +17966,50 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("hoseNewBtn").addEventListener("click", clearHoseRecord);
     $("hoseSaveBtn").addEventListener("click", () => saveHoseRecord().catch(showError));
     $("hoseDeleteBtn").addEventListener("click", () => deleteHoseRecord().catch(showError));
+    $("lubRefreshBtn").addEventListener("click", () => loadLubricantes().catch(showError));
+    $("lubMonthBtn").addEventListener("click", () => {
+      const now = new Date();
+      $("lubStart").value = toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+      $("lubEnd").value = toIsoDate(now);
+      loadLubricantes().catch(showError);
+    });
+    $("lubWeekBtn").addEventListener("click", () => {
+      const end = new Date();
+      const start = new Date(end);
+      start.setDate(end.getDate() - 6);
+      $("lubStart").value = toIsoDate(start);
+      $("lubEnd").value = toIsoDate(end);
+      loadLubricantes().catch(showError);
+    });
+    async function downloadLubricantReport(){
+      if(!hasApiKey(true)) return;
+      if(!$("lubStart").value || !$("lubEnd").value) return alert("Selecciona el periodo del reporte.");
+      const params = new URLSearchParams({start: $("lubStart").value, end: $("lubEnd").value});
+      const scope = $("lubReportScope").value;
+      if(scope) params.set("code", scope);
+      const response = await fetch(`/api/lubricantes/report.pdf?${params}`, {headers: headers(), cache: "no-store"});
+      if(!response.ok){ alert(await apiError(response)); return; }
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `Reporte_Lubricantes_${scope || "GENERAL"}_${$("lubStart").value}_${$("lubEnd").value}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      URL.revokeObjectURL(link.href);
+      link.remove();
+    }
+    $("lubReportPdfBtn").addEventListener("click", () => downloadLubricantReport().catch(showError));
+    ["lubStart","lubEnd"].forEach(id => $(id).addEventListener("change", () => loadLubricantes().catch(showError)));
+    $("lubSaveBtn").addEventListener("click", () => saveLubricantMovementWeb().catch(showError));
+    $("lubPresentation").addEventListener("change", lubRecalcLiters);
+    $("lubUnits").addEventListener("input", lubRecalcLiters);
+    $("lubFormClearBtn").addEventListener("click", () => {
+      ["lubEquipment","lubReference","lubNotes"].forEach(id => $(id).value = "");
+      $("lubLiters").value = "0";
+      $("lubType").value = "ENTRADA";
+    });
+    $("lubConfigProduct").addEventListener("change", onLubConfigChange);
+    $("lubConfigSaveBtn").addEventListener("click", () => saveLubricantConfig().catch(showError));
     $("tireTrackNewBtn").addEventListener("click", resetTireTrackForm);
     $("tireTrackSaveBtn").addEventListener("click", () => saveTireTrackEvent().catch(showError));
     $("tireTrackRefreshBtn").addEventListener("click", () => load().catch(showError));
@@ -16231,9 +18040,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
     });
     $("inventorySearch").addEventListener("input", renderInventory);
     $("warehouseRefreshBtn").addEventListener("click", () => load().catch(showError));
+    $("generateRequisitionBtn").addEventListener("click", generateRequisitionFromShortages);
     document.querySelectorAll("[data-warehouse-action]").forEach(btn => btn.addEventListener("click", () => {
       const action = btn.dataset.warehouseAction || "";
       if(action === "REPORTE") return $("exportBtn").click();
+      if(action === "REQUISICION") return generateRequisitionFromShortages();
       if(action === "KARDEX") {
         $("inventorySearch").focus();
         $("movementTable").scrollIntoView({behavior:"smooth", block:"center"});
@@ -16997,6 +18808,215 @@ async def save_filter_inventory_movement(request: Request, _auth: str | None = H
         return {"ok": True, "item": inventory_item_payload(item), "movement_id": movement.id}
 
 
+@app.get("/api/lubricantes")
+def get_lubricantes(
+    response: Response,
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    with SessionLocal() as session:
+        return {
+            "start": start or "",
+            "end": end or "",
+            "catalog": lubricant_summary_payload(session, start, end),
+            "movements": lubricant_movements_payload(session, start, end),
+        }
+
+
+@app.get("/api/lubricantes/report.pdf")
+def get_lubricante_report_pdf(
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    code: str = Query(default="TODOS"),
+    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
+) -> StreamingResponse:
+    require_api_key(_auth)
+    with SessionLocal() as session:
+        summary = lubricant_summary_payload(session, start=start, end=end)
+        movements = lubricant_movements_payload(session, start=start, end=end, code=code, limit=500)
+    code_key = normalize_text(code) or "TODOS"
+    if code_key != "TODOS":
+        summary = [row for row in summary if normalize_text(row["code"]) == code_key]
+        if not summary:
+            raise HTTPException(status_code=404, detail="No hay datos para ese lubricante en el periodo.")
+        scope_label = f'{summary[0]["code"]} - {summary[0]["name"]}'
+    else:
+        scope_label = "General (todos los lubricantes)"
+    range_start, range_end = lubricant_bounds(start, end)
+    pdf = lubricant_report_pdf_bytes(summary, movements, range_start or "inicio", range_end or "hoy", scope_label)
+    filename = f"Reporte_Lubricantes_{scope_label.split(' ')[0]}_{range_start}_{range_end}.pdf".replace(" ", "_").replace("/", "-")
+    return StreamingResponse(
+        BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+@app.get("/api/lubricantes/movimientos")
+def get_lubricante_movimientos(
+    response: Response,
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    code: str = Query(default=""),
+    limit: int = Query(default=200),
+    _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    with SessionLocal() as session:
+        ensure_lubricant_catalog(session)
+        return {
+            "movements": lubricant_movements_payload(session, start, end, code, limit),
+        }
+
+
+@app.post("/api/lubricantes/movement")
+async def save_lubricant_movement_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Movimiento invalido.")
+    product_id = int(parse_float(payload.get("product_id"), 0) or 0)
+    movement_type = normalize_text(payload.get("movement_type") or "ENTRADA")
+    if movement_type not in LUBRICANT_MOVEMENT_TYPES:
+        raise HTTPException(status_code=400, detail="Tipo de movimiento invalido (ENTRADA | SALIDA | AJUSTE).")
+    presentation_raw = normalize_text(payload.get("presentation"))
+    units = parse_float(payload.get("units"), 0)
+    liters_per_unit_payload = parse_float(payload.get("liters_per_unit"), 0)
+    if presentation_raw:
+        factor = LUBRICANT_PRESENTATION_FACTORS.get(presentation_raw.upper())
+        if factor is None:
+            raise HTTPException(status_code=400, detail=f"Presentacion invalida. Usa: {', '.join(name for name, _ in LUBRICANT_PRESENTATIONS_WEB)}.")
+        presentation_raw = next((name for name, _ in LUBRICANT_PRESENTATIONS_WEB if name.upper() == presentation_raw.upper()), presentation_raw)
+        liters_per_unit = liters_per_unit_payload if liters_per_unit_payload > 0 else factor
+    else:
+        liters_per_unit = liters_per_unit_payload
+    liters = parse_float(payload.get("liters"), -1)
+    if liters < 0 and units > 0:
+        liters = units * (liters_per_unit if liters_per_unit > 0 else 1)
+    if liters <= 0:
+        raise HTTPException(status_code=400, detail="Captura litros o unidades mayores a cero.")
+    movement_date = str(payload.get("movement_date") or utc_now().date().isoformat())[:10]
+    if movement_type in {"SALIDA", "AJUSTE"} and normalize_text(payload.get("direction") or "") != "POSITIVO":
+        liters = -liters
+    with SessionLocal() as session:
+        ensure_lubricant_catalog(session)
+        product = session.get(LubricantProduct, product_id) if product_id else None
+        if product is None:
+            raise HTTPException(status_code=400, detail="Selecciona un lubricante valido.")
+        movement = LubricantMovement(
+            movement_date=movement_date,
+            movement_type=movement_type,
+            product_id=int(product.id),
+            liters=round(float(liters), 2),
+            equipment=normalize_text(payload.get("equipment"))[:120],
+            reference=str(payload.get("reference") or "").strip()[:180],
+            notes=str(payload.get("notes") or "").strip(),
+            created_by=str(payload.get("created_by") or "").strip()[:160],
+            source="web",
+            presentation=presentation_raw[:40] if presentation_raw else "",
+            units=max(units, 0),
+        )
+        session.add(movement)
+        session.flush()
+        movement.external_id = f"W-{int(movement.id)}"
+        session.commit()
+        session.refresh(movement)
+        stock_actual = lubricant_stock_for(session, int(product.id))
+        alerta = bool(float(product.min_stock or 0) > 0 and stock_actual <= float(product.min_stock or 0))
+        return {
+            "ok": True,
+            "movement_id": int(movement.id),
+            "product_code": product.code,
+            "product_name": product.name,
+            "movement_type": movement_type,
+            "liters": float(movement.liters),
+            "stock_actual": stock_actual,
+            "min_stock": float(product.min_stock or 0),
+            "alerta_stock_bajo": alerta,
+        }
+
+
+@app.post("/api/lubricantes/movement/delete")
+async def delete_lubricant_movement_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Movimiento invalido.")
+    record_id = int(parse_float(payload.get("id"), 0) or 0)
+    if not record_id:
+        raise HTTPException(status_code=400, detail="Selecciona un movimiento para eliminar.")
+    with SessionLocal() as session:
+        row = session.get(LubricantMovement, record_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Movimiento no encontrado.")
+        session.delete(row)
+        session.commit()
+        return {"ok": True, "deleted": record_id}
+
+
+@app.post("/api/lubricantes/product")
+async def save_lubricant_product_cloud(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Configuracion invalida.")
+    product_id = int(parse_float(payload.get("id"), 0) or 0)
+    name = str(payload.get("name") or "").strip()
+    min_stock = parse_float(payload.get("min_stock"), 0)
+    has_liters_per_unit = payload.get("liters_per_unit") is not None
+    liters_per_unit = parse_float(payload.get("liters_per_unit"), 0)
+    if not name:
+        raise HTTPException(status_code=400, detail="Captura el nombre del lubricante.")
+    if min_stock < 0:
+        raise HTTPException(status_code=400, detail="El minimo no puede ser negativo.")
+    with SessionLocal() as session:
+        product = session.get(LubricantProduct, product_id) if product_id else None
+        if product is None:
+            raise HTTPException(status_code=404, detail="Lubricante no encontrado.")
+        if has_liters_per_unit and liters_per_unit <= 0:
+            raise HTTPException(status_code=400, detail="Litros por presentacion deben ser mayores a cero.")
+        product.name = name[:160]
+        product.presentation = str(payload.get("presentation") or product.presentation or "Tambor").strip()[:40]
+        if has_liters_per_unit:
+            product.liters_per_unit = round(liters_per_unit, 3)
+        product.min_stock = round(min_stock, 2)
+        product.updated_at = utc_now()
+        session.commit()
+        return {
+            "ok": True,
+            "product": {
+                "id": int(product.id),
+                "code": product.code,
+                "name": product.name,
+                "presentation": product.presentation,
+                "liters_per_unit": float(product.liters_per_unit),
+                "min_stock": float(product.min_stock),
+            },
+        }
+
+
+@app.get("/api/lubricantes/snapshot")
+def get_lubricant_snapshot(response: Response, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    with SessionLocal() as session:
+        payload = lubricant_snapshot_payload(session)
+        payload["ok"] = True
+        return payload
+
+
+@app.post("/api/lubricantes/snapshot")
+async def publish_lubricant_snapshot(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Snapshot de lubricantes invalido.")
+    with SessionLocal() as session:
+        result = replace_lubricant_desktop_rows(session, payload.get("products"), payload.get("movements"))
+        return {"ok": True, **result}
+
+
 @app.post("/api/catalog")
 async def publish_catalog(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
@@ -17050,8 +19070,31 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             previous_settings = previous_payload.get("settings") if isinstance(previous_payload.get("settings"), dict) else {}
             if isinstance(settings, dict) and "meta_diesel_lh" not in settings and isinstance(previous_settings, dict):
                 settings["meta_diesel_lh"] = previous_settings.get("meta_diesel_lh", 25)
-        if "service_history" not in payload and isinstance(previous_payload.get("service_history"), list):
+        incoming_history = payload.get("service_history")
+        if isinstance(incoming_history, list):
+            previous_history = previous_payload.get("service_history") if isinstance(previous_payload.get("service_history"), list) else []
+            preserved_history = [
+                row for row in previous_history
+                if not (isinstance(row, dict) and str(row.get("source") or "").startswith("desktop"))
+            ]
+            payload["service_history"] = incoming_history + preserved_history
+        elif isinstance(previous_payload.get("service_history"), list):
             payload["service_history"] = previous_payload["service_history"]
+        incoming_equipment = payload.get("equipment")
+        if isinstance(incoming_equipment, list):
+            previous_equipment = previous_payload.get("equipment") if isinstance(previous_payload.get("equipment"), list) else []
+            prev_by_code = {str(e.get("code") or e.get("equipment_code") or "").strip().upper(): e for e in previous_equipment if isinstance(e, dict)}
+            web_fields = ("serial", "brand", "model", "equipment_type", "location", "notes", "photo_data")
+            for eq in incoming_equipment:
+                if not isinstance(eq, dict):
+                    continue
+                code = str(eq.get("code") or eq.get("equipment_code") or "").strip().upper()
+                prev_eq = prev_by_code.get(code)
+                if isinstance(prev_eq, dict):
+                    for field in web_fields:
+                        val = prev_eq.get(field)
+                        if val is not None and val != "":
+                            eq[field] = val
         if "preventive_execution" not in payload and isinstance(previous_payload.get("preventive_execution"), dict):
             payload["preventive_execution"] = previous_payload["preventive_execution"]
         if "special_services" not in payload and isinstance(previous_payload.get("special_services"), dict):
@@ -17066,6 +19109,8 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             payload["backlog"] = previous_payload["backlog"]
         if "tire_tracking" not in payload and isinstance(previous_payload.get("tire_tracking"), dict):
             payload["tire_tracking"] = previous_payload["tire_tracking"]
+        if "kanban" not in payload and isinstance(previous_payload.get("kanban"), dict):
+            payload["kanban"] = previous_payload["kanban"]
         payload = enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(payload)))
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
@@ -17086,6 +19131,54 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         "audit_log": len(payload.get("audit_log") or []) if isinstance(payload.get("audit_log"), list) else 0,
         "availability": len(availability) if isinstance(availability, list) else 0,
     }
+
+
+@app.put("/api/equipment/{code}/meta")
+async def update_equipment_meta(code: str, request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
+    require_api_key(_auth)
+    code = str(code).strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="Codigo de equipo requerido.")
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload invalido.")
+    allowed_fields = {"description", "family", "equipment_type", "brand", "model", "serial", "location", "notes", "photo_data"}
+    updates = {k: v for k, v in payload.items() if k in allowed_fields}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No hay campos validos para actualizar.")
+    if "photo_data" in updates:
+        photo = str(updates["photo_data"])
+        if photo.startswith("data:") and "," in photo:
+            header, b64 = photo.split(",", 1)
+            try:
+                raw = base64.b64decode(b64)
+                if len(raw) > 2 * 1024 * 1024:
+                    raise HTTPException(status_code=400, detail="La imagen excede 2 MB.")
+            except Exception:
+                raise HTTPException(status_code=400, detail="Imagen base64 invalida.")
+    with SessionLocal() as session:
+        snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="No hay snapshot del portal.")
+        previous_raw = json_loads(snapshot.payload_json)
+        if not isinstance(previous_raw, dict):
+            raise HTTPException(status_code=500, detail="Snapshot corrupto.")
+        equipment = previous_raw.get("equipment") if isinstance(previous_raw.get("equipment"), list) else []
+        found = False
+        for eq in equipment:
+            if isinstance(eq, dict) and str(eq.get("code") or eq.get("equipment_code") or "").strip().upper() == code:
+                eq.update(updates)
+                found = True
+                break
+        if not found:
+            equipment.append({"code": code, **updates})
+            found = True
+        previous_raw["equipment"] = equipment
+        previous_raw["updated_at"] = utc_now().isoformat(timespec="seconds")
+        snapshot.payload_json = json_dumps(previous_raw)
+        snapshot.updated_at = utc_now()
+        session.commit()
+    return {"ok": True, "code": code, "updated": list(updates.keys())}
 
 
 @app.post("/api/availability/import")
@@ -17481,61 +19574,6 @@ async def delete_tire_tracking_event(request: Request, _auth: str | None = Heade
         return {"ok": True, "portal": latest_portal_payload(session)}
 
 
-def save_mobile_task_event(session: Session, record: dict[str, Any], source_device: str, user_name: str) -> dict[str, Any]:
-    mobile_id = str(record.get("mobile_id") or "").strip()
-    if not mobile_id:
-        raise ValueError("Evento sin mobile_id.")
-    existing = session.scalar(select(MobileTaskEvent).where(MobileTaskEvent.mobile_id == mobile_id))
-    if existing is not None:
-        return {
-            "mobile_id": mobile_id,
-            "task_event_id": existing.id,
-            "created": False,
-            "desktop_imported": existing.desktop_imported_at is not None,
-            "evidence": 0,
-        }
-    kind = str(record.get("kind") or "").strip().upper()
-    photos = record.get("photos") or []
-    stored_record = dict(record)
-    stored_record["photos"] = []
-    task_event = MobileTaskEvent(
-        mobile_id=mobile_id,
-        kind=kind,
-        source_device=source_device,
-        user_name=str(record.get("user_name") or user_name),
-        equipment_code=str(record.get("equipment_code") or ""),
-        order_number=str(record.get("order_number") or ""),
-        work_date=str(record.get("work_date") or ""),
-        payload_json=json_dumps(stored_record),
-    )
-    session.add(task_event)
-    session.flush()
-    evidence_count = 0
-    for photo in photos if isinstance(photos, list) else []:
-        if not isinstance(photo, dict):
-            continue
-        data_url = str(photo.get("data") or "")
-        if not data_url:
-            continue
-        session.add(
-            MobileTaskPhoto(
-                task_id=task_event.id,
-                file_name=str(photo.get("name") or f"{mobile_id}.jpg")[:260],
-                mime_type=str(photo.get("mime_type") or "image/jpeg")[:120],
-                captured_at=str(photo.get("captured_at") or ""),
-                data_url=data_url,
-            )
-        )
-        evidence_count += 1
-    return {
-        "mobile_id": mobile_id,
-        "task_event_id": task_event.id,
-        "created": True,
-        "desktop_imported": False,
-        "evidence": evidence_count,
-    }
-
-
 @app.post("/api/sync")
 async def sync_mobile_records(request: Request, _auth: str | None = Header(default=None, alias="X-MGA-API-Key")) -> dict[str, Any]:
     require_api_key(_auth)
@@ -17561,24 +19599,6 @@ async def sync_mobile_records(request: Request, _auth: str | None = Header(defau
                 mobile_id = str(record.get("mobile_id") or "").strip()
                 if not mobile_id:
                     raise ValueError("Captura sin mobile_id.")
-                record_kind = str(record.get("kind") or "").strip().upper()
-                if record_kind in {"FALLA", "TAREA_CIERRE", "CHECKLIST"}:
-                    task_result = save_mobile_task_event(session, record, source_device, user_name)
-                    if task_result.get("created"):
-                        created += 1
-                    else:
-                        skipped += 1
-                    results.append(
-                        {
-                            "mobile_id": mobile_id,
-                            "task_event_id": task_result.get("task_event_id"),
-                            "created": bool(task_result.get("created")),
-                            "stored": True,
-                            "desktop_imported": bool(task_result.get("desktop_imported")),
-                            "evidence": int(task_result.get("evidence") or 0),
-                        }
-                    )
-                    continue
                 photos = record.get("photos") or []
                 stored_record = dict(record)
                 stored_record["photos"] = []
@@ -17833,10 +19853,9 @@ async def desktop_capture_sync(
     incoming = package.get("records") or []
     if not device_id:
         raise HTTPException(status_code=400, detail="Falta device_id.")
+    throttle_sync(request, peer=device_id)
     if not isinstance(incoming, list):
         raise HTTPException(status_code=400, detail="records debe ser una lista.")
-
-    throttle_sync(request, peer=device_id)
 
     mappings: list[dict[str, str]] = []
     created = 0
