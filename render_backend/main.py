@@ -9012,6 +9012,14 @@ WAREHOUSE_HTML = r"""<!doctype html>
     </nav>
     <section class="stats" id="stats"></section>
     <section id="dashboard" class="view active">
+      <div class="panel no-print" style="border:2px solid #2563eb;">
+        <div class="subtle-title"><h3>Reportes PDF</h3><span class="muted">Nuevos reportes descargables</span></div>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:6px 0;">
+          <button class="btn" id="dashServicePdfBtn">PDF servicios preventivos</button>
+          <button class="btn" id="dashLifePdfBtn">PDF vida util de equipos</button>
+          <span class="muted">Tambien en las secciones Preventivos programados y Filtros.</span>
+        </div>
+      </div>
       <div class="panel no-print">
         <div class="subtle-title"><h3>Indicadores principales</h3><span class="muted" id="kpiMainSummaryNote"></span></div>
         <div class="kpi-main-strip" id="kpiMainStrip"></div>
@@ -16089,6 +16097,8 @@ WAREHOUSE_HTML = r"""<!doctype html>
     $("prSearch").addEventListener("input", renderPreventives);
     $("renderPrBtn").addEventListener("click", renderPreventives);
     $("servicePdfBtn").addEventListener("click", () => downloadServicePdf().catch(showError));
+    $("dashServicePdfBtn").addEventListener("click", () => downloadServicePdf().catch(showError));
+    $("dashLifePdfBtn").addEventListener("click", () => downloadLifePdf().catch(showError));
     $("manualPrService").addEventListener("change", () => {
       const hours = preventiveServiceHours[$("manualPrService").value] || 250;
       const last = Number($("manualPrLast").value || 0);
