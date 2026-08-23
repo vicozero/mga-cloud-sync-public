@@ -7813,6 +7813,428 @@ def get_kpi_format_excel(
     )
 
 
+import zipfile
+import xml.etree.ElementTree as ET
+
+KPI_DAILY_DATA_COLUMNS = {
+    "code": 2,
+    "description": 3,
+    "hi": 4,
+    "hf": 5,
+    "period": 6,
+    "mp": 8,
+    "mc": 9,
+    "stops": 11,
+    "oil_motor_15w40": 17,
+    "oil_hco_iso68": 18,
+    "oil_trans_sae30": 19,
+    "oil_85w140": 21,
+    "almo_liters": 22,
+    "coolant_liters": 23,
+    "status": 24,
+    "observations": 25,
+}
+
+
+def kpi_daily_xlsm_data_row(ws, row_idx: int) -> bool:
+    if row_idx < 8:
+        return False
+    code = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value
+    description = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["description"]).value
+    period_value = ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["period"]).value
+    if not code and description and isinstance(period_value, str) and "SUM(" in period_value.upper():
+        return False
+    if not code and description and not str(description).strip().upper().startswith("="):
+        text = normalized_ascii(description)
+        if any(token in text for token in ("SCOOP", "JUMBO", "TOTAL", "EQUIPO DE")):
+            return False
+    return True
+
+
+def kpi_daily_sheet_rows(ws, max_rows: int = 185) -> list[int]:
+    rows: list[int] = []
+    for row_idx in range(8, min(ws.max_row, max_rows) + 1):
+        if kpi_daily_xlsm_data_row(ws, row_idx):
+            rows.append(row_idx)
+    return rows
+
+
+def kpi_daily_equipment_rows(ws) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for row_idx in kpi_daily_sheet_rows(ws):
+        code = normalize_text(ws.cell(row_idx, KPI_DAILY_DATA_COLUMNS["code"]).value)
+        if code and not code.startswith("="):
+            mapping.setdefault(code, row_idx)
+    return mapping
+
+
+def kpi_daily_clear_row(ws, row_idx: int) -> None:
+    for col in (
+        KPI_DAILY_DATA_COLUMNS["code"],
+        KPI_DAILY_DATA_COLUMNS["description"],
+        KPI_DAILY_DATA_COLUMNS["hi"],
+        KPI_DAILY_DATA_COLUMNS["hf"],
+        KPI_DAILY_DATA_COLUMNS["period"],
+        KPI_DAILY_DATA_COLUMNS["mp"],
+        KPI_DAILY_DATA_COLUMNS["mc"],
+        KPI_DAILY_DATA_COLUMNS["stops"],
+        KPI_DAILY_DATA_COLUMNS["oil_motor_15w40"],
+        KPI_DAILY_DATA_COLUMNS["oil_hco_iso68"],
+        KPI_DAILY_DATA_COLUMNS["oil_trans_sae30"],
+        KPI_DAILY_DATA_COLUMNS["oil_85w140"],
+        KPI_DAILY_DATA_COLUMNS["almo_liters"],
+        KPI_DAILY_DATA_COLUMNS["coolant_liters"],
+        KPI_DAILY_DATA_COLUMNS["status"],
+        KPI_DAILY_DATA_COLUMNS["observations"],
+    ):
+        ws.cell(row_idx, col).value = None
+
+
+def kpi_daily_active_equipment(portal: dict[str, Any]) -> list[dict[str, Any]]:
+    equipment = portal.get("equipment") if isinstance(portal.get("equipment"), list) else []
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in equipment:
+        if not isinstance(item, dict):
+            continue
+        code = normalize_text(item.get("code") or item.get("equipment_code"))
+        if not code or code in seen:
+            continue
+        state = normalized_ascii(item.get("status") or item.get("condition") or "")
+        if item.get("active") is False or item.get("kpi_enabled") is False or state in {"BAJA", "VENDIDO", "FUERA DE OPERACION"}:
+            continue
+        seen.add(code)
+        result.append(
+            {
+                "code": code,
+                "description": normalize_text(item.get("description") or item.get("family") or code),
+                "family": normalize_text(item.get("family") or ""),
+                "status": normalize_text(item.get("status") or item.get("condition") or "DISPONIBLE") or "DISPONIBLE",
+            }
+        )
+    return result
+
+
+def kpi_daily_date_status(portal: dict[str, Any], work_date: str, equipment_code: str) -> str:
+    code = normalize_text(equipment_code)
+    availability = portal.get("availability") if isinstance(portal.get("availability"), list) else []
+    candidates: list[dict[str, Any]] = []
+    for row in availability:
+        if not isinstance(row, dict):
+            continue
+        row_code = normalize_text(row.get("eco") or row.get("equipment_code") or row.get("code"))
+        if row_code != code:
+            continue
+        row_date = str(row.get("updated_date") or row.get("date") or row.get("work_date") or "")[:10]
+        if row_date and row_date <= work_date:
+            candidates.append(row)
+    if candidates:
+        latest = sorted(candidates, key=lambda item: str(item.get("updated_date") or item.get("date") or item.get("work_date") or ""))[-1]
+        status = kpi_status_from_condition_py(latest.get("condition") or latest.get("status"))
+        if status:
+            return status
+    equipment = next((item for item in kpi_daily_active_equipment(portal) if item["code"] == code), None)
+    return kpi_status_from_condition_py((equipment or {}).get("status")) or normalize_text((equipment or {}).get("status") or "DISPONIBLE")
+
+
+def kpi_daily_capture_rows(portal: dict[str, Any], start: str, end: str) -> list[dict[str, Any]]:
+    captures = portal.get("captures") if isinstance(portal.get("captures"), list) else []
+    rows: list[dict[str, Any]] = []
+    for item in captures:
+        if not isinstance(item, dict):
+            continue
+        work_date = str(item.get("work_date") or "")[:10]
+        if not work_date or work_date < start or work_date > end:
+            continue
+        code = normalize_text(item.get("equipment_code") or item.get("equipment"))
+        if code:
+            rows.append(item)
+    return rows
+
+
+def kpi_daily_aggregate_captures(portal: dict[str, Any], start: str, end: str) -> dict[tuple[str, str], dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for capture in kpi_daily_capture_rows(portal, start, end):
+        work_date = str(capture.get("work_date") or "")[:10]
+        code = normalize_text(capture.get("equipment_code") or capture.get("equipment"))
+        if not kpi_capture_component_matches_py(code, capture.get("component") or capture.get("component_name")):
+            continue
+        key = (work_date, code)
+        row = grouped.setdefault(
+            key,
+            {
+                "work_date": work_date,
+                "code": code,
+                "hi_values": [],
+                "hf_values": [],
+                "worked": 0.0,
+                "mp": 0.0,
+                "mc": 0.0,
+                "stops": 0.0,
+                "oil_motor_15w40": 0.0,
+                "oil_hco_iso68": 0.0,
+                "oil_trans_sae30": 0.0,
+                "oil_85w140": 0.0,
+                "almo_liters": 0.0,
+                "coolant_liters": 0.0,
+                "statuses": [],
+                "observations": [],
+            },
+        )
+        hi = parse_float(capture.get("hi") if "hi" in capture else capture.get("horometer_initial"), 0)
+        hf = parse_float(capture.get("hf") if "hf" in capture else capture.get("horometer_final"), 0)
+        if hi:
+            row["hi_values"].append(hi)
+        if hf:
+            row["hf_values"].append(hf)
+        row["worked"] += parse_float(capture.get("worked_hours"), 0)
+        row["mp"] += parse_float(capture.get("mp_hours"), 0)
+        row["mc"] += parse_float(capture.get("mc_hours"), 0)
+        row["stops"] += parse_float(capture.get("stops"), 0)
+        for field in ("oil_motor_15w40", "oil_hco_iso68", "oil_trans_sae30", "oil_85w140", "almo_liters", "coolant_liters"):
+            row[field] += parse_float(capture.get(field), 0)
+        status = normalize_text(capture.get("status"))
+        if status:
+            row["statuses"].append(status)
+        observations = normalize_text(capture.get("observations"))
+        if observations:
+            row["observations"].append(observations)
+    return grouped
+
+
+XML_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+XML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+XML_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+XML_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+XML_X14AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+XML_XR_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+XML_XR2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
+XML_XR3_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3"
+XML_X14_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+XML_XM_NS = "http://schemas.microsoft.com/office/excel/2006/main"
+ET.register_namespace("", XML_MAIN_NS)
+ET.register_namespace("r", XML_REL_NS)
+ET.register_namespace("mc", XML_MC_NS)
+ET.register_namespace("x14ac", XML_X14AC_NS)
+ET.register_namespace("xr", XML_XR_NS)
+ET.register_namespace("xr2", XML_XR2_NS)
+ET.register_namespace("xr3", XML_XR3_NS)
+ET.register_namespace("x14", XML_X14_NS)
+ET.register_namespace("xm", XML_XM_NS)
+
+
+def excel_col_to_number(col: str) -> int:
+    total = 0
+    for char in col.upper():
+        if "A" <= char <= "Z":
+            total = total * 26 + (ord(char) - 64)
+    return total
+
+
+def excel_number_to_col(num: int) -> str:
+    text = ""
+    while num:
+        num, rem = divmod(num - 1, 26)
+        text = chr(65 + rem) + text
+    return text
+
+
+def excel_cell_ref(row: int, col: int) -> str:
+    return f"{excel_number_to_col(col)}{row}"
+
+
+def excel_date_serial(value: date) -> int:
+    return (value - date(1899, 12, 30)).days
+
+
+def xlsm_xml_namespaces() -> dict[str, str]:
+    return {"main": XML_MAIN_NS, "rel": XML_PACKAGE_REL_NS, "r": XML_REL_NS}
+
+
+def xlsm_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in zf.namelist():
+        return []
+    root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+    strings: list[str] = []
+    ns = xlsm_xml_namespaces()
+    for si in root.findall("main:si", ns):
+        parts = [node.text or "" for node in si.findall(".//main:t", ns)]
+        strings.append("".join(parts))
+    return strings
+
+
+def xlsm_sheet_paths(zf: zipfile.ZipFile) -> dict[str, str]:
+    ns = xlsm_xml_namespaces()
+    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
+    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+    rel_targets: dict[str, str] = {}
+    for rel in rels.findall("rel:Relationship", ns):
+        rid = rel.attrib.get("Id", "")
+        target = rel.attrib.get("Target", "")
+        if not rid or not target:
+            continue
+        rel_targets[rid] = "xl/" + target.lstrip("/") if not target.startswith("xl/") else target
+    result: dict[str, str] = {}
+    for sheet in workbook.findall("main:sheets/main:sheet", ns):
+        name = sheet.attrib.get("name", "")
+        rid = sheet.attrib.get(f"{{{XML_REL_NS}}}id", "")
+        path = rel_targets.get(rid, "")
+        if name and path:
+            result[name] = path.replace("\\", "/")
+    return result
+
+
+def xlsm_preserve_ignorable_namespace_declarations(root: ET.Element) -> None:
+    ignorable = root.attrib.get(f"{{{XML_MC_NS}}}Ignorable", "")
+    needed = {
+        "xr2": XML_XR2_NS,
+        "xr3": XML_XR3_NS,
+    }
+    for prefix in ignorable.split():
+        uri = needed.get(prefix)
+        if uri:
+            root.set(f"xmlns:{prefix}", uri)
+
+
+def xlsm_cell_text(cell: ET.Element, shared_strings: list[str]) -> str:
+    ns = xlsm_xml_namespaces()
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        return "".join(node.text or "" for node in cell.findall(".//main:t", ns)).strip()
+    value = cell.find("main:v", ns)
+    if value is None or value.text is None:
+        return ""
+    if cell_type == "s":
+        try:
+            return shared_strings[int(value.text)].strip()
+        except Exception:
+            return ""
+    return str(value.text).strip()
+
+
+def xlsm_sheet_cells(root: ET.Element) -> dict[str, ET.Element]:
+    ns = xlsm_xml_namespaces()
+    cells: dict[str, ET.Element] = {}
+    for cell in root.findall(".//main:c", ns):
+        ref = cell.attrib.get("r")
+        if ref:
+            cells[ref] = cell
+    return cells
+
+
+def xlsm_ensure_row(sheet_data: ET.Element, row_idx: int) -> ET.Element:
+    ns = xlsm_xml_namespaces()
+    for row in sheet_data.findall("main:row", ns):
+        if int(row.attrib.get("r", "0") or 0) == row_idx:
+            return row
+    row = ET.Element(f"{{{XML_MAIN_NS}}}row", {"r": str(row_idx)})
+    inserted = False
+    for idx, existing in enumerate(list(sheet_data)):
+        if existing.tag != f"{{{XML_MAIN_NS}}}row":
+            continue
+        if int(existing.attrib.get("r", "0") or 0) > row_idx:
+            sheet_data.insert(idx, row)
+            inserted = True
+            break
+    if not inserted:
+        sheet_data.append(row)
+    return row
+
+
+def xlsm_ensure_cell(root: ET.Element, row_idx: int, col_idx: int) -> ET.Element:
+    ns = xlsm_xml_namespaces()
+    sheet_data = root.find("main:sheetData", ns)
+    if sheet_data is None:
+        sheet_data = ET.SubElement(root, f"{{{XML_MAIN_NS}}}sheetData")
+    row = xlsm_ensure_row(sheet_data, row_idx)
+    ref = excel_cell_ref(row_idx, col_idx)
+    for cell in row.findall("main:c", ns):
+        if cell.attrib.get("r") == ref:
+            return cell
+    cell = ET.Element(f"{{{XML_MAIN_NS}}}c", {"r": ref})
+    inserted = False
+    for idx, existing in enumerate(list(row)):
+        if existing.tag != f"{{{XML_MAIN_NS}}}c":
+            continue
+        existing_ref = existing.attrib.get("r", "")
+        existing_col = re.sub(r"\d+", "", existing_ref)
+        if excel_col_to_number(existing_col) > col_idx:
+            row.insert(idx, cell)
+            inserted = True
+            break
+    if not inserted:
+        row.append(cell)
+    return cell
+
+
+def xlsm_set_cell(root: ET.Element, row_idx: int, col_idx: int, value: Any) -> None:
+    cell = xlsm_ensure_cell(root, row_idx, col_idx)
+    xlsm_write_cell(cell, row_idx, col_idx, value)
+
+
+def xlsm_write_cell(cell: ET.Element, row_idx: int, col_idx: int, value: Any) -> None:
+    style = cell.attrib.get("s")
+    cell.attrib.clear()
+    cell.attrib["r"] = excel_cell_ref(row_idx, col_idx)
+    if style:
+        cell.attrib["s"] = style
+    for child in list(cell):
+        cell.remove(child)
+    if value is None or value == "":
+        return
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        cell.attrib["t"] = "n"
+        ET.SubElement(cell, f"{{{XML_MAIN_NS}}}v").text = f"{float(value):.10g}"
+        return
+    cell.attrib["t"] = "inlineStr"
+    inline = ET.SubElement(cell, f"{{{XML_MAIN_NS}}}is")
+    text = ET.SubElement(inline, f"{{{XML_MAIN_NS}}}t")
+    text.text = str(value)
+
+
+def xlsm_set_cell_cached(root: ET.Element, cells: dict[str, ET.Element], row_idx: int, col_idx: int, value: Any) -> None:
+    ref = excel_cell_ref(row_idx, col_idx)
+    cell = cells.get(ref)
+    if cell is None:
+        cell = xlsm_ensure_cell(root, row_idx, col_idx)
+        cells[ref] = cell
+    xlsm_write_cell(cell, row_idx, col_idx, value)
+
+
+def xlsm_cell_xml(ref: str, value: Any, style: str = "") -> str:
+    style_attr = f' s="{style}"' if style else ""
+    if value is None or value == "":
+        return f'<c r="{ref}"{style_attr}/>'
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f'<c r="{ref}"{style_attr}><v>{float(value):.10g}</v></c>'
+    text = xml_escape(str(value), {'"': "&quot;"})
+    preserve = ' xml:space="preserve"' if text.strip() != text else ""
+    return f'<c r="{ref}"{style_attr} t="inlineStr"><is><t{preserve}>{text}</t></is></c>'
+
+
+def xlsm_replace_cell_text(sheet_xml: str, row_idx: int, col_idx: int, value: Any) -> str:
+    ref = excel_cell_ref(row_idx, col_idx)
+    pattern = re.compile(
+        rf'<c\b(?=[^>]*\br="{re.escape(ref)}")[^>]*/>|<c\b(?=[^>]*\br="{re.escape(ref)}")[^>]*>.*?</c>',
+        re.DOTALL,
+    )
+    match = pattern.search(sheet_xml)
+    if match:
+        cell_text = match.group(0)
+        style_match = re.search(r'\bs="([^"]+)"', cell_text)
+        replacement = xlsm_cell_xml(ref, value, style_match.group(1) if style_match else "")
+        return sheet_xml[: match.start()] + replacement + sheet_xml[match.end() :]
+    row_pattern = re.compile(rf'(<row\b(?=[^>]*\br="{row_idx}")[^>]*>)(.*?)(</row>)', re.DOTALL)
+    row_match = row_pattern.search(sheet_xml)
+    if not row_match:
+        return sheet_xml
+    replacement = row_match.group(1) + row_match.group(2) + xlsm_cell_xml(ref, value) + row_match.group(3)
+    return sheet_xml[: row_match.start()] + replacement + sheet_xml[row_match.end() :]
+
+
+KPI_DAILY_XLSM_TEMPLATE_PATH = STATIC_DIR / "kpi_diario_template.xlsm"
+
+
 def build_monthly_kpi_daily_xlsm_text_fast(portal: dict[str, Any], year: int, month: int) -> BytesIO:
     if not KPI_DAILY_XLSM_TEMPLATE_PATH.exists():
         raise HTTPException(status_code=500, detail="No esta cargada la plantilla XLSM de KPI diario.")
