@@ -7814,6 +7814,8 @@ def get_kpi_format_excel(
 
 
 import zipfile
+import calendar
+from calendar import monthrange
 import xml.etree.ElementTree as ET
 
 KPI_DAILY_DATA_COLUMNS = {
