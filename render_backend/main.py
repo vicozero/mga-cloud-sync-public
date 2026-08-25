@@ -7,6 +7,7 @@ import os
 import re
 from copy import copy
 import tempfile
+import time
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
@@ -569,6 +570,39 @@ async def block_removed_epp_module(request: Request, call_next):
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+_READ_CACHE: dict[str, tuple[float, bytes]] = {}
+_READ_CACHE_TTL = 45.0
+_READ_CACHE_PATHS = {
+    "/api/requisitions",
+    "/api/lubricantes",
+    "/api/lubricantes/movimientos",
+    "/api/stats",
+    "/api/epp",
+    "/api/filter-inventory",
+    "/api/tire-tracking",
+    "/api/diesel",
+    "/api/portal",
+}
+
+
+@app.middleware("http")
+async def read_cache_middleware(request: Request, call_next):
+    if request.method == "GET" and request.url.path in _READ_CACHE_PATHS:
+        key = str(request.url)
+        now = time.monotonic()
+        hit = _READ_CACHE.get(key)
+        if hit is not None and now - hit[0] < _READ_CACHE_TTL:
+            return Response(content=hit[1], media_type="application/json", headers={"X-Cache": "HIT", "Cache-Control": "no-store"})
+        resp = await call_next(request)
+        if resp.status_code == 200:
+            body = b""
+            async for chunk in resp.body_iterator:
+                body += chunk
+            _READ_CACHE[key] = (now, body)
+            return Response(content=body, media_type=resp.media_type or "application/json", headers={"Cache-Control": "no-store"})
+        return resp
+    return await call_next(request)
 PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
 REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
 REQUISITION_TRACKING_TEMPLATE_PATH = STATIC_DIR / "requisition_tracking_template.xlsx"
