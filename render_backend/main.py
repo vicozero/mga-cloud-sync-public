@@ -469,7 +469,7 @@ def peer_from_request(request: Request) -> str:
     return ip[:180] or "unknown"
 
 
-def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 1800) -> None:
+def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 90) -> None:
     key = f"{peer or peer_from_request(request)}:{request.url.path}"
     now = datetime.now(timezone.utc)
     last = _throttle_memory.get(key)
