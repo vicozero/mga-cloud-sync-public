@@ -469,7 +469,7 @@ def peer_from_request(request: Request) -> str:
     return ip[:180] or "unknown"
 
 
-def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 90) -> None:
+def throttle_sync(request: Request, peer: str = "", min_interval_s: int = 25) -> None:
     key = f"{peer or peer_from_request(request)}:{request.url.path}"
     now = datetime.now(timezone.utc)
     last = _throttle_memory.get(key)
@@ -20394,7 +20394,6 @@ def desktop_pending(
     _auth: str | None = Header(default=None, alias="X-MGA-API-Key"),
 ) -> dict[str, Any]:
     require_api_key(_auth)
-    throttle_sync(request)
     with SessionLocal() as session:
         sort_order = MobileCapture.id.desc() if str(order or "").lower().startswith("desc") else MobileCapture.id.asc()
         query = select(MobileCapture).order_by(sort_order).limit(limit)
