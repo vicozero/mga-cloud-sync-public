@@ -1,0 +1,11 @@
+.git/
+.agents/
+.gitignore
+.gitattributes
+scripts/
+*.md
+render.yaml
+_uv/
+api/.vercel/
+.vercel/output/
+.vercel/
