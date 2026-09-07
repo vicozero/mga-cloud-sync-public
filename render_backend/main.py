@@ -39,6 +39,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, and_, case, create_engine, delete, func, select, text as sql_text
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.pool import NullPool
 
 try:
     from .kpi_editable_excel import build_editable_kpi_excel
@@ -532,7 +533,7 @@ LUBRICANT_PRESENTATIONS_WEB = [
 LUBRICANT_PRESENTATION_FACTORS = {name.upper(): float(factor) for name, factor in LUBRICANT_PRESENTATIONS_WEB}
 
 
-engine = create_engine(database_url(), pool_pre_ping=True)
+engine = create_engine(database_url(), pool_pre_ping=True, poolclass=NullPool)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
