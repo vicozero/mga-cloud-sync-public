@@ -19873,59 +19873,84 @@ def insp_generar_ot(session: Session, hallazgo_id: int) -> dict[str, Any]:
 def insp_tarjeta_cover(canvas, doc):
     width, height = letter
     canvas.saveState()
-    canvas.setFillColor(colors.HexColor(MGA_BLUE))
-    canvas.rect(0, height - 0.56 * inch, width, 0.56 * inch, stroke=0, fill=1)
-    canvas.setFillColor(colors.HexColor(MGA_RED))
-    canvas.rect(width - 1.85 * inch, height - 0.56 * inch, 1.85 * inch, 0.56 * inch, stroke=0, fill=1)
+    blue = colors.HexColor(MGA_BLUE)
+    red = colors.HexColor(MGA_RED)
+    canvas.setFillColor(blue)
+    canvas.rect(0, height - 0.62 * inch, width, 0.62 * inch, stroke=0, fill=1)
+    canvas.setFillColor(red)
+    canvas.rect(0, height - 0.665 * inch, width, 0.045 * inch, stroke=0, fill=1)
     canvas.setFillColor(colors.white)
-    canvas.setFont("Helvetica-Bold", 13)
-    canvas.drawCentredString(width * 0.37, height - 0.33 * inch, "PLAN SEMANAL DE INSPECCION")
-    canvas.setFont("Helvetica", 7.5)
-    canvas.drawCentredString(width * 0.37, height - 0.20 * inch, "MANTENIMIENTO PREDICTIVO")
+    canvas.circle(0.88 * inch, height - 0.31 * inch, 0.22 * inch, stroke=0, fill=1)
+    canvas.setFillColor(blue)
     canvas.setFont("Helvetica-Bold", 11)
-    canvas.drawCentredString(width - 0.925 * inch, height - 0.33 * inch, "TARJETA")
-    canvas.setFont("Helvetica-Bold", 7.5)
-    canvas.drawCentredString(width - 0.925 * inch, height - 0.20 * inch, "DE CAMPO")
+    canvas.drawCentredString(0.88 * inch, height - 0.335 * inch, "MGA")
+    canvas.setFillColor(colors.white)
+    canvas.setFont("Helvetica-Bold", 14)
+    canvas.drawCentredString(width * 0.40, height - 0.34 * inch, "PLAN SEMANAL DE INSPECCION")
+    canvas.setFont("Helvetica", 7.8)
+    canvas.drawCentredString(width * 0.40, height - 0.19 * inch, "MANTENIMIENTO PREDICTIVO")
+    canvas.setFillColor(red)
+    canvas.roundRect(width - 1.78 * inch, height - 0.50 * inch, 1.58 * inch, 0.40 * inch, 6, stroke=0, fill=1)
+    canvas.setFillColor(colors.white)
+    canvas.setFont("Helvetica-Bold", 9.5)
+    canvas.drawCentredString(width - 0.99 * inch, height - 0.365 * inch, "TARJETA")
+    canvas.setFont("Helvetica-Bold", 8)
+    canvas.drawCentredString(width - 0.99 * inch, height - 0.235 * inch, "DE CAMPO")
     canvas.setFillColor(colors.HexColor("#64748b"))
     canvas.setFont("Helvetica", 6.2)
-    canvas.drawString(doc.leftMargin, height - 0.63 * inch, "Documento de campo para registro de inspeccion predictiva | Impreso: " + utc_now().strftime("%d/%m/%Y %H:%M:%S"))
+    canvas.drawString(doc.leftMargin, height - 0.80 * inch, "Documento de campo para registro de inspeccion predictiva")
+    canvas.drawRightString(width - doc.rightMargin, height - 0.80 * inch, "Impreso: " + utc_now().strftime("%d/%m/%Y %H:%M:%S"))
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
-    canvas.setLineWidth(0.6)
-    canvas.line(doc.leftMargin, 0.55 * inch, width - doc.rightMargin, 0.55 * inch)
+    canvas.setLineWidth(0.8)
+    canvas.line(doc.leftMargin, 0.46 * inch, width - doc.rightMargin, 0.46 * inch)
+    canvas.setLineWidth(0.4)
+    canvas.line(doc.leftMargin, 0.52 * inch, width - doc.rightMargin, 0.52 * inch)
     canvas.setFillColor(colors.HexColor("#64748b"))
     canvas.setFont("Helvetica", 6.2)
-    canvas.drawString(doc.leftMargin, 0.40 * inch, "MGA | Sistema de gestion de mantenimiento - Inspeccion predictiva")
-    canvas.drawRightString(width - doc.rightMargin, 0.40 * inch, "Hoja " + str(canvas.getPageNumber()))
+    canvas.drawString(doc.leftMargin, 0.30 * inch, "MGA | Sistema de gestion de mantenimiento - Inspeccion predictiva")
+    canvas.drawRightString(width - doc.rightMargin, 0.30 * inch, "Hoja " + str(canvas.getPageNumber()))
     canvas.restoreState()
 
 
 def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: list[dict[str, Any]], semana: str = "", dia_label: str = "") -> bytes:
     stream = BytesIO()
-    doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.72 * inch, bottomMargin=0.62 * inch)
+    doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.92 * inch, bottomMargin=0.72 * inch)
     styles = report_styles()
-    styles.add(ParagraphStyle("MgaTarjetaSection", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9.5, leading=10.5, textColor=colors.HexColor("#0f172a"), spaceBefore=5, spaceAfter=3))
-    styles.add(ParagraphStyle("MgaTjLabel", parent=styles["Normal"], fontSize=6.6, leading=7.6, textColor=colors.HexColor("#172033")))
-    styles.add(ParagraphStyle("MgaTjMeta", parent=styles["Normal"], fontSize=6.6, leading=7.4, textColor=colors.HexColor("#172033")))
+    styles.add(ParagraphStyle("MgaTarjetaSection", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9.5, leading=11, textColor=colors.HexColor("#0f172a"), spaceBefore=7, spaceAfter=3))
+    styles.add(ParagraphStyle("MgaTjField", parent=styles["Normal"], fontSize=6.6, leading=7.8, textColor=colors.HexColor("#172033")))
     styles.add(ParagraphStyle("MgaTjCell", parent=styles["Normal"], fontSize=6.0, leading=6.8, textColor=colors.HexColor("#172033")))
     styles.add(ParagraphStyle("MgaTjHeader", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=5.8, leading=6.6, textColor=colors.white, alignment=1))
     page_width = letter[0] - doc.leftMargin - doc.rightMargin
     code = str(equipo.get("code") or "")
     marca_modelo = f"{equipo.get('brand') or ''} {equipo.get('model') or ''}".strip() or "-"
     semana_lbl = report_pdf_text(dia_label) or (report_pdf_text(semana) or "-")
-    blank = "____________________"
+    blue = colors.HexColor(MGA_BLUE)
+    red = colors.HexColor(MGA_RED)
 
-    def dato(label: str, value: str, blank_value: bool = False) -> Paragraph:
-        v = value if value and not blank_value else (value if value else blank)
-        return Paragraph(f"<font size='5.6' color='#475569'><b>{report_pdf_text(label).upper()}</b></font><br/><font size='7.2' color='#0f172a'>{report_pdf_text(v)}</font>", styles["MgaTjLabel"])
+    def campo(label: str, value: str = "") -> Paragraph:
+        v = value.strip() if value else ""
+        color = "#0f172a" if v else "#94a3b8"
+        v = v if v else "______"
+        return Paragraph(f"<font size='5.4' color='#64748b'><b>{report_pdf_text(label).upper()}</b></font><br/><font size='7.4' color='{color}'><b>{report_pdf_text(v)}</b></font>", styles["MgaTjField"])
 
-    meta = [
-        [dato("Unidad", code), dato("Tipo", str(equipo.get("type") or "") or "-"), dato("Semana", semana_lbl)],
-        [dato("Descripcion", str(equipo.get("description") or "") or "-"), dato("Marca / Modelo", marca_modelo), dato("Plantilla", plantilla_tipo or "GENERAL")],
-        [dato("Fecha", "", blank_value=True), dato("Horometro", "", blank_value=True), dato("Turno", "", blank_value=True)],
-        [dato("Inspector", "", blank_value=True), "", ""],
+    meta_rows = [
+        [campo("Unidad", code), campo("Tipo", str(equipo.get("type") or "")), campo("Semana", semana_lbl)],
+        [campo("Descripcion", str(equipo.get("description") or "")), campo("Marca / Modelo", marca_modelo), campo("Plantilla", plantilla_tipo or "GENERAL")],
+        [campo("Fecha"), campo("Horometro"), campo("Turno")],
+        [campo("Inspector"), Paragraph("", styles["MgaTjField"]), Paragraph("", styles["MgaTjField"])],
     ]
-    story = [Paragraph("Datos generales", styles["MgaTarjetaSection"])]
-    story.append(report_table(meta, [page_width / 3.0, page_width / 3.0, page_width / 3.0], styles, header_bg=MGA_BLUE, cell_style=styles["MgaTjLabel"], header_style=styles["MgaTjHeader"], row_padding=(3, 3)))
+    meta_table = Table(meta_rows, colWidths=[page_width / 3.0] * 3, hAlign="LEFT")
+    meta_table.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.7, colors.HexColor("#cbd5e1")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+    ]))
+    story = [Paragraph("Datos generales", styles["MgaTarjetaSection"]), meta_table]
+
     story.append(Paragraph("Resultado de la inspeccion", styles["MgaTarjetaSection"]))
     rows = [["#", "Sistema", "Punto a revisar", "Calificacion", "Nota / falla"]]
     numero = 0
@@ -19936,14 +19961,36 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
             rows.append([str(numero), str(grupo.get("sistema") or ""), str(it.get("item") or ""), "", ""])
     if len(rows) == 1:
         rows.append(["", "", "Sin puntos de inspeccion definidos.", "", ""])
-    story.append(report_table(rows, [0.42 * inch, 1.55 * inch, page_width - 0.42 * inch - 1.55 * inch - 1.05 * inch - 1.60 * inch, 1.05 * inch, 1.60 * inch], styles, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(0.5, 0.5)))
-    story.append(Paragraph("<font size='6.2' color='#475569'><b>Calificacion:</b> N = Normal &nbsp;&nbsp;|&nbsp;&nbsp; O = Observacion &nbsp;&nbsp;|&nbsp;&nbsp; D = Desgaste &nbsp;&nbsp;|&nbsp;&nbsp; C = Falla critica &nbsp;&nbsp;|&nbsp;&nbsp; NA = No aplica</font>", styles["MgaTjLabel"]))
+    widths = [0.32 * inch, 1.50 * inch, page_width - 0.32 * inch - 1.50 * inch - 1.00 * inch - 1.50 * inch, 1.00 * inch, 1.50 * inch]
+    story.append(report_table(rows, widths, styles, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(1.6, 1.6)))
+
+    def chip(texto: str, hexcolor: str) -> Paragraph:
+        return Paragraph(f"<font color='white' size='5.6'><b>{texto}</b></font>",
+                         ParagraphStyle("chip", parent=styles["Normal"], fontSize=5.6, leading=7.2, alignment=1, backColor=colors.HexColor(hexcolor), leftIndent=3, rightIndent=3, borderPadding=2))
+    chips = Table([[chip("N Normal", "#16a34a"), chip("O Observacion", "#ca8a04"), chip("D Desgaste", "#ea580c"), chip("C Falla critica", "#dc2626"), chip("NA No aplica", "#64748b")]], colWidths=[page_width / 5.0] * 5, hAlign="LEFT")
+    chips.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 1), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+    story.append(chips)
+
     story.append(Paragraph("Observaciones generales", styles["MgaTarjetaSection"]))
-    story.append(Paragraph("<font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font>", styles["MgaTjCell"]))
-    story.append(report_table([
-        [dato("Firma del mecanico", ""), dato("Firma del supervisor", "")],
-        ["<br/><br/><br/><br/><br/>", "<br/><br/><br/><br/><br/>"],
-    ], [page_width / 2.0, page_width / 2.0], styles, header_bg=MGA_BLUE, cell_style=styles["MgaTjMeta"], header_style=styles["MgaTjHeader"], row_padding=(2, 2)))
+    obs = Table([[Paragraph("<font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font>", styles["MgaTjCell"])]], colWidths=[page_width], hAlign="LEFT")
+    obs.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#cbd5e1")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(obs)
+
+    story.append(Paragraph("Firmas de conformidad", styles["MgaTarjetaSection"]))
+    signature = [
+        ["FIRMA DEL MECANICO", "FIRMA DEL SUPERVISOR"],
+        ["<br/><br/><br/><br/><br/><br/><br/>", "<br/><br/><br/><br/><br/><br/><br/>"],
+        ["Firma y nombre de quien realiza la inspeccion", "Firma y nombre del supervisor"],
+    ]
+    cap = ParagraphStyle("cap", parent=styles["Normal"], fontSize=5.8, leading=7.0, textColor=colors.HexColor("#64748b"), alignment=1)
+    story.append(report_table(signature, [page_width / 2.0, page_width / 2.0], styles, header_bg=MGA_BLUE, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(4, 4)))
+    story.append(Paragraph("<font color='#64748b' size='6'>Al firmar, el mecanico certifica haber efectuado la inspeccion y registrado las fallas encontradas para su seguimiento y correccion.</font>",
+                           ParagraphStyle("nota", parent=styles["Normal"], fontSize=6, leading=8, textColor=colors.HexColor("#64748b"), alignment=1)))
     doc.build(story, onFirstPage=insp_tarjeta_cover, onLaterPages=insp_tarjeta_cover)
     return stream.getvalue()
 
