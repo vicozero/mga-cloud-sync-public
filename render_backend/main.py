@@ -573,6 +573,10 @@ if STATIC_DIR.exists():
 
 _READ_CACHE: dict[str, tuple[float, bytes]] = {}
 _READ_CACHE_TTL = 45.0
+_READ_CACHE_TTL_OVERRIDES = {
+    "/api/portal": 60.0,
+    "/api/desktop/pending": 5.0,
+}
 _READ_CACHE_PATHS = {
     "/api/requisitions",
     "/api/lubricantes",
@@ -583,6 +587,7 @@ _READ_CACHE_PATHS = {
     "/api/tire-tracking",
     "/api/diesel",
     "/api/portal",
+    "/api/desktop/pending",
 }
 
 
@@ -591,8 +596,9 @@ async def read_cache_middleware(request: Request, call_next):
     if request.method == "GET" and request.url.path in _READ_CACHE_PATHS:
         key = str(request.url)
         now = time.monotonic()
+        ttl = _READ_CACHE_TTL_OVERRIDES.get(request.url.path, _READ_CACHE_TTL)
         hit = _READ_CACHE.get(key)
-        if hit is not None and now - hit[0] < _READ_CACHE_TTL:
+        if hit is not None and now - hit[0] < ttl:
             return Response(content=hit[1], media_type="application/json", headers={"X-Cache": "HIT", "Cache-Control": "no-store"})
         resp = await call_next(request)
         if resp.status_code == 200:
