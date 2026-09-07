@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import json
@@ -1487,20 +1487,20 @@ def requisition_tracking_field_for(header: Any) -> str | None:
         "FOLIO": "folio",
         "REQUISICION": "folio",
         "REQUISICIONES": "folio",
-        "REQUISICIÓN": "folio",
+        "REQUISICIÃ“N": "folio",
         "REQ": "folio",
         "NUMREQ": "folio",
         "NOREQ": "folio",
         "NOREQUISICION": "folio",
-        "NOREQUISICIÓN": "folio",
+        "NOREQUISICIÃ“N": "folio",
         "NUMEROREQ": "folio",
         "NUMEROREQUISICION": "folio",
-        "NUMEROREQUISICIÓN": "folio",
+        "NUMEROREQUISICIÃ“N": "folio",
         "FOLIOREQ": "folio",
         "FOLIOREQUISICION": "folio",
         "NO": "folio",
         "DESCRIPCION": "description",
-        "DESCRIPCIÃ“N": "description",
+        "DESCRIPCIÃƒâ€œN": "description",
         "DESCRIPCIONREQ": "description",
         "CONCEPTO": "description",
         "NOECON": "equipment",
@@ -5079,7 +5079,7 @@ AVAILABILITY_CATEGORY_NAMES = {
     "RETROEXCAVADORA": "RETROEXCAVADORAS",
     "ACARREO": "ACARREO",
     "VEHICULOS LIGEROS": "VEHICULOS LIGEROS",
-    "VEHÍCULOS LIGEROS": "VEHICULOS LIGEROS",
+    "VEHÃCULOS LIGEROS": "VEHICULOS LIGEROS",
     "JUMBO ANCLADOR": "JUMBO ANCLADOR",
 }
 
@@ -5089,7 +5089,7 @@ AVAILABILITY_CONDITIONS = ["FUERA DE SERVICIO", "NO DISPONIBLE", "DISPONIBLE", "
 
 def availability_import_date_from_text(text: str) -> str:
     clean = text.replace("\x00", ":")
-    match = re.search(r"(\d{1,2})\s+de\s+([A-Za-zÁÉÍÓÚáéíóúñÑ]+)\s+de\s+(\d{4})", clean, flags=re.I)
+    match = re.search(r"(\d{1,2})\s+de\s+([A-Za-zÃÃ‰ÃÃ“ÃšÃ¡Ã©Ã­Ã³ÃºÃ±Ã‘]+)\s+de\s+(\d{4})", clean, flags=re.I)
     if not match:
         return date.today().isoformat()
     day = int(match.group(1))
@@ -5770,8 +5770,8 @@ def build_oil_consumption_excel(portal: dict[str, Any], start: str, end: str) ->
         ws.merge_cells("A1:I5")
         ws["A1"] = "                                    MGA CONTRATISTA MIINERA S.A DE C.V. "
         ws["J1"] = "Fecha:"
-        ws["J2"] = "Elaboró:"
-        ws["J3"] = "Revisó:"
+        ws["J2"] = "ElaborÃ³:"
+        ws["J3"] = "RevisÃ³:"
         ws["J4"] = "Autorizo:"
         ws["K2"] = "Programador"
         ws["K3"] = "Coordinador de Mtto"
@@ -6417,7 +6417,7 @@ def iter_pptx_shapes(shapes):
 
 
 def update_monthly_ppt_text(prs: Presentation, month_name: str, year: int) -> None:
-    month_pattern = r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+"
+    month_pattern = r"[A-Za-zÃÃ‰ÃÃ“ÃšÃœÃ‘Ã¡Ã©Ã­Ã³ÃºÃ¼Ã±]+"
     for slide in prs.slides:
         for shape in iter_pptx_shapes(slide.shapes):
             if not getattr(shape, "has_text_frame", False):
@@ -6442,7 +6442,7 @@ def update_monthly_ppt_text(prs: Presentation, month_name: str, year: int) -> No
                     run.text = text
 
 def update_weekly_ppt_text(prs: Presentation, label: str, month_name: str, year: int) -> None:
-    month_pattern = r"[A-Za-zÃÃ‰ÃÃ“ÃšÃœÃ‘Ã¡Ã©Ã­Ã³ÃºÃ¼Ã±]+"
+    month_pattern = r"[A-Za-zÃƒÂÃƒâ€°ÃƒÂÃƒâ€œÃƒÅ¡ÃƒÅ“Ãƒâ€˜ÃƒÂ¡ÃƒÂ©ÃƒÂ­ÃƒÂ³ÃƒÂºÃƒÂ¼ÃƒÂ±]+"
     for slide in prs.slides:
         for shape in iter_pptx_shapes(slide.shapes):
             if not getattr(shape, "has_text_frame", False):
@@ -10261,7 +10261,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
 </head>
 <body class="warehouse-page">
   <div class="mobile-overlay" id="mobileOverlay" onclick="toggleMobileMenu()"></div>
-  <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Ocultar / mostrar menu" aria-label="Ocultar o mostrar barra lateral">☰</button>
+  <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Ocultar / mostrar menu" aria-label="Ocultar o mostrar barra lateral">â˜°</button>
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
@@ -10434,9 +10434,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="panel" style="margin-top:16px;">
         <div class="subtle-title"><h3>Cortes mensuales</h3><span class="muted">Saldo al cierre de cada mes. Si capturas consumo y luego agregas la entrada con su fecha, el corte se recalcula y se valida solo.</span></div>
         <div class="filter-row" style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
-          <label>Año<select id="lubCutsYear"></select></label>
+          <label>AÃ±o<select id="lubCutsYear"></select></label>
           <button class="btn secondary" id="lubCutsBtn">Ver cortes</button>
-          <span class="muted">Rojo = mes cerró en negativo (falta entrada)</span>
+          <span class="muted">Rojo = mes cerrÃ³ en negativo (falta entrada)</span>
         </div>
         <div class="table-wrap" style="max-height:420px;"><table id="lubCutsTable"></table></div>
       </div>
@@ -10662,16 +10662,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
               <button type="button" class="btn secondary" id="editFichaImageSelectBtn">Seleccionar foto</button>
               <button type="button" class="btn secondary" id="editFichaImageClearBtn" style="display:none;">Quitar foto</button>
             </div>
-            <p class="muted small">Máx. 2 MB. Se redimensiona automáticamente a 800px.</p>
+            <p class="muted small">MÃ¡x. 2 MB. Se redimensiona automÃ¡ticamente a 800px.</p>
           </div>
           <div class="modal-fields-grid">
-            <label>Descripción<input id="editFichaDesc" placeholder="Descripción del equipo"></label>
+            <label>DescripciÃ³n<input id="editFichaDesc" placeholder="DescripciÃ³n del equipo"></label>
             <label>Familia / Grupo<input id="editFichaFamily" placeholder="Familia o grupo"></label>
             <label>Tipo de equipo<input id="editFichaType" placeholder="Ej. JUMBO, CAMION, SCOOP..."></label>
             <label>Marca<input id="editFichaBrand" placeholder="Marca"></label>
             <label>Modelo<input id="editFichaModel" placeholder="Modelo"></label>
-            <label>Serie<input id="editFichaSerial" placeholder="Número de serie"></label>
-            <label>Ubicación<input id="editFichaLocation" placeholder="Ubicación / mina / área"></label>
+            <label>Serie<input id="editFichaSerial" placeholder="NÃºmero de serie"></label>
+            <label>UbicaciÃ³n<input id="editFichaLocation" placeholder="UbicaciÃ³n / mina / Ã¡rea"></label>
             <label class="wide">Notas<textarea id="editFichaNotes" rows="3" placeholder="Observaciones adicionales"></textarea></label>
           </div>
         </div>
@@ -10790,7 +10790,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
       </div>
       <div class="panel toolbar">
-        <label>Periodo<select id="prPeriod"><option>Mes</option><option>Semana</option><option>Año</option></select></label>
+        <label>Periodo<select id="prPeriod"><option>Mes</option><option>Semana</option><option>AÃ±o</option></select></label>
         <label>Fecha base<input id="prBase" type="date"></label>
         <label>Equipo<select id="prEquipment"></select></label>
         <label>Equipos reporte<select id="serviceReportEquipment" multiple size="4"></select></label>
@@ -11433,11 +11433,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="panel">
           <div class="subtle-title"><h3>Acciones rapidas</h3><span class="muted">Entrada, salida, kardex y reporte</span></div>
           <div class="warehouse-quick">
-            <button type="button" data-warehouse-action="ENTRADA"><b>↓</b>Entrada de filtros</button>
-            <button type="button" data-warehouse-action="SALIDA"><b>↑</b>Salida de filtros</button>
-            <button type="button" data-warehouse-action="KARDEX"><b>▦</b>Kardex</button>
-            <button type="button" data-warehouse-action="REPORTE"><b>▤</b>Reporte inventario</button>
-            <button type="button" data-warehouse-action="REQUISICION" id="autoRequisitionBtn" style="background:linear-gradient(135deg,#b45309,#92400e);color:white;"><b>⚡</b>Requisicion por faltantes</button>
+            <button type="button" data-warehouse-action="ENTRADA"><b>â†“</b>Entrada de filtros</button>
+            <button type="button" data-warehouse-action="SALIDA"><b>â†‘</b>Salida de filtros</button>
+            <button type="button" data-warehouse-action="KARDEX"><b>â–¦</b>Kardex</button>
+            <button type="button" data-warehouse-action="REPORTE"><b>â–¤</b>Reporte inventario</button>
+            <button type="button" data-warehouse-action="REQUISICION" id="autoRequisitionBtn" style="background:linear-gradient(135deg,#b45309,#92400e);color:white;"><b>âš¡</b>Requisicion por faltantes</button>
           </div>
         </div>
       </div>
@@ -11547,7 +11547,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Recibio<input id="eppDelReceived"></label>
             <label>Firma texto<input id="eppDelSignature"></label>
             <label>Capacitado<select id="eppDelTraining"><option value="1">Si</option><option value="0">No</option></select></label>
-            <label>Estado<select id="eppDelCondition"><option>ENTREGADO</option><option>REPOSICION</option><option>DAÑADO</option><option>BAJA</option></select></label>
+            <label>Estado<select id="eppDelCondition"><option>ENTREGADO</option><option>REPOSICION</option><option>DAÃ‘ADO</option><option>BAJA</option></select></label>
             <label class="wide">Notas<textarea id="eppDelNotes" rows="2"></textarea></label>
             <button class="btn wide" id="eppDelBtn">Registrar entrega</button>
             <button class="btn secondary wide" id="eppLastPdfBtn">PDF ultima entrega</button>
@@ -11660,7 +11660,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       document.body.classList.toggle("sidebar-collapsed", collapsed);
       const btn = $("sidebarToggle");
       if(btn){
-        btn.textContent = collapsed ? "☰" : "‹";
+        btn.textContent = collapsed ? "â˜°" : "â€¹";
         btn.title = collapsed ? "Mostrar menu" : "Ocultar menu";
       }
     }
@@ -11734,7 +11734,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         .map(item => item.trim())
         .filter(Boolean)
         .map(item => {
-          const match = item.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ.]+)?$/);
+          const match = item.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-zÃÃ‰ÃÃ“ÃšÃœÃ‘Ã¡Ã©Ã­Ã³ÃºÃ¼Ã±.]+)?$/);
           if(!match) return null;
           return {
             part_number: match[1].trim().toUpperCase(),
@@ -12336,10 +12336,10 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       const noStock = rows.filter(row => Number(row.quantity || 0) <= 0).length;
       const totalValue = rows.reduce((acc,row) => acc + Number(row.quantity || 0) * warehouseUnitCost(row), 0);
       const kpis = [
-        ["◆", totalParts.toLocaleString("es-MX"), "Filtros registrados", "En catalogo", ""],
-        ["✓", num(totalQty), "En inventario", "Disponibles", "good"],
+        ["â—†", totalParts.toLocaleString("es-MX"), "Filtros registrados", "En catalogo", ""],
+        ["âœ“", num(totalQty), "En inventario", "Disponibles", "good"],
         ["!", lowStock.toLocaleString("es-MX"), "Stock bajo", "Por debajo del minimo", "warn"],
-        ["△", noStock.toLocaleString("es-MX"), "Sin stock", "Requieren atencion", "bad"],
+        ["â–³", noStock.toLocaleString("es-MX"), "Sin stock", "Requieren atencion", "bad"],
         ["$", warehouseMoney(totalValue), "Valor inventario", totalValue ? "Costo total" : "Sin costo capturado", "money"],
       ];
       $("warehouseStats").innerHTML = kpis.map(([icon,value,label,note,cls]) => `
@@ -12364,7 +12364,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       $("warehouseMovementFeed").innerHTML = (movements.slice(0,5).map(row => {
         const type = String(row.movement_type || "").toUpperCase();
         const cls = type === "SALIDA" ? "out" : (type === "AJUSTE" ? "adjust" : "");
-        const symbol = type === "SALIDA" ? "↑" : (type === "AJUSTE" ? "±" : "↓");
+        const symbol = type === "SALIDA" ? "â†‘" : (type === "AJUSTE" ? "Â±" : "â†“");
         return `<div class="warehouse-feed-row ${cls}"><i>${symbol}</i><div><strong>${esc(type || "MOVIMIENTO")} ${esc(row.part_number || "")}</strong><span>${esc(row.reference || row.movement_date || "")}</span></div><em>${type === "SALIDA" ? "-" : "+"}${num(row.quantity)}</em></div>`;
       }).join("") || `<div class="muted">Sin movimientos registrados.</div>`);
       const distTotal = categories.reduce((acc,[,bucket]) => acc + Number(bucket.qty || 0), 0) || 1;
@@ -13603,7 +13603,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
     }
     function workOrderLines(value){
       const text = String(value || "").replace(/\r/g, "\n");
-      return text.split(/\n|;|•/).map(line => line.replace(/^[-\d.)\s]+/, "").trim()).filter(Boolean);
+      return text.split(/\n|;|â€¢/).map(line => line.replace(/^[-\d.)\s]+/, "").trim()).filter(Boolean);
     }
     function workOrderPartsRows(value){
       const lines = workOrderLines(value);
@@ -13703,7 +13703,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         .mini h3 small{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:#c8102e;margin-right:8px;color:#fff}
         .mini ul{margin:8px 18px 10px;padding-left:12px;font-size:12px;line-height:1.35}
         .mini .note{padding:12px 14px;min-height:98px;font-size:12px;line-height:1.45;white-space:pre-wrap}
-        .safety div:before{content:"☐ ";font-weight:800;color:#0b2f6f}
+        .safety div:before{content:"â˜ ";font-weight:800;color:#0b2f6f}
         .close{margin-top:10px;border:2px solid #111827;border-radius:6px;overflow:hidden;break-inside:avoid}
         .close h3{margin:0;background:#111827;color:#fff;padding:7px 12px;font-size:14px}
         .closeGrid{display:grid;grid-template-columns:1.25fr 1.1fr .9fr .9fr .95fr}
@@ -13865,7 +13865,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       const payload = workOrderPayload(close);
       if(!payload.equipment_code) return alert("Selecciona un equipo.");
       if(!payload.description) return alert("Describe el trabajo de la OT.");
-      if(close && !payload.action && !confirm("No capturaste accion/cierre. ¿Cerrar OT de todos modos?")) return;
+      if(close && !payload.action && !confirm("No capturaste accion/cierre. Â¿Cerrar OT de todos modos?")) return;
       const response = await fetch("/api/work-orders/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
@@ -13883,7 +13883,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       if(!hasApiKey(true)) return;
       const id = $("woId").value || $("woFolio").value || currentWorkOrderRecord?.id || currentWorkOrderRecord?.folio || "";
       if(!id) return alert("Selecciona una OT.");
-      if(!confirm("¿Eliminar esta orden de trabajo?")) return;
+      if(!confirm("Â¿Eliminar esta orden de trabajo?")) return;
       const response = await fetch("/api/work-orders/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
@@ -14238,7 +14238,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
     }
     function unavailable(status){
       const text = String(status || "").toUpperCase();
-      return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP") || text.includes("REPARACION") || text.includes("REPARACIÓN") || text.includes("MANTENIMIENTO");
+      return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP") || text.includes("REPARACION") || text.includes("REPARACIÃ“N") || text.includes("MANTENIMIENTO");
     }
     function normalizedText(value){
       return String(value || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -15551,10 +15551,10 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       const filtrosBajo = stocks.filter(r => Number(r.quantity||0) < Number(r.min_stock||r.minimum||0));
       const invShortages = (data.inventory||[]).filter(i => Number(i.quantity||0) <= 0 || (Number(i.min_stock||0) > 0 && Number(i.quantity||0) < Number(i.min_stock||0)));
       const alerts = [];
-      prevVencidos.slice(0,3).forEach(r => {       alerts.push(`<div class="d2-alert-item" onclick="activateTab('preventivos')"><span class="alert-dot red"></span><div class="alert-info"><strong>PM vencido: ${esc(r.equipment_code)}</strong><span>${esc(r.component)} — ${esc(r.meter_type)} — ${Number(r.hours_remaining||0).toFixed(0)}h atrasado</span></div></div>`); });
-      otOpen.slice(0,3).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('kanban')"><span class="alert-dot red"></span><div class="alert-info"><strong>OT critica: ${esc(r.equipment_code||r.code||"")}</strong><span>Score ${Number(r.score||0).toFixed(0)} — ${esc(shortText(r.detail||r.description||"",40))}</span></div></div>`); });
+      prevVencidos.slice(0,3).forEach(r => {       alerts.push(`<div class="d2-alert-item" onclick="activateTab('preventivos')"><span class="alert-dot red"></span><div class="alert-info"><strong>PM vencido: ${esc(r.equipment_code)}</strong><span>${esc(r.component)} â€” ${esc(r.meter_type)} â€” ${Number(r.hours_remaining||0).toFixed(0)}h atrasado</span></div></div>`); });
+      otOpen.slice(0,3).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('kanban')"><span class="alert-dot red"></span><div class="alert-info"><strong>OT critica: ${esc(r.equipment_code||r.code||"")}</strong><span>Score ${Number(r.score||0).toFixed(0)} â€” ${esc(shortText(r.detail||r.description||"",40))}</span></div></div>`); });
       filtrosBajo.slice(0,2).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Stock bajo: ${esc(r.name||r.sku||"")}</strong><span>Stock ${Number(r.quantity||0)} / min ${Number(r.min_stock||r.minimum||0)}</span></div></div>`); });
-      invShortages.slice(0,2).forEach(i => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Faltante: ${esc(i.part_number||"")}</strong><span>${esc(shortText(i.description||"",35))} — ${Number(i.quantity||0) <= 0 ? "Sin stock" : "Faltan "+Math.max(Number(i.min_stock||0)-Number(i.quantity||0),1)}</span></div></div>`); });
+      invShortages.slice(0,2).forEach(i => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Faltante: ${esc(i.part_number||"")}</strong><span>${esc(shortText(i.description||"",35))} â€” ${Number(i.quantity||0) <= 0 ? "Sin stock" : "Faltan "+Math.max(Number(i.min_stock||0)-Number(i.quantity||0),1)}</span></div></div>`); });
       $("d2AlertsCount").textContent = `${alerts.length} alerta(s)`;
       $("d2Alerts").innerHTML = alerts.length ? alerts.join("") : `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Sin alertas criticas</div>`;
     }
@@ -15732,12 +15732,12 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       const ready = allPartsReady && !isOut;
       $("pmReadinessPanel").style.display = "block";
       $("pmReadinessPanel").className = `rdy-panel ${ready ? "ready" : "not-ready"}`;
-      let html = `<div style="font-weight:900;color:var(--navy);margin-bottom:8px;font-size:13px">Readiness check — ${esc(service)} — ${esc(code)}</div>`;
-      html += `<div class="rdy-item"><span class="rdy-icon">${isOut ? "🔴" : "🟢"}</span><div class="rdy-item-info"><strong>Equipo</strong><span>${isOut ? "FUERA DE SERVICIO" : "Disponible"}</span></div></div>`;
+      let html = `<div style="font-weight:900;color:var(--navy);margin-bottom:8px;font-size:13px">Readiness check â€” ${esc(service)} â€” ${esc(code)}</div>`;
+      html += `<div class="rdy-item"><span class="rdy-icon">${isOut ? "ðŸ”´" : "ðŸŸ¢"}</span><div class="rdy-item-info"><strong>Equipo</strong><span>${isOut ? "FUERA DE SERVICIO" : "Disponible"}</span></div></div>`;
       partsStatus.forEach(p => {
-        html += `<div class="rdy-item"><span class="rdy-icon">${p.available ? "🟢" : "🔴"}</span><div class="rdy-item-info"><strong>${esc(p.name)}</strong><span>${p.available ? `Disponible (${p.qty})` : "FALTANTE"}</span></div></div>`;
+        html += `<div class="rdy-item"><span class="rdy-icon">${p.available ? "ðŸŸ¢" : "ðŸ”´"}</span><div class="rdy-item-info"><strong>${esc(p.name)}</strong><span>${p.available ? `Disponible (${p.qty})` : "FALTANTE"}</span></div></div>`;
       });
-      html += `<div class="rdy-item"><span class="rdy-icon">${ready ? "🟢" : "🔴"}</span><div class="rdy-item-info"><strong>Resultado</strong><span>${ready ? "LISTO PARA PROGRAMAR" : "NO LISTO — Verificar faltantes"}</span></div></div>`;
+      html += `<div class="rdy-item"><span class="rdy-icon">${ready ? "ðŸŸ¢" : "ðŸ”´"}</span><div class="rdy-item-info"><strong>Resultado</strong><span>${ready ? "LISTO PARA PROGRAMAR" : "NO LISTO â€” Verificar faltantes"}</span></div></div>`;
       if(!allPartsReady){
         const missing = partsStatus.filter(p => !p.available).map(p => p.name).join(", ");
         html += `<div class="rdy-actions"><button class="btn secondary" onclick="activateTab('inventario')">Ver inventario</button></div>`;
@@ -16214,7 +16214,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       const MES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
       const DOW = ["Lun","Mar","Mie","Jue","Vie","Sab","Dom"];
       const year = almCurrentYear, month = almCurrentMonth;
-      $("almTitle").textContent = `${MES[month]} ${year} — Calendario de Preventivos`;
+      $("almTitle").textContent = `${MES[month]} ${year} â€” Calendario de Preventivos`;
       const first = new Date(year, month, 1);
       const last = new Date(year, month + 1, 0);
       const startDow = (first.getDay() + 6) % 7;
@@ -16672,7 +16672,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       $("prevExecClosedCount").textContent = `${closed.length} cerrado(s)`;
       const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(preventiveServiceLabel(row.service_type))}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="10">Sin servicios preventivos abiertos.</td></tr>`;
       $("prevExecOpenTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
-      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="10">Sin servicios cerrados desde esta pestaña.</td></tr>`;
+      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="10">Sin servicios cerrados desde esta pestaÃ±a.</td></tr>`;
       $("prevExecClosedTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha cierre</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Trabajo realizado</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
       document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
         const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
@@ -16685,9 +16685,9 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       if(close) payload.status = "CERRADO";
       if(!payload.equipment_code) return alert("Selecciona un equipo.");
       const chkResult = enhancedChecklistCount(payload);
-      if(close && chkResult.fail > 0 && !confirm(`Hay ${chkResult.fail} fallo(s) en el checklist. Se generara(n) OT(s) correctiva(s). ¿Cerrar servicio de todos modos?`)) return;
-      if(close && chkResult.total > 0 && chkResult.pass < chkResult.total - 1 && !confirm("El checklist de cierre no esta completo. ¿Cerrar servicio de todos modos?")) return;
-      if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. ¿Guardar asi?")) return;
+      if(close && chkResult.fail > 0 && !confirm(`Hay ${chkResult.fail} fallo(s) en el checklist. Se generara(n) OT(s) correctiva(s). Â¿Cerrar servicio de todos modos?`)) return;
+      if(close && chkResult.total > 0 && chkResult.pass < chkResult.total - 1 && !confirm("El checklist de cierre no esta completo. Â¿Cerrar servicio de todos modos?")) return;
+      if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. Â¿Guardar asi?")) return;
       const shouldDeductParts = close && !isPreventiveClosed(currentPreventiveExecutionRecord || {});
       const response = await fetch("/api/preventive-execution/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!response.ok) throw new Error(await apiError(response));
@@ -16756,7 +16756,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       if(!hasApiKey()) return;
       const id = $("prevExecId").value || (currentPreventiveExecutionRecord || {}).id || "";
       if(!id) return alert("Selecciona un servicio para eliminar.");
-      if(!confirm("¿Eliminar este servicio preventivo? Si ya estaba cerrado tambien se retirara de Servicios realizados.")) return;
+      if(!confirm("Â¿Eliminar este servicio preventivo? Si ya estaba cerrado tambien se retirara de Servicios realizados.")) return;
       const response = await fetch("/api/preventive-execution/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
@@ -16857,7 +16857,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
             service:"INSPECCION",
             tasks:[
               ["Seguridad","Revisar paro de emergencia, protecciones, luces, alarma de traslado y extintor."],
-              ["Sistema electrico","Inspeccionar cable, enchufe, tablero, botoneras, tierra fisica y daños visibles."],
+              ["Sistema electrico","Inspeccionar cable, enchufe, tablero, botoneras, tierra fisica y daÃ±os visibles."],
               ["Perforadora","Revisar shank, centralizador, mangueras, fugas, lubricacion y estado de barras."],
               ["Hidraulico","Revisar nivel, temperatura, fugas en bombas, cilindros, manifold y conexiones."],
               ["Boom","Revisar articulaciones, pasadores, bujes, mangueras y fisuras."],
@@ -17555,7 +17555,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
     async function saveDailyCapture(resetAfter=false){
       if(!hasApiKey(true)) return;
       const warnings = captureValidationWarnings();
-      if(warnings.some(text => text.includes("Falta") || text.includes("menor")) && !confirm("Hay alertas de captura. ¿Guardar de todos modos?")) return;
+      if(warnings.some(text => text.includes("Falta") || text.includes("menor")) && !confirm("Hay alertas de captura. Â¿Guardar de todos modos?")) return;
       const record = capturePayload();
       $("capStatus").textContent = "Guardando...";
       const response = await fetch("/api/sync", {
@@ -19907,7 +19907,7 @@ def insp_tarjeta_cover(canvas, doc):
     canvas.line(doc.leftMargin, 0.52 * inch, width - doc.rightMargin, 0.52 * inch)
     canvas.setFillColor(colors.HexColor("#64748b"))
     canvas.setFont("Helvetica", 6.2)
-    canvas.drawString(doc.leftMargin, 0.30 * inch, "MGA | Sistema de gestion de mantenimiento - Inspeccion predictiva")
+    canvas.drawString(doc.leftMargin, 0.30 * inch, "MGA | Sistema de gestion de mantenimiento - Inspeccion predictiva | Ref. MGA-FM-INSP-01 Rev. A")
     canvas.drawRightString(width - doc.rightMargin, 0.30 * inch, "Hoja " + str(canvas.getPageNumber()))
     canvas.restoreState()
 
@@ -19916,9 +19916,10 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
     stream = BytesIO()
     doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.92 * inch, bottomMargin=0.72 * inch)
     styles = report_styles()
-    styles.add(ParagraphStyle("MgaTarjetaSection", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9.5, leading=11, textColor=colors.HexColor("#0f172a"), spaceBefore=7, spaceAfter=3))
     styles.add(ParagraphStyle("MgaTjField", parent=styles["Normal"], fontSize=6.6, leading=7.8, textColor=colors.HexColor("#172033")))
     styles.add(ParagraphStyle("MgaTjCell", parent=styles["Normal"], fontSize=6.0, leading=6.8, textColor=colors.HexColor("#172033")))
+    styles.add(ParagraphStyle("MgaTjCellTight", parent=styles["Normal"], fontSize=5.9, leading=6.4, textColor=colors.HexColor("#172033")))
+    styles.add(ParagraphStyle("MgaTjCellNum", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=5.9, leading=6.4, textColor=colors.HexColor("#0f172a"), alignment=1))
     styles.add(ParagraphStyle("MgaTjHeader", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=5.8, leading=6.6, textColor=colors.white, alignment=1))
     page_width = letter[0] - doc.leftMargin - doc.rightMargin
     code = str(equipo.get("code") or "")
@@ -19926,6 +19927,17 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
     semana_lbl = report_pdf_text(dia_label) or (report_pdf_text(semana) or "-")
     blue = colors.HexColor(MGA_BLUE)
     red = colors.HexColor(MGA_RED)
+
+    def seccion(txt: str):
+        label = Paragraph(f"<font size='9.5' color='#0f172a'><b>{report_pdf_text(txt).upper()}</b></font>", styles["Normal"])
+        bar = Table([[Paragraph("", styles["Normal"]), label]], colWidths=[0.05 * inch, page_width - 0.05 * inch], hAlign="LEFT")
+        bar.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, 0), red),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (0, 0), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        return bar
 
     def campo(label: str, value: str = "") -> Paragraph:
         v = value.strip() if value else ""
@@ -19943,15 +19955,17 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
     meta_table.setStyle(TableStyle([
         ("LEFTPADDING", (0, 0), (-1, -1), 2),
         ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.7, colors.HexColor("#cbd5e1")),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.75, colors.HexColor("#d4dbe6")),
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
     ]))
-    story = [Paragraph("Datos generales", styles["MgaTarjetaSection"]), meta_table]
+    story = [Spacer(1, 0.02 * inch), seccion("Datos generales"), Spacer(1, 0.02 * inch), meta_table]
 
-    story.append(Paragraph("Resultado de la inspeccion", styles["MgaTarjetaSection"]))
+    story.append(Spacer(1, 0.10 * inch))
+    story.append(seccion("Resultado de la inspeccion"))
+    story.append(Spacer(1, 0.02 * inch))
     rows = [["#", "Sistema", "Punto a revisar", "Calificacion", "Nota / falla"]]
     numero = 0
     for grupo in grupos:
@@ -19962,33 +19976,62 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
     if len(rows) == 1:
         rows.append(["", "", "Sin puntos de inspeccion definidos.", "", ""])
     widths = [0.32 * inch, 1.50 * inch, page_width - 0.32 * inch - 1.50 * inch - 1.00 * inch - 1.50 * inch, 1.00 * inch, 1.50 * inch]
-    story.append(report_table(rows, widths, styles, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(1.6, 1.6)))
+    def c(txt: str, st):
+        return Paragraph(report_pdf_text(txt), st)
+    checklist = Table([[c(x, styles["MgaTjHeader"]) for x in rows[0]]] + [[c(x, styles["MgaTjCellNum"]) if i == 0 else c(x, styles["MgaTjCellTight"]) for i, x in enumerate(r)] for r in rows[1:]], colWidths=widths, repeatRows=1, hAlign="LEFT")
+    checklist.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), blue),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#e2e8f0")),
+        ("BOX", (0, 0), (-1, -1), 0.9, colors.HexColor("#94a3b8")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#f1f5f9")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 1.4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.4),
+    ]))
+    story.append(checklist)
 
     def chip(texto: str, hexcolor: str) -> Paragraph:
         return Paragraph(f"<font color='white' size='5.6'><b>{texto}</b></font>",
                          ParagraphStyle("chip", parent=styles["Normal"], fontSize=5.6, leading=7.2, alignment=1, backColor=colors.HexColor(hexcolor), leftIndent=3, rightIndent=3, borderPadding=2))
     chips = Table([[chip("N Normal", "#16a34a"), chip("O Observacion", "#ca8a04"), chip("D Desgaste", "#ea580c"), chip("C Falla critica", "#dc2626"), chip("NA No aplica", "#64748b")]], colWidths=[page_width / 5.0] * 5, hAlign="LEFT")
-    chips.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 1), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+    chips.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 1), ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5)]))
     story.append(chips)
 
-    story.append(Paragraph("Observaciones generales", styles["MgaTarjetaSection"]))
+    story.append(Spacer(1, 0.10 * inch))
+    story.append(seccion("Observaciones generales"))
+    story.append(Spacer(1, 0.02 * inch))
     obs = Table([[Paragraph("<font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font>", styles["MgaTjCell"])]], colWidths=[page_width], hAlign="LEFT")
     obs.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#cbd5e1")),
-        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fbfcfe")),
         ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
         ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
     story.append(obs)
 
-    story.append(Paragraph("Firmas de conformidad", styles["MgaTarjetaSection"]))
-    signature = [
-        ["FIRMA DEL MECANICO", "FIRMA DEL SUPERVISOR"],
-        [Paragraph("<br/>" * 7, styles["MgaTjCell"]), Paragraph("<br/>" * 7, styles["MgaTjCell"])],
-        ["Firma y nombre de quien realiza la inspeccion", "Firma y nombre del supervisor"],
-    ]
+    story.append(Spacer(1, 0.10 * inch))
+    story.append(seccion("Firmas de conformidad"))
+    story.append(Spacer(1, 0.02 * inch))
     cap = ParagraphStyle("cap", parent=styles["Normal"], fontSize=5.8, leading=7.0, textColor=colors.HexColor("#64748b"), alignment=1)
-    story.append(report_table(signature, [page_width / 2.0, page_width / 2.0], styles, header_bg=MGA_BLUE, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(4, 4)))
+    signature_row2 = [Paragraph("Firma y nombre de quien realiza la inspeccion", cap), Paragraph("Firma y nombre del supervisor", cap)]
+    sign = Table([["FIRMA DEL MECANICO", "FIRMA DEL SUPERVISOR"], [Paragraph("<br/>" * 7, styles["MgaTjCell"]), Paragraph("<br/>" * 7, styles["MgaTjCell"])], signature_row2], colWidths=[page_width / 2.0, page_width / 2.0], hAlign="LEFT")
+    sign.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), blue),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("BOX", (0, 0), (-1, -1), 1.1, colors.HexColor("#94a3b8")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(sign)
     story.append(Paragraph("<font color='#64748b' size='6'>Al firmar, el mecanico certifica haber efectuado la inspeccion y registrado las fallas encontradas para su seguimiento y correccion.</font>",
                            ParagraphStyle("nota", parent=styles["Normal"], fontSize=6, leading=8, textColor=colors.HexColor("#64748b"), alignment=1)))
     doc.build(story, onFirstPage=insp_tarjeta_cover, onLaterPages=insp_tarjeta_cover)
