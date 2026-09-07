@@ -19984,7 +19984,7 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
     story.append(Paragraph("Firmas de conformidad", styles["MgaTarjetaSection"]))
     signature = [
         ["FIRMA DEL MECANICO", "FIRMA DEL SUPERVISOR"],
-        ["<br/><br/><br/><br/><br/><br/><br/>", "<br/><br/><br/><br/><br/><br/><br/>"],
+        [Paragraph("<br/>" * 7, styles["MgaTjCell"]), Paragraph("<br/>" * 7, styles["MgaTjCell"])],
         ["Firma y nombre de quien realiza la inspeccion", "Firma y nombre del supervisor"],
     ]
     cap = ParagraphStyle("cap", parent=styles["Normal"], fontSize=5.8, leading=7.0, textColor=colors.HexColor("#64748b"), alignment=1)
