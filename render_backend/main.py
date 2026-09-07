@@ -19870,31 +19870,62 @@ def insp_generar_ot(session: Session, hallazgo_id: int) -> dict[str, Any]:
     return {"ok": True, "folio": record["folio"], "unidad": hallazgo.equipo_id}
 
 
+def insp_tarjeta_cover(canvas, doc):
+    width, height = letter
+    canvas.saveState()
+    canvas.setFillColor(colors.HexColor(MGA_BLUE))
+    canvas.rect(0, height - 0.56 * inch, width, 0.56 * inch, stroke=0, fill=1)
+    canvas.setFillColor(colors.HexColor(MGA_RED))
+    canvas.rect(width - 1.85 * inch, height - 0.56 * inch, 1.85 * inch, 0.56 * inch, stroke=0, fill=1)
+    canvas.setFillColor(colors.white)
+    canvas.setFont("Helvetica-Bold", 13)
+    canvas.drawCentredString(width * 0.37, height - 0.33 * inch, "PLAN SEMANAL DE INSPECCION")
+    canvas.setFont("Helvetica", 7.5)
+    canvas.drawCentredString(width * 0.37, height - 0.20 * inch, "MANTENIMIENTO PREDICTIVO")
+    canvas.setFont("Helvetica-Bold", 11)
+    canvas.drawCentredString(width - 0.925 * inch, height - 0.33 * inch, "TARJETA")
+    canvas.setFont("Helvetica-Bold", 7.5)
+    canvas.drawCentredString(width - 0.925 * inch, height - 0.20 * inch, "DE CAMPO")
+    canvas.setFillColor(colors.HexColor("#64748b"))
+    canvas.setFont("Helvetica", 6.2)
+    canvas.drawString(doc.leftMargin, height - 0.63 * inch, "Documento de campo para registro de inspeccion predictiva | Impreso: " + utc_now().strftime("%d/%m/%Y %H:%M:%S"))
+    canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
+    canvas.setLineWidth(0.6)
+    canvas.line(doc.leftMargin, 0.55 * inch, width - doc.rightMargin, 0.55 * inch)
+    canvas.setFillColor(colors.HexColor("#64748b"))
+    canvas.setFont("Helvetica", 6.2)
+    canvas.drawString(doc.leftMargin, 0.40 * inch, "MGA | Sistema de gestion de mantenimiento - Inspeccion predictiva")
+    canvas.drawRightString(width - doc.rightMargin, 0.40 * inch, "Hoja " + str(canvas.getPageNumber()))
+    canvas.restoreState()
+
+
 def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: list[dict[str, Any]], semana: str = "", dia_label: str = "") -> bytes:
     stream = BytesIO()
-    doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.4 * inch, bottomMargin=0.4 * inch)
+    doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.72 * inch, bottomMargin=0.62 * inch)
     styles = report_styles()
-    styles.add(ParagraphStyle("MgaTarjetaTitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=14, leading=15, textColor=colors.HexColor(MGA_BLUE), alignment=1, spaceAfter=1))
-    styles.add(ParagraphStyle("MgaTarjetaSub", parent=styles["Normal"], fontSize=7.5, leading=8.5, textColor=colors.HexColor("#475569"), alignment=1))
     styles.add(ParagraphStyle("MgaTarjetaSection", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9.5, leading=10.5, textColor=colors.HexColor("#0f172a"), spaceBefore=5, spaceAfter=3))
+    styles.add(ParagraphStyle("MgaTjLabel", parent=styles["Normal"], fontSize=6.6, leading=7.6, textColor=colors.HexColor("#172033")))
     styles.add(ParagraphStyle("MgaTjMeta", parent=styles["Normal"], fontSize=6.6, leading=7.4, textColor=colors.HexColor("#172033")))
     styles.add(ParagraphStyle("MgaTjCell", parent=styles["Normal"], fontSize=6.0, leading=6.8, textColor=colors.HexColor("#172033")))
     styles.add(ParagraphStyle("MgaTjHeader", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=5.8, leading=6.6, textColor=colors.white, alignment=1))
     page_width = letter[0] - doc.leftMargin - doc.rightMargin
     code = str(equipo.get("code") or "")
-    story = [
-        Paragraph("PLAN SEMANAL DE INSPECCION - TARJETA DE CAMPO", styles["MgaTarjetaTitle"]),
-        Paragraph("Mantenimiento predictivo | Generado " + utc_now().isoformat(timespec="seconds"), styles["MgaTarjetaSub"]),
-    ]
+    marca_modelo = f"{equipo.get('brand') or ''} {equipo.get('model') or ''}".strip() or "-"
+    semana_lbl = report_pdf_text(dia_label) or (report_pdf_text(semana) or "-")
+    blank = "____________________"
+
+    def dato(label: str, value: str, blank_value: bool = False) -> Paragraph:
+        v = value if value and not blank_value else (value if value else blank)
+        return Paragraph(f"<font size='5.6' color='#475569'><b>{report_pdf_text(label).upper()}</b></font><br/><font size='7.2' color='#0f172a'>{report_pdf_text(v)}</font>", styles["MgaTjLabel"])
+
     meta = [
-        ["Unidad", report_pdf_text(code) or "-", "Tipo", report_pdf_text(equipo.get("type") or "") or "-"],
-        ["Descripcion", report_pdf_text(equipo.get("description") or ""), "Plantilla", report_pdf_text(plantilla_tipo) or "GENERAL"],
-        ["Marca / Modelo", f"{equipo.get('brand') or ''} {equipo.get('model') or ''}".strip() or "-", "Semana", report_pdf_text(dia_label) or (report_pdf_text(semana) or "-")],
-        ["Fecha", "", "Horometro", ""],
-        ["Turno", "", "Inspector", ""],
+        [dato("Unidad", code), dato("Tipo", str(equipo.get("type") or "") or "-"), dato("Semana", semana_lbl)],
+        [dato("Descripcion", str(equipo.get("description") or "") or "-"), dato("Marca / Modelo", marca_modelo), dato("Plantilla", plantilla_tipo or "GENERAL")],
+        [dato("Fecha", "", blank_value=True), dato("Horometro", "", blank_value=True), dato("Turno", "", blank_value=True)],
+        [dato("Inspector", "", blank_value=True), "", ""],
     ]
-    story.append(Paragraph("Datos generales", styles["MgaTarjetaSection"]))
-    story.append(report_table(meta, [0.95 * inch, 2.35 * inch, 0.95 * inch, 2.20 * inch], styles, header_bg="#166534", cell_style=styles["MgaTjMeta"], header_style=styles["MgaTjHeader"], row_padding=(1, 1)))
+    story = [Paragraph("Datos generales", styles["MgaTarjetaSection"])]
+    story.append(report_table(meta, [page_width / 3.0, page_width / 3.0, page_width / 3.0], styles, header_bg=MGA_BLUE, cell_style=styles["MgaTjLabel"], header_style=styles["MgaTjHeader"], row_padding=(3, 3)))
     story.append(Paragraph("Resultado de la inspeccion", styles["MgaTarjetaSection"]))
     rows = [["#", "Sistema", "Punto a revisar", "Calificacion", "Nota / falla"]]
     numero = 0
@@ -19902,17 +19933,18 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
         items = grupo.get("items") or []
         for it in items:
             numero += 1
-            rows.append([str(numero), str(grupo.get("sistema") or ""), str(it.get("item") or ""), str(it.get("calif") or ""), str(it.get("detalle") or "")])
+            rows.append([str(numero), str(grupo.get("sistema") or ""), str(it.get("item") or ""), "", ""])
     if len(rows) == 1:
         rows.append(["", "", "Sin puntos de inspeccion definidos.", "", ""])
-    story.append(report_table(rows, [0.42 * inch, 1.55 * inch, 2.85 * inch, 1.05 * inch, 1.60 * inch], styles, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(0.5, 0.5)))
+    story.append(report_table(rows, [0.42 * inch, 1.55 * inch, page_width - 0.42 * inch - 1.55 * inch - 1.05 * inch - 1.60 * inch, 1.05 * inch, 1.60 * inch], styles, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(0.5, 0.5)))
+    story.append(Paragraph("<font size='6.2' color='#475569'><b>Calificacion:</b> N = Normal &nbsp;&nbsp;|&nbsp;&nbsp; O = Observacion &nbsp;&nbsp;|&nbsp;&nbsp; D = Desgaste &nbsp;&nbsp;|&nbsp;&nbsp; C = Falla critica &nbsp;&nbsp;|&nbsp;&nbsp; NA = No aplica</font>", styles["MgaTjLabel"]))
     story.append(Paragraph("Observaciones generales", styles["MgaTarjetaSection"]))
     story.append(Paragraph("<font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font>", styles["MgaTjCell"]))
     story.append(report_table([
-        ["Firma del mecanico", "Firma del supervisor"],
+        [dato("Firma del mecanico", ""), dato("Firma del supervisor", "")],
         ["<br/><br/><br/><br/><br/>", "<br/><br/><br/><br/><br/>"],
-    ], [2.80 * inch, 2.80 * inch], styles, header_bg="#166534", cell_style=styles["MgaTjMeta"], header_style=styles["MgaTjHeader"], row_padding=(1, 1)))
-    doc.build(story)
+    ], [page_width / 2.0, page_width / 2.0], styles, header_bg=MGA_BLUE, cell_style=styles["MgaTjMeta"], header_style=styles["MgaTjHeader"], row_padding=(2, 2)))
+    doc.build(story, onFirstPage=insp_tarjeta_cover, onLaterPages=insp_tarjeta_cover)
     return stream.getvalue()
 
 
