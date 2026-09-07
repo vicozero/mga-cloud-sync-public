@@ -2765,10 +2765,13 @@ def report_paragraph(value: Any, style: ParagraphStyle) -> Paragraph:
     return Paragraph(report_pdf_text(value), style)
 
 
-def report_table(rows: list[list[Any]], widths: list[float], styles, header_bg: str = "#0b2f6f") -> Table:
+def report_table(rows: list[list[Any]], widths: list[float], styles, header_bg: str = "#0b2f6f", cell_style=None, header_style=None, row_padding: tuple[float, float] | None = None) -> Table:
     formatted = []
+    head_style = header_style or styles["MgaHeader"]
+    body_style = cell_style or styles["MgaCell"]
+    pad = row_padding or (3, 3)
     for idx, row in enumerate(rows):
-        style = styles["MgaHeader"] if idx == 0 else styles["MgaCell"]
+        style = head_style if idx == 0 else body_style
         formatted.append([cell if isinstance(cell, Paragraph) else report_paragraph(cell, style) for cell in row])
     table = Table(formatted, colWidths=widths, repeatRows=1, hAlign="LEFT")
     table.setStyle(TableStyle([
@@ -2779,8 +2782,8 @@ def report_table(rows: list[list[Any]], widths: list[float], styles, header_bg: 
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), pad[0]),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), pad[1]),
     ]))
     return table
 
@@ -19421,6 +19424,65 @@ INSP_SEED_PLANTILLAS = {
             "Seguridad": ["Extintor", "Claxon", "Luces", "Espejos"],
         }
     },
+    "JUMBO_DD311_SANDVIK": {
+        "sistemas": {
+            "Motor electrico": ["Nivel de refrigerante", "Fugas de refrigerante", "Temperatura", "Ruidos anormales", "Ventilador", "Estado de bandas"],
+            "Sistema hidraulico": ["Nivel de aceite hidraulico", "Fugas", "Mangueras", "Cilindros", "Presion", "Temperatura", "Bombas principales", "Acumuladores"],
+            "Perforacion": ["Booms", "Feed (avance)", "Martillo hidraulico", "Rotacion", "Barras de perforacion", "Alineacion", "Grasado"],
+            "Sistema electrico": ["Cable de energia", "Bateria 24V", "Luces", "Alarmas", "Cableado", "Paro de emergencia"],
+            "Seguridad": ["Extintor", "Alarma de reversa", "Claxon", "Luces", "Espejos", "Cinturon"],
+        }
+    },
+    "JUMBO_ANCLADOR_BOLTER_99": {
+        "sistemas": {
+            "Motor": ["Nivel de aceite", "Fugas de aceite", "Temperatura", "Ruidos anormales", "Humo", "Estado de bandas"],
+            "Sistema hidraulico": ["Nivel de aceite hidraulico", "Fugas", "Mangueras", "Cilindros", "Presion", "Temperatura"],
+            "Sistema de anclaje": ["Cabezal de anclaje", "Magazines de pernos", "Martillo de sello", "Bomba de inyeccion", "Presion de inyeccion"],
+            "Perforacion de anclaje": ["Avance", "Rotacion", "Martillo de perforacion", "Brocas", "Copas de anclaje"],
+            "Sistema electrico": ["Bateria", "Alternador", "Luces", "Alarmas", "Cableado"],
+            "Seguridad": ["Extintor", "Alarma de reversa", "Claxon", "Luces", "Espejos", "Cinturon"],
+        }
+    },
+    "SCOOPTRAM_R1600": {
+        "sistemas": {
+            "Motor": ["Nivel de aceite", "Fugas de aceite", "Temperatura", "Ruidos anormales", "Humo", "Estado de bandas"],
+            "Convertidor y transmision": ["Nivel de aceite", "Fugas", "Cambios", "Ruidos", "Enfriador"],
+            "Sistema hidraulico": ["Nivel de aceite hidraulico", "Fugas", "Mangueras", "Cilindros", "Presion", "Temperatura"],
+            "Sistema electrico": ["Bateria", "Alternador", "Luces", "Alarmas", "Cableado"],
+            "Tren de rodaje": ["Llantas", "Desgaste", "Pernos", "Direccion", "Frenos"],
+            "Seguridad": ["Extintor", "Alarma de reversa", "Claxon", "Luces", "Espejos", "Cinturon"],
+        }
+    },
+    "SCOOPTRAM_R1300": {
+        "sistemas": {
+            "Motor": ["Nivel de aceite", "Fugas de aceite", "Temperatura", "Ruidos anormales", "Humo", "Estado de bandas"],
+            "Convertidor y transmision": ["Nivel de aceite", "Fugas", "Cambios", "Ruidos", "Enfriador"],
+            "Sistema hidraulico": ["Nivel de aceite hidraulico", "Fugas", "Mangueras", "Cilindros", "Presion"],
+            "Sistema electrico": ["Bateria", "Alternador", "Luces", "Alarmas", "Cableado"],
+            "Tren de rodaje": ["Llantas", "Desgaste", "Pernos", "Direccion", "Frenos"],
+            "Seguridad": ["Extintor", "Alarma de reversa", "Claxon", "Luces", "Espejos", "Cinturon"],
+        }
+    },
+    "SCOOPTRAM_EPIRO_1030": {
+        "sistemas": {
+            "Motor": ["Nivel de aceite", "Fugas de aceite", "Temperatura", "Ruidos anormales", "Humo", "Estado de bandas"],
+            "Convertidor y transmision": ["Nivel de aceite", "Fugas", "Cambios", "Ruidos", "Enfriador"],
+            "Sistema hidraulico": ["Nivel de aceite hidraulico", "Fugas", "Mangueras", "Cilindros", "Presion"],
+            "Sistema electrico": ["Bateria", "Alternador", "Luces", "Alarmas", "Cableado"],
+            "Tren de rodaje": ["Llantas", "Desgaste", "Pernos", "Direccion", "Frenos"],
+            "Seguridad": ["Extintor", "Alarma de reversa", "Claxon", "Luces", "Espejos", "Cinturon"],
+        }
+    },
+    "RETROEXCAVADORA_416": {
+        "sistemas": {
+            "Motor": ["Nivel de aceite", "Fugas de aceite", "Temperatura", "Ruidos anormales", "Humo", "Estado de bandas"],
+            "Sistema hidraulico": ["Nivel de aceite hidraulico", "Fugas", "Mangueras", "Cilindros", "Presion"],
+            "Estructura e implementos": ["Pluma (boom)", "Brazo", "Cuchara", "Estabilizadores", "Enganche"],
+            "Sistema electrico": ["Bateria", "Alternador", "Luces", "Alarmas", "Cableado"],
+            "Tren de rodaje": ["Neumaticos", "Desgaste", "Pernos", "Direccion", "Frenos"],
+            "Seguridad": ["Extintor", "Claxon", "Luces", "Espejos", "Cinturon"],
+        }
+    },
     "GENERAL": {
         "sistemas": {
             "Motor": ["Nivel de aceite", "Fugas de aceite", "Temperatura", "Ruidos anormales", "Humo"],
@@ -19476,7 +19538,21 @@ def inspeccion_tipo_plantilla(equipo: dict[str, Any]) -> str:
     raw = normalized_ascii(normalize_text(equipo.get("type") or ""))
     label = normalized_ascii(normalize_text(equipo.get("category") or equipo.get("categoria") or ""))
     desc = normalized_ascii(normalize_text(equipo.get("description") or ""))
-    blob = " ".join((raw, label, desc)).upper()
+    marca = normalized_ascii(normalize_text(equipo.get("brand") or ""))
+    modelo = normalized_ascii(normalize_text(equipo.get("model") or ""))
+    blob = " ".join((raw, label, desc, marca, modelo)).upper()
+    if "BOLTER" in blob or "ANCLADOR" in blob or "RESEMIN" in blob:
+        return "JUMBO_ANCLADOR_BOLTER_99"
+    if "DD311" in blob:
+        return "JUMBO_DD311_SANDVIK"
+    if "R1600" in blob:
+        return "SCOOPTRAM_R1600"
+    if "R1300" in blob or "ST1300" in blob:
+        return "SCOOPTRAM_R1300"
+    if "ST1030" in blob or ("1030" in blob and "EPIRO" in blob):
+        return "SCOOPTRAM_EPIRO_1030"
+    if "RETROEXCAVADORA" in blob or "BACKHOE" in blob or ("RETRO" in blob and "EXCAVADORA" in blob):
+        return "RETROEXCAVADORA_416"
     if "BAJO PERFIL" in blob or "LOW PROFILE" in blob:
         return "CAMION_BAJO_PERFIL"
     if "JUMBO" in blob:
@@ -19796,14 +19872,19 @@ def insp_generar_ot(session: Session, hallazgo_id: int) -> dict[str, Any]:
 
 def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: list[dict[str, Any]], semana: str = "", dia_label: str = "") -> bytes:
     stream = BytesIO()
-    doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.5 * inch, bottomMargin=0.5 * inch)
+    doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.4 * inch, bottomMargin=0.4 * inch)
     styles = report_styles()
+    styles.add(ParagraphStyle("MgaTarjetaTitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=14, leading=15, textColor=colors.HexColor(MGA_BLUE), alignment=1, spaceAfter=1))
+    styles.add(ParagraphStyle("MgaTarjetaSub", parent=styles["Normal"], fontSize=7.5, leading=8.5, textColor=colors.HexColor("#475569"), alignment=1))
+    styles.add(ParagraphStyle("MgaTarjetaSection", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9.5, leading=10.5, textColor=colors.HexColor("#0f172a"), spaceBefore=5, spaceAfter=3))
+    styles.add(ParagraphStyle("MgaTjMeta", parent=styles["Normal"], fontSize=6.6, leading=7.4, textColor=colors.HexColor("#172033")))
+    styles.add(ParagraphStyle("MgaTjCell", parent=styles["Normal"], fontSize=6.0, leading=6.8, textColor=colors.HexColor("#172033")))
+    styles.add(ParagraphStyle("MgaTjHeader", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=5.8, leading=6.6, textColor=colors.white, alignment=1))
     page_width = letter[0] - doc.leftMargin - doc.rightMargin
     code = str(equipo.get("code") or "")
     story = [
-        Paragraph("PLAN SEMANAL DE INSPECCION - TARJETA DE CAMPO", styles["MgaTitle"]),
-        Paragraph(f"Mantenimiento predictivo | Generado {utc_now().isoformat(timespec='seconds')}", styles["MgaSubtitle"]),
-        Spacer(1, 0.08 * inch),
+        Paragraph("PLAN SEMANAL DE INSPECCION - TARJETA DE CAMPO", styles["MgaTarjetaTitle"]),
+        Paragraph("Mantenimiento predictivo | Generado " + utc_now().isoformat(timespec="seconds"), styles["MgaTarjetaSub"]),
     ]
     meta = [
         ["Unidad", report_pdf_text(code) or "-", "Tipo", report_pdf_text(equipo.get("type") or "") or "-"],
@@ -19812,10 +19893,9 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
         ["Fecha", "", "Horometro", ""],
         ["Turno", "", "Inspector", ""],
     ]
-    story.append(Paragraph("Datos generales", styles["MgaSection"]))
-    story.append(report_table(meta, [1.0 * inch, 2.30 * inch, 1.0 * inch, 2.15 * inch], styles, header_bg="#166534"))
-    story.append(Spacer(1, 0.12 * inch))
-    story.append(Paragraph("Resultado de la inspeccion", styles["MgaSection"]))
+    story.append(Paragraph("Datos generales", styles["MgaTarjetaSection"]))
+    story.append(report_table(meta, [0.95 * inch, 2.35 * inch, 0.95 * inch, 2.20 * inch], styles, header_bg="#166534", cell_style=styles["MgaTjMeta"], header_style=styles["MgaTjHeader"], row_padding=(1, 1)))
+    story.append(Paragraph("Resultado de la inspeccion", styles["MgaTarjetaSection"]))
     rows = [["#", "Sistema", "Punto a revisar", "Calificacion", "Nota / falla"]]
     numero = 0
     for grupo in grupos:
@@ -19825,15 +19905,13 @@ def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: 
             rows.append([str(numero), str(grupo.get("sistema") or ""), str(it.get("item") or ""), str(it.get("calif") or ""), str(it.get("detalle") or "")])
     if len(rows) == 1:
         rows.append(["", "", "Sin puntos de inspeccion definidos.", "", ""])
-    story.append(report_table(rows, [0.42 * inch, 1.55 * inch, 2.85 * inch, 1.05 * inch, 1.60 * inch], styles))
-    story.append(Spacer(1, 0.10 * inch))
-    story.append(Paragraph("Observaciones generales", styles["MgaSection"]))
-    story.append(Paragraph("<font size='10'>&nbsp;</font><br/><font size='10'>&nbsp;</font><br/><font size='10'>&nbsp;</font><br/><font size='10'>&nbsp;</font>", styles["MgaCell"]))
-    story.append(Spacer(1, 0.08 * inch))
+    story.append(report_table(rows, [0.42 * inch, 1.55 * inch, 2.85 * inch, 1.05 * inch, 1.60 * inch], styles, header_style=styles["MgaTjHeader"], cell_style=styles["MgaTjCell"], row_padding=(0.5, 0.5)))
+    story.append(Paragraph("Observaciones generales", styles["MgaTarjetaSection"]))
+    story.append(Paragraph("<font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font><br/><font size='8'>&nbsp;</font>", styles["MgaTjCell"]))
     story.append(report_table([
         ["Firma del mecanico", "Firma del supervisor"],
         ["<br/><br/><br/><br/><br/>", "<br/><br/><br/><br/><br/>"],
-    ], [2.80 * inch, 2.80 * inch], styles, header_bg="#166534"))
+    ], [2.80 * inch, 2.80 * inch], styles, header_bg="#166534", cell_style=styles["MgaTjMeta"], header_style=styles["MgaTjHeader"], row_padding=(1, 1)))
     doc.build(story)
     return stream.getvalue()
 
