@@ -35,7 +35,7 @@ from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas as pdf_canvas
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, and_, case, create_engine, delete, func, select, text as sql_text
 from sqlalchemy import Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -12430,6 +12430,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
             "<td>" + estado + "</td>" +
             "<td>" + esc(num(row.inspecciones)) + "</td>" +
             '<td><button class="btn" data-pin-registrar="' + row.equipo_id + '">Registrar</button>' +
+            '<button class="btn secondary" data-pin-tarjeta="' + row.equipo_id + '">Tarjeta</button>' +
             '<button class="btn secondary" data-pin-ver="' + row.equipo_id + '">Ver</button></td>';
           body.appendChild(tr);
         });
@@ -12706,6 +12707,8 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         if(reg){ $("pinEq").value = reg.getAttribute("data-pin-registrar"); PIN_STATE.inspeccionId = 0; cargarChecklist(reg.getAttribute("data-pin-registrar")).catch(showError); pinCambiarTab("registro"); return; }
         const ver = ev.target.closest("[data-pin-ver]");
         if(ver){ $("pinPredEq").value = ver.getAttribute("data-pin-ver"); loadInspeccionPredictivo(false).catch(showError); pinCambiarTab("predictivo"); return; }
+        const tj = ev.target.closest("[data-pin-tarjeta]");
+        if(tj){ window.open("/api/inspeccion/plan/tarjeta?equipo=" + encodeURIComponent(tj.getAttribute("data-pin-tarjeta")) + "&semana=" + encodeURIComponent(PIN_STATE.semana || $("pinSemana").value || pinWeekMonday()), "_blank"); return; }
         const edit = ev.target.closest("[data-pin-edit]");
         if(edit){ editarInspeccion(Number(edit.getAttribute("data-pin-edit"))).catch(showError); return; }
         const prn = ev.target.closest("[data-pin-print]");
@@ -19789,6 +19792,71 @@ def insp_generar_ot(session: Session, hallazgo_id: int) -> dict[str, Any]:
     hallazgo.estado = "EN_PROCESO"
     session.commit()
     return {"ok": True, "folio": record["folio"], "unidad": hallazgo.equipo_id}
+
+
+def insp_tarjeta_pdf_bytes(equipo: dict[str, Any], plantilla_tipo: str, grupos: list[dict[str, Any]], semana: str = "", dia_label: str = "") -> bytes:
+    stream = BytesIO()
+    doc = SimpleDocTemplate(stream, pagesize=letter, rightMargin=0.45 * inch, leftMargin=0.45 * inch, topMargin=0.5 * inch, bottomMargin=0.5 * inch)
+    styles = report_styles()
+    page_width = letter[0] - doc.leftMargin - doc.rightMargin
+    code = str(equipo.get("code") or "")
+    story = [
+        Paragraph("PLAN SEMANAL DE INSPECCION - TARJETA DE CAMPO", styles["MgaTitle"]),
+        Paragraph(f"Mantenimiento predictivo | Generado {utc_now().isoformat(timespec='seconds')}", styles["MgaSubtitle"]),
+        Spacer(1, 0.08 * inch),
+    ]
+    meta = [
+        ["Unidad", report_pdf_text(code) or "-", "Tipo", report_pdf_text(equipo.get("type") or "") or "-"],
+        ["Descripcion", report_pdf_text(equipo.get("description") or ""), "Plantilla", report_pdf_text(plantilla_tipo) or "GENERAL"],
+        ["Marca / Modelo", f"{equipo.get('brand') or ''} {equipo.get('model') or ''}".strip() or "-", "Semana", report_pdf_text(dia_label) or (report_pdf_text(semana) or "-")],
+        ["Fecha", "", "Horometro", ""],
+        ["Turno", "", "Inspector", ""],
+    ]
+    story.append(Paragraph("Datos generales", styles["MgaSection"]))
+    story.append(report_table(meta, [1.0 * inch, 2.30 * inch, 1.0 * inch, 2.15 * inch], styles, header_bg="#166534"))
+    story.append(Spacer(1, 0.12 * inch))
+    story.append(Paragraph("Resultado de la inspeccion", styles["MgaSection"]))
+    rows = [["#", "Sistema", "Punto a revisar", "Calificacion", "Nota / falla"]]
+    numero = 0
+    for grupo in grupos:
+        items = grupo.get("items") or []
+        for it in items:
+            numero += 1
+            rows.append([str(numero), str(grupo.get("sistema") or ""), str(it.get("item") or ""), str(it.get("calif") or ""), str(it.get("detalle") or "")])
+    if len(rows) == 1:
+        rows.append(["", "", "Sin puntos de inspeccion definidos.", "", ""])
+    story.append(report_table(rows, [0.42 * inch, 1.55 * inch, 2.85 * inch, 1.05 * inch, 1.60 * inch], styles))
+    story.append(Spacer(1, 0.10 * inch))
+    story.append(Paragraph("Observaciones generales", styles["MgaSection"]))
+    story.append(Paragraph("<font size='10'>&nbsp;</font><br/><font size='10'>&nbsp;</font><br/><font size='10'>&nbsp;</font><br/><font size='10'>&nbsp;</font>", styles["MgaCell"]))
+    story.append(Spacer(1, 0.08 * inch))
+    story.append(report_table([
+        ["Firma del mecanico", "Firma del supervisor"],
+        ["<br/><br/><br/><br/><br/>", "<br/><br/><br/><br/><br/>"],
+    ], [2.80 * inch, 2.80 * inch], styles, header_bg="#166534"))
+    doc.build(story)
+    return stream.getvalue()
+
+
+@app.get("/api/inspeccion/plan/tarjeta")
+def get_inspeccion_plan_tarjeta(equipo: str | None = None, semana: str | None = None) -> StreamingResponse:
+    lunes = insp_semana_lunes(semana)
+    with SessionLocal() as session:
+        insp_ensure_seeds(session)
+        if not equipo:
+            raise HTTPException(status_code=400, detail="Indica el equipo.")
+        eq = insp_equipo_por_codigo(session, equipo)
+        plantilla = insp_plantilla_para_equipo(session, eq)
+        plantilla_tipo = plantilla.tipo_categoria if plantilla is not None else "GENERAL"
+        grupos = insp_materializar(session, plantilla.id) if plantilla is not None else []
+        plan_row = session.scalar(select(InspPlan).where(InspPlan.fecha_lunes == lunes, InspPlan.equipo_id == equipo).limit(1))
+        dia_label = ""
+        if plan_row is not None and plan_row.dia_semana in insp_semana_dias():
+            dia_label = f"{insp_semana_dias()[plan_row.dia_semana]} {lunes}"
+        pdf = insp_tarjeta_pdf_bytes(eq, plantilla_tipo, grupos, lunes, dia_label)
+    filename = f"Tarjeta_Inspeccion_{equipo}_{lunes}.pdf".replace(" ", "_")
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    return StreamingResponse(BytesIO(pdf), headers=headers, media_type="application/pdf")
 
 
 @app.get("/api/inspeccion/equipos")
