@@ -741,6 +741,31 @@ def json_loads(value: str) -> Any:
         return {}
 
 
+_MOJI_MARKERS = ("\u00c2", "\u00c3", "\u00e2", "\u0080", "\u009c", "\u0093", "\u0094", "\u009a", "\u009c")
+
+
+def repair_text(value: str) -> str:
+    if not value or not any(ch in value for ch in _MOJI_MARKERS):
+        return value
+    try:
+        repaired = value.encode("latin-1", errors="strict").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+    if "\ufffd" in repaired:
+        return value
+    return repaired
+
+
+def repair_tree(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {key: repair_tree(val) for key, val in obj.items()}
+    if isinstance(obj, list):
+        return [repair_tree(item) for item in obj]
+    if isinstance(obj, str):
+        return repair_text(obj)
+    return obj
+
+
 def parse_float(value: Any, default: float = 0) -> float:
     if value is None:
         return default
@@ -2692,7 +2717,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("kanban", {"cards": {}, "overrides": {}})
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
-    return enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload))))
+    return repair_tree(enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload)))))
 
 
 def report_pdf_text(value: Any) -> str:
@@ -21301,6 +21326,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         if "kanban" not in payload and isinstance(previous_payload.get("kanban"), dict):
             payload["kanban"] = previous_payload["kanban"]
         payload = enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(payload)))
+        payload = repair_tree(payload)
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
             session.add(snapshot)
