@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import math
@@ -649,9 +650,15 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _READ_CACHE: dict[str, tuple[float, bytes]] = {}
+_READ_CACHE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def invalidate_read_cache(prefix: str) -> None:
+    for key in [k for k in _READ_CACHE if k.startswith(prefix)]:
+        _READ_CACHE.pop(key, None)
 _READ_CACHE_TTL = 45.0
 _READ_CACHE_TTL_OVERRIDES = {
-    "/api/portal": 60.0,
+    "/api/portal": 300.0,
     "/api/desktop/pending": 5.0,
 }
 _READ_CACHE_PATHS = {
@@ -677,14 +684,19 @@ async def read_cache_middleware(request: Request, call_next):
         hit = _READ_CACHE.get(key)
         if hit is not None and now - hit[0] < ttl:
             return Response(content=hit[1], media_type="application/json", headers={"X-Cache": "HIT", "Cache-Control": "no-store"})
-        resp = await call_next(request)
-        if resp.status_code == 200:
-            body = b""
-            async for chunk in resp.body_iterator:
-                body += chunk
-            _READ_CACHE[key] = (now, body)
-            return Response(content=body, media_type=resp.media_type or "application/json", headers={"Cache-Control": "no-store"})
-        return resp
+        lock = _READ_CACHE_LOCKS.setdefault(key, asyncio.Lock())
+        async with lock:
+            hit = _READ_CACHE.get(key)
+            if hit is not None and time.monotonic() - hit[0] < ttl:
+                return Response(content=hit[1], media_type="application/json", headers={"X-Cache": "HIT", "Cache-Control": "no-store"})
+            resp = await call_next(request)
+            if resp.status_code == 200:
+                body = b""
+                async for chunk in resp.body_iterator:
+                    body += chunk
+                _READ_CACHE[key] = (time.monotonic(), body)
+                return Response(content=body, media_type=resp.media_type or "application/json", headers={"Cache-Control": "no-store"})
+            return resp
     return await call_next(request)
 PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
 REQUISITION_TEMPLATE_PATH = STATIC_DIR / "requisition_template.pdf"
@@ -21333,6 +21345,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
         snapshot.updated_at = utc_now()
         snapshot.payload_json = json_dumps(payload)
         session.commit()
+    invalidate_read_cache("/api/portal")
     return {
         "ok": True,
         "equipment": len(equipment),
