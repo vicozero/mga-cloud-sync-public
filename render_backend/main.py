@@ -649,6 +649,12 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+try:
+    from app.main import app as disponibilidad_app
+    app.mount("/disponibilidad", disponibilidad_app, name="disponibilidad")
+except Exception as exc:  # noqa: BLE001 - no debe tumbar el monolito
+    print(f"[disponibilidad] No se pudo montar el modulo: {exc!r}")
+
 _READ_CACHE: dict[str, tuple[float, bytes]] = {}
 _READ_CACHE_LOCKS: dict[str, asyncio.Lock] = {}
 
@@ -2729,7 +2735,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("kanban", {"cards": {}, "overrides": {}})
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
-    return repair_tree(enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(merge_mobile_captures_into_portal(session, payload)))))
+    return payload
 
 
 def report_pdf_text(value: Any) -> str:
@@ -21337,7 +21343,7 @@ async def publish_portal_snapshot(request: Request, _auth: str | None = Header(d
             payload["tire_tracking"] = previous_payload["tire_tracking"]
         if "kanban" not in payload and isinstance(previous_payload.get("kanban"), dict):
             payload["kanban"] = previous_payload["kanban"]
-        payload = enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(payload)))
+        payload = merge_mobile_captures_into_portal(session, enrich_tire_tracking(merge_work_orders_into_backlog(merge_preventive_execution_into_portal(payload))))
         payload = repair_tree(payload)
         if snapshot is None:
             snapshot = PortalSnapshot(name="default")
