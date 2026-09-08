@@ -2708,6 +2708,57 @@ def portal_fallback_payload(session: Session) -> dict[str, Any]:
     }
 
 
+def portal_payload_actual_dates(payload: dict[str, Any]) -> list[str]:
+    seen: set[str] = set()
+
+    def collect(seq: Any, keys: tuple[str, ...]) -> None:
+        for row in seq or []:
+            if not isinstance(row, dict):
+                continue
+            for key in keys:
+                value = row.get(key)
+                if not isinstance(value, str) or len(value) < 10 or not value[:4].isdigit():
+                    continue
+                day = value[:10]
+                try:
+                    date.fromisoformat(day)
+                except ValueError:
+                    continue
+                seen.add(day)
+
+    collect(payload.get("captures") or [], ("work_date", "fecha"))
+    collect(payload.get("service_history") or [], ("service_date", "completed_date", "fecha"))
+    for container in ("work_orders", "special_services", "preventive_execution"):
+        inner = payload.get(container) or {}
+        if isinstance(inner, dict):
+            collect(inner.get("records") or [], ("date", "fecha"))
+    epp = payload.get("epp") or {}
+    if isinstance(epp, dict):
+        for subkey in ("movements", "deliveries"):
+            collect(epp.get(subkey) or [], ("date", "fecha"))
+    return sorted(seen)
+
+
+def fix_portal_payload_period(payload: dict[str, Any]) -> dict[str, Any]:
+    dates = portal_payload_actual_dates(payload)
+    if not dates:
+        return payload
+    start, end = dates[0], dates[-1]
+    period = payload.setdefault("period", {})
+    if isinstance(period, dict):
+        prev = (period.get("start"), period.get("end"))
+        period["start"] = start
+        period["end"] = end
+        if prev != (start, end):
+            period["bounded"] = True
+    for section in ("diesel", "oil_kpi"):
+        block = payload.get(section)
+        if isinstance(block, dict) and "start" in block and "end" in block:
+            block["start"] = start
+            block["end"] = end
+    return payload
+
+
 def latest_portal_payload(session: Session) -> dict[str, Any]:
     snapshot = session.scalar(select(PortalSnapshot).where(PortalSnapshot.name == "default"))
     if snapshot is None:
@@ -2735,6 +2786,7 @@ def latest_portal_payload(session: Session) -> dict[str, Any]:
     payload.setdefault("kanban", {"cards": {}, "overrides": {}})
     payload.setdefault("diesel", {"records": [], "days": [], "rows": [], "totals": {}})
     payload["updated_at"] = snapshot.updated_at.isoformat(timespec="seconds") if snapshot.updated_at else ""
+    fix_portal_payload_period(payload)
     return payload
 
 
@@ -10363,6 +10415,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="importar" data-group="reportes">Importar</button>
       <div class="nav-section-label">APP</div>
       <a href="/apk" target="_blank" style="display:flex;align-items:center;gap:8px;padding:11px 14px;border-radius:10px;background:linear-gradient(135deg,#0b69ff,#2563eb);color:white;font-size:13px;font-weight:700;text-decoration:none;margin-top:4px;min-height:44px;box-shadow:0 8px 20px rgba(11,105,255,.3);transition:all .15s" onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 12px 28px rgba(11,105,255,.4)'" onmouseout="this.style.transform='';this.style.boxShadow='0 8px 20px rgba(11,105,255,.3)'">&#128241; Descargar APK</a>
+      <a href="/disponibilidad/admin" target="_blank" style="display:flex;align-items:center;gap:8px;padding:11px 14px;border-radius:10px;background:linear-gradient(135deg,#0a7d5f,#059669);color:white;font-size:13px;font-weight:700;text-decoration:none;margin-top:8px;min-height:44px;box-shadow:0 8px 20px rgba(5,150,105,.3);transition:all .15s" onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 12px 28px rgba(5,150,105,.4)'" onmouseout="this.style.transform='';this.style.boxShadow='0 8px 20px rgba(5,150,105,.3)'">&#128268; Disponibilidad de Equipos</a>
     </nav>
     <section class="stats" id="stats"></section>
     <section id="planInspeccion" class="view">
