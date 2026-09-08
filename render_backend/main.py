@@ -10304,7 +10304,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
 </head>
 <body class="warehouse-page">
   <div class="mobile-overlay" id="mobileOverlay" onclick="toggleMobileMenu()"></div>
-  <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Ocultar / mostrar menu" aria-label="Ocultar o mostrar barra lateral">â˜°</button>
+  <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Ocultar / mostrar menu" aria-label="Ocultar o mostrar barra lateral">☰</button>
   <header class="hero">
     <div class="brand">
       <img class="corner-logo" src="/static/mga-corner-logo.jfif" alt="MGA">
@@ -10477,9 +10477,9 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="panel" style="margin-top:16px;">
         <div class="subtle-title"><h3>Cortes mensuales</h3><span class="muted">Saldo al cierre de cada mes. Si capturas consumo y luego agregas la entrada con su fecha, el corte se recalcula y se valida solo.</span></div>
         <div class="filter-row" style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
-          <label>AÃ±o<select id="lubCutsYear"></select></label>
+          <label>Año<select id="lubCutsYear"></select></label>
           <button class="btn secondary" id="lubCutsBtn">Ver cortes</button>
-          <span class="muted">Rojo = mes cerrÃ³ en negativo (falta entrada)</span>
+          <span class="muted">Rojo = mes cerró en negativo (falta entrada)</span>
         </div>
         <div class="table-wrap" style="max-height:420px;"><table id="lubCutsTable"></table></div>
       </div>
@@ -10705,16 +10705,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
               <button type="button" class="btn secondary" id="editFichaImageSelectBtn">Seleccionar foto</button>
               <button type="button" class="btn secondary" id="editFichaImageClearBtn" style="display:none;">Quitar foto</button>
             </div>
-            <p class="muted small">MÃ¡x. 2 MB. Se redimensiona automÃ¡ticamente a 800px.</p>
+            <p class="muted small">Máx. 2 MB. Se redimensiona automáticamente a 800px.</p>
           </div>
           <div class="modal-fields-grid">
-            <label>DescripciÃ³n<input id="editFichaDesc" placeholder="DescripciÃ³n del equipo"></label>
+            <label>Descripción<input id="editFichaDesc" placeholder="Descripción del equipo"></label>
             <label>Familia / Grupo<input id="editFichaFamily" placeholder="Familia o grupo"></label>
             <label>Tipo de equipo<input id="editFichaType" placeholder="Ej. JUMBO, CAMION, SCOOP..."></label>
             <label>Marca<input id="editFichaBrand" placeholder="Marca"></label>
             <label>Modelo<input id="editFichaModel" placeholder="Modelo"></label>
-            <label>Serie<input id="editFichaSerial" placeholder="NÃºmero de serie"></label>
-            <label>UbicaciÃ³n<input id="editFichaLocation" placeholder="UbicaciÃ³n / mina / Ã¡rea"></label>
+            <label>Serie<input id="editFichaSerial" placeholder="Número de serie"></label>
+            <label>Ubicación<input id="editFichaLocation" placeholder="Ubicación / mina / área"></label>
             <label class="wide">Notas<textarea id="editFichaNotes" rows="3" placeholder="Observaciones adicionales"></textarea></label>
           </div>
         </div>
@@ -10833,7 +10833,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
       </div>
       <div class="panel toolbar">
-        <label>Periodo<select id="prPeriod"><option>Mes</option><option>Semana</option><option>AÃ±o</option></select></label>
+        <label>Periodo<select id="prPeriod"><option>Mes</option><option>Semana</option><option>Año</option></select></label>
         <label>Fecha base<input id="prBase" type="date"></label>
         <label>Equipo<select id="prEquipment"></select></label>
         <label>Equipos reporte<select id="serviceReportEquipment" multiple size="4"></select></label>
@@ -11476,11 +11476,11 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="panel">
           <div class="subtle-title"><h3>Acciones rapidas</h3><span class="muted">Entrada, salida, kardex y reporte</span></div>
           <div class="warehouse-quick">
-            <button type="button" data-warehouse-action="ENTRADA"><b>â†“</b>Entrada de filtros</button>
-            <button type="button" data-warehouse-action="SALIDA"><b>â†‘</b>Salida de filtros</button>
-            <button type="button" data-warehouse-action="KARDEX"><b>â–¦</b>Kardex</button>
-            <button type="button" data-warehouse-action="REPORTE"><b>â–¤</b>Reporte inventario</button>
-            <button type="button" data-warehouse-action="REQUISICION" id="autoRequisitionBtn" style="background:linear-gradient(135deg,#b45309,#92400e);color:white;"><b>âš¡</b>Requisicion por faltantes</button>
+            <button type="button" data-warehouse-action="ENTRADA"><b>↓</b>Entrada de filtros</button>
+            <button type="button" data-warehouse-action="SALIDA"><b>↑</b>Salida de filtros</button>
+            <button type="button" data-warehouse-action="KARDEX"><b>▦</b>Kardex</button>
+            <button type="button" data-warehouse-action="REPORTE"><b>▤</b>Reporte inventario</button>
+            <button type="button" data-warehouse-action="REQUISICION" id="autoRequisitionBtn" style="background:linear-gradient(135deg,#b45309,#92400e);color:white;"><b>⚡</b>Requisicion por faltantes</button>
           </div>
         </div>
       </div>
@@ -11590,7 +11590,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <label>Recibio<input id="eppDelReceived"></label>
             <label>Firma texto<input id="eppDelSignature"></label>
             <label>Capacitado<select id="eppDelTraining"><option value="1">Si</option><option value="0">No</option></select></label>
-            <label>Estado<select id="eppDelCondition"><option>ENTREGADO</option><option>REPOSICION</option><option>DAÃ‘ADO</option><option>BAJA</option></select></label>
+            <label>Estado<select id="eppDelCondition"><option>ENTREGADO</option><option>REPOSICION</option><option>DAÑADO</option><option>BAJA</option></select></label>
             <label class="wide">Notas<textarea id="eppDelNotes" rows="2"></textarea></label>
             <button class="btn wide" id="eppDelBtn">Registrar entrega</button>
             <button class="btn secondary wide" id="eppLastPdfBtn">PDF ultima entrega</button>
@@ -11703,7 +11703,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       document.body.classList.toggle("sidebar-collapsed", collapsed);
       const btn = $("sidebarToggle");
       if(btn){
-        btn.textContent = collapsed ? "â˜°" : "â€¹";
+        btn.textContent = collapsed ? "☰" : "‹";
         btn.title = collapsed ? "Mostrar menu" : "Ocultar menu";
       }
     }
@@ -11787,7 +11787,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         .map(item => item.trim())
         .filter(Boolean)
         .map(item => {
-          const match = item.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-zÃÃ‰ÃÃ“ÃšÃœÃ‘Ã¡Ã©Ã­Ã³ÃºÃ¼Ã±.]+)?$/);
+          const match = item.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-zÃÃ‰ÃÃ“ÃšÃœÃ‘Ã¡Ã©Ã­Ã³Ãºüñ.]+)?$/);
           if(!match) return null;
           return {
             part_number: match[1].trim().toUpperCase(),
@@ -12389,10 +12389,10 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       const noStock = rows.filter(row => Number(row.quantity || 0) <= 0).length;
       const totalValue = rows.reduce((acc,row) => acc + Number(row.quantity || 0) * warehouseUnitCost(row), 0);
       const kpis = [
-        ["â—†", totalParts.toLocaleString("es-MX"), "Filtros registrados", "En catalogo", ""],
-        ["âœ“", num(totalQty), "En inventario", "Disponibles", "good"],
+        ["◆", totalParts.toLocaleString("es-MX"), "Filtros registrados", "En catalogo", ""],
+        ["✓", num(totalQty), "En inventario", "Disponibles", "good"],
         ["!", lowStock.toLocaleString("es-MX"), "Stock bajo", "Por debajo del minimo", "warn"],
-        ["â–³", noStock.toLocaleString("es-MX"), "Sin stock", "Requieren atencion", "bad"],
+        ["△", noStock.toLocaleString("es-MX"), "Sin stock", "Requieren atencion", "bad"],
         ["$", warehouseMoney(totalValue), "Valor inventario", totalValue ? "Costo total" : "Sin costo capturado", "money"],
       ];
       $("warehouseStats").innerHTML = kpis.map(([icon,value,label,note,cls]) => `
@@ -12417,7 +12417,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       $("warehouseMovementFeed").innerHTML = (movements.slice(0,5).map(row => {
         const type = String(row.movement_type || "").toUpperCase();
         const cls = type === "SALIDA" ? "out" : (type === "AJUSTE" ? "adjust" : "");
-        const symbol = type === "SALIDA" ? "â†‘" : (type === "AJUSTE" ? "Â±" : "â†“");
+        const symbol = type === "SALIDA" ? "↑" : (type === "AJUSTE" ? "±" : "↓");
         return `<div class="warehouse-feed-row ${cls}"><i>${symbol}</i><div><strong>${esc(type || "MOVIMIENTO")} ${esc(row.part_number || "")}</strong><span>${esc(row.reference || row.movement_date || "")}</span></div><em>${type === "SALIDA" ? "-" : "+"}${num(row.quantity)}</em></div>`;
       }).join("") || `<div class="muted">Sin movimientos registrados.</div>`);
       const distTotal = categories.reduce((acc,[,bucket]) => acc + Number(bucket.qty || 0), 0) || 1;
@@ -13656,7 +13656,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
     }
     function workOrderLines(value){
       const text = String(value || "").replace(/\r/g, "\n");
-      return text.split(/\n|;|â€¢/).map(line => line.replace(/^[-\d.)\s]+/, "").trim()).filter(Boolean);
+      return text.split(/\n|;|•/).map(line => line.replace(/^[-\d.)\s]+/, "").trim()).filter(Boolean);
     }
     function workOrderPartsRows(value){
       const lines = workOrderLines(value);
@@ -13918,7 +13918,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       const payload = workOrderPayload(close);
       if(!payload.equipment_code) return alert("Selecciona un equipo.");
       if(!payload.description) return alert("Describe el trabajo de la OT.");
-      if(close && !payload.action && !confirm("No capturaste accion/cierre. Â¿Cerrar OT de todos modos?")) return;
+      if(close && !payload.action && !confirm("No capturaste accion/cierre. ¿Cerrar OT de todos modos?")) return;
       const response = await fetch("/api/work-orders/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
@@ -13936,7 +13936,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       if(!hasApiKey(true)) return;
       const id = $("woId").value || $("woFolio").value || currentWorkOrderRecord?.id || currentWorkOrderRecord?.folio || "";
       if(!id) return alert("Selecciona una OT.");
-      if(!confirm("Â¿Eliminar esta orden de trabajo?")) return;
+      if(!confirm("¿Eliminar esta orden de trabajo?")) return;
       const response = await fetch("/api/work-orders/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
@@ -14291,7 +14291,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
     }
     function unavailable(status){
       const text = String(status || "").toUpperCase();
-      return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP") || text.includes("REPARACION") || text.includes("REPARACIÃ“N") || text.includes("MANTENIMIENTO");
+      return text.includes("NO DISPONIBLE") || text.includes("FUERA") || text.includes("NO DISP") || text.includes("REPARACION") || text.includes("REPARACIÓN") || text.includes("MANTENIMIENTO");
     }
     function normalizedText(value){
       return String(value || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -15604,10 +15604,10 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       const filtrosBajo = stocks.filter(r => Number(r.quantity||0) < Number(r.min_stock||r.minimum||0));
       const invShortages = (data.inventory||[]).filter(i => Number(i.quantity||0) <= 0 || (Number(i.min_stock||0) > 0 && Number(i.quantity||0) < Number(i.min_stock||0)));
       const alerts = [];
-      prevVencidos.slice(0,3).forEach(r => {       alerts.push(`<div class="d2-alert-item" onclick="activateTab('preventivos')"><span class="alert-dot red"></span><div class="alert-info"><strong>PM vencido: ${esc(r.equipment_code)}</strong><span>${esc(r.component)} â€” ${esc(r.meter_type)} â€” ${Number(r.hours_remaining||0).toFixed(0)}h atrasado</span></div></div>`); });
-      otOpen.slice(0,3).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('kanban')"><span class="alert-dot red"></span><div class="alert-info"><strong>OT critica: ${esc(r.equipment_code||r.code||"")}</strong><span>Score ${Number(r.score||0).toFixed(0)} â€” ${esc(shortText(r.detail||r.description||"",40))}</span></div></div>`); });
+      prevVencidos.slice(0,3).forEach(r => {       alerts.push(`<div class="d2-alert-item" onclick="activateTab('preventivos')"><span class="alert-dot red"></span><div class="alert-info"><strong>PM vencido: ${esc(r.equipment_code)}</strong><span>${esc(r.component)} — ${esc(r.meter_type)} — ${Number(r.hours_remaining||0).toFixed(0)}h atrasado</span></div></div>`); });
+      otOpen.slice(0,3).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('kanban')"><span class="alert-dot red"></span><div class="alert-info"><strong>OT critica: ${esc(r.equipment_code||r.code||"")}</strong><span>Score ${Number(r.score||0).toFixed(0)} — ${esc(shortText(r.detail||r.description||"",40))}</span></div></div>`); });
       filtrosBajo.slice(0,2).forEach(r => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Stock bajo: ${esc(r.name||r.sku||"")}</strong><span>Stock ${Number(r.quantity||0)} / min ${Number(r.min_stock||r.minimum||0)}</span></div></div>`); });
-      invShortages.slice(0,2).forEach(i => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Faltante: ${esc(i.part_number||"")}</strong><span>${esc(shortText(i.description||"",35))} â€” ${Number(i.quantity||0) <= 0 ? "Sin stock" : "Faltan "+Math.max(Number(i.min_stock||0)-Number(i.quantity||0),1)}</span></div></div>`); });
+      invShortages.slice(0,2).forEach(i => { alerts.push(`<div class="d2-alert-item" onclick="activateTab('inventario')"><span class="alert-dot amber"></span><div class="alert-info"><strong>Faltante: ${esc(i.part_number||"")}</strong><span>${esc(shortText(i.description||"",35))} — ${Number(i.quantity||0) <= 0 ? "Sin stock" : "Faltan "+Math.max(Number(i.min_stock||0)-Number(i.quantity||0),1)}</span></div></div>`); });
       $("d2AlertsCount").textContent = `${alerts.length} alerta(s)`;
       $("d2Alerts").innerHTML = alerts.length ? alerts.join("") : `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">Sin alertas criticas</div>`;
     }
@@ -15785,12 +15785,12 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       const ready = allPartsReady && !isOut;
       $("pmReadinessPanel").style.display = "block";
       $("pmReadinessPanel").className = `rdy-panel ${ready ? "ready" : "not-ready"}`;
-      let html = `<div style="font-weight:900;color:var(--navy);margin-bottom:8px;font-size:13px">Readiness check â€” ${esc(service)} â€” ${esc(code)}</div>`;
+      let html = `<div style="font-weight:900;color:var(--navy);margin-bottom:8px;font-size:13px">Readiness check — ${esc(service)} — ${esc(code)}</div>`;
       html += `<div class="rdy-item"><span class="rdy-icon">${isOut ? "ðŸ”´" : "ðŸŸ¢"}</span><div class="rdy-item-info"><strong>Equipo</strong><span>${isOut ? "FUERA DE SERVICIO" : "Disponible"}</span></div></div>`;
       partsStatus.forEach(p => {
         html += `<div class="rdy-item"><span class="rdy-icon">${p.available ? "ðŸŸ¢" : "ðŸ”´"}</span><div class="rdy-item-info"><strong>${esc(p.name)}</strong><span>${p.available ? `Disponible (${p.qty})` : "FALTANTE"}</span></div></div>`;
       });
-      html += `<div class="rdy-item"><span class="rdy-icon">${ready ? "ðŸŸ¢" : "ðŸ”´"}</span><div class="rdy-item-info"><strong>Resultado</strong><span>${ready ? "LISTO PARA PROGRAMAR" : "NO LISTO â€” Verificar faltantes"}</span></div></div>`;
+      html += `<div class="rdy-item"><span class="rdy-icon">${ready ? "ðŸŸ¢" : "ðŸ”´"}</span><div class="rdy-item-info"><strong>Resultado</strong><span>${ready ? "LISTO PARA PROGRAMAR" : "NO LISTO — Verificar faltantes"}</span></div></div>`;
       if(!allPartsReady){
         const missing = partsStatus.filter(p => !p.available).map(p => p.name).join(", ");
         html += `<div class="rdy-actions"><button class="btn secondary" onclick="activateTab('inventario')">Ver inventario</button></div>`;
@@ -16267,7 +16267,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       const MES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
       const DOW = ["Lun","Mar","Mie","Jue","Vie","Sab","Dom"];
       const year = almCurrentYear, month = almCurrentMonth;
-      $("almTitle").textContent = `${MES[month]} ${year} â€” Calendario de Preventivos`;
+      $("almTitle").textContent = `${MES[month]} ${year} — Calendario de Preventivos`;
       const first = new Date(year, month, 1);
       const last = new Date(year, month + 1, 0);
       const startDow = (first.getDay() + 6) % 7;
@@ -16725,7 +16725,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       $("prevExecClosedCount").textContent = `${closed.length} cerrado(s)`;
       const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(preventiveServiceLabel(row.service_type))}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="10">Sin servicios preventivos abiertos.</td></tr>`;
       $("prevExecOpenTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
-      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="10">Sin servicios cerrados desde esta pestaÃ±a.</td></tr>`;
+      const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="10">Sin servicios cerrados desde esta pestaña.</td></tr>`;
       $("prevExecClosedTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha cierre</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Trabajo realizado</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
       document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
         const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
@@ -16738,9 +16738,9 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       if(close) payload.status = "CERRADO";
       if(!payload.equipment_code) return alert("Selecciona un equipo.");
       const chkResult = enhancedChecklistCount(payload);
-      if(close && chkResult.fail > 0 && !confirm(`Hay ${chkResult.fail} fallo(s) en el checklist. Se generara(n) OT(s) correctiva(s). Â¿Cerrar servicio de todos modos?`)) return;
-      if(close && chkResult.total > 0 && chkResult.pass < chkResult.total - 1 && !confirm("El checklist de cierre no esta completo. Â¿Cerrar servicio de todos modos?")) return;
-      if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. Â¿Guardar asi?")) return;
+      if(close && chkResult.fail > 0 && !confirm(`Hay ${chkResult.fail} fallo(s) en el checklist. Se generara(n) OT(s) correctiva(s). ¿Cerrar servicio de todos modos?`)) return;
+      if(close && chkResult.total > 0 && chkResult.pass < chkResult.total - 1 && !confirm("El checklist de cierre no esta completo. ¿Cerrar servicio de todos modos?")) return;
+      if(!payload.supervisor && !payload.mechanic && !confirm("No capturaste supervisor ni mecanico. ¿Guardar asi?")) return;
       const shouldDeductParts = close && !isPreventiveClosed(currentPreventiveExecutionRecord || {});
       const response = await fetch("/api/preventive-execution/records", {method:"POST", headers:headers(true), body:JSON.stringify(payload)});
       if(!response.ok) throw new Error(await apiError(response));
@@ -16809,7 +16809,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       if(!hasApiKey()) return;
       const id = $("prevExecId").value || (currentPreventiveExecutionRecord || {}).id || "";
       if(!id) return alert("Selecciona un servicio para eliminar.");
-      if(!confirm("Â¿Eliminar este servicio preventivo? Si ya estaba cerrado tambien se retirara de Servicios realizados.")) return;
+      if(!confirm("¿Eliminar este servicio preventivo? Si ya estaba cerrado tambien se retirara de Servicios realizados.")) return;
       const response = await fetch("/api/preventive-execution/records/delete", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
       if(!response.ok) throw new Error(await apiError(response));
       const result = await response.json();
@@ -16910,7 +16910,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
             service:"INSPECCION",
             tasks:[
               ["Seguridad","Revisar paro de emergencia, protecciones, luces, alarma de traslado y extintor."],
-              ["Sistema electrico","Inspeccionar cable, enchufe, tablero, botoneras, tierra fisica y daÃ±os visibles."],
+              ["Sistema electrico","Inspeccionar cable, enchufe, tablero, botoneras, tierra fisica y daños visibles."],
               ["Perforadora","Revisar shank, centralizador, mangueras, fugas, lubricacion y estado de barras."],
               ["Hidraulico","Revisar nivel, temperatura, fugas en bombas, cilindros, manifold y conexiones."],
               ["Boom","Revisar articulaciones, pasadores, bujes, mangueras y fisuras."],
@@ -17608,7 +17608,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
     async function saveDailyCapture(resetAfter=false){
       if(!hasApiKey(true)) return;
       const warnings = captureValidationWarnings();
-      if(warnings.some(text => text.includes("Falta") || text.includes("menor")) && !confirm("Hay alertas de captura. Â¿Guardar de todos modos?")) return;
+      if(warnings.some(text => text.includes("Falta") || text.includes("menor")) && !confirm("Hay alertas de captura. ¿Guardar de todos modos?")) return;
       const record = capturePayload();
       $("capStatus").textContent = "Guardando...";
       const response = await fetch("/api/sync", {
