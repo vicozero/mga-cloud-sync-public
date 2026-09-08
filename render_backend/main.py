@@ -11729,6 +11729,16 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       return false;
     }
     function headers(json=false){ const h = {}; if(apiKey.value.trim()) h["X-MGA-API-Key"] = apiKey.value.trim(); if(json) h["Content-Type"]="application/json"; return h; }
+    async function mgJson(response){
+      let body = await response.arrayBuffer();
+      if (body.byteLength > 2) {
+        const head = new Uint8Array(body, 0, 2);
+        if (head[0] === 0x1f && head[1] === 0x8b && typeof DecompressionStream === "function") {
+          body = await new Response(new Blob([body]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+        }
+      }
+      return JSON.parse(new TextDecoder().decode(body));
+    }
     async function apiError(response){
       const text = await response.text();
       try {
@@ -12325,12 +12335,12 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       if(!req.ok) throw new Error(await apiError(req));
       if(!hosePayload.ok) throw new Error(await apiError(hosePayload));
       if(!dieselPayload.ok) throw new Error(await apiError(dieselPayload));
-      data = await r.json();
-      portal = await p.json();
-      products = (await prod.json()).products || [];
-      const reqPayload = await req.json();
-      hoses = await hosePayload.json();
-      diesel = await dieselPayload.json();
+      data = await mgJson(r);
+      portal = await mgJson(p);
+      products = (await mgJson(prod)).products || [];
+      const reqPayload = await mgJson(req);
+      hoses = await mgJson(hosePayload);
+      diesel = await mgJson(dieselPayload);
       epp = { items: [], movements: [], deliveries: [], workers: [], summary: {} };
       requisitions = reqPayload.requisitions || [];
       if(!currentReqId && !$("reqFolio").value) newRequisition(reqPayload.next_folio);
@@ -12455,7 +12465,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       const semanas = { value: ($("pinSemana").value || pinWeekMonday()) };
       const res = await fetch("/api/inspeccion/plan?semana=" + encodeURIComponent(semanas.value));
       if(!res.ok) throw new Error("No se pudo cargar el plan");
-      const data = await res.json();
+      const data = await mgJson(res);
       PIN_STATE.semana = data.semana;
       PIN_STATE.plan = Array.isArray(data.plan) ? data.plan : [];
       PIN_STATE.equipos = Array.isArray(data.equipos) ? data.equipos : [];
@@ -12491,7 +12501,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
     }
     async function generarPlanInspeccion(){
       const res = await fetch("/api/inspeccion/plan/generar", {method:"POST", headers:headers(true), body:JSON.stringify({semana: $("pinSemana").value || pinWeekMonday()})});
-      const data = await res.json();
+      const data = await mgJson(res);
       if(!res.ok) throw new Error((data && data.detail) || "No se pudo generar el plan");
       showToast("Plan generado: " + (data.creados || 0) + " creados, " + (data.ya_existentes || 0) + " ya existian");
       loadInspeccionPlan().catch(showError);
@@ -12499,7 +12509,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
     async function loadInspeccionPlantillas(){
       const res = await fetch("/api/inspeccion/plantillas");
       if(!res.ok) return;
-      const data = await res.json();
+      const data = await mgJson(res);
       const list = Array.isArray(data.plantillas) ? data.plantillas : [];
       const sel = $("pinPlantSel");
       const prev = sel.value;
