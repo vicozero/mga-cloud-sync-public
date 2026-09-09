@@ -10413,16 +10413,16 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="nav-section-label">PLANEACION</div>
       <button data-tab="preventivos" data-group="planeacion">PR Preventivos</button>
       <button data-tab="backlog" data-group="planeacion">Backlog</button>
-      Ejecución PM
+      <button data-tab="ejecucionPreventivos" data-group="planeacion">Ejecución PM</button>
       <button data-tab="fichaEquipo" data-group="planeacion">Ficha equipo</button>
       <div class="nav-section-label">MANTENIMIENTO</div>
       Catálogo equipos
       <button data-tab="servicios" data-group="mantto">Servicios</button>
       <button data-tab="serviciosEspeciales" data-group="mantto">Serv. especiales</button>
       <button data-tab="captura" data-group="mantto">Captura diaria</button>
-      Bitácora
+      <button data-tab="bitacora" data-group="mantto">Bitácora</button>
       <button data-tab="disponibilidad" data-group="mantto">Disponibilidad</button>
-      Plan inspección
+      <button data-tab="inspeccion" data-group="mantto">Plan inspección</button>
       <div class="nav-section-label">ALMACEN</div>
       <button data-tab="equipos" data-group="almacen">Filtros</button>
       <button data-tab="lubricantes" data-group="almacen">Lubricantes</button>
@@ -10432,7 +10432,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="diesel" data-group="flota">Diésel</button>
       <button data-tab="llantasTrack" data-group="flota">Llantas</button>
       <div class="nav-section-label">COMPRAS</div>
-      Requisiciones
+      <button data-tab="requisiciones" data-group="compras">Requisiciones</button>
       <button data-tab="seguimientoReq" data-group="compras">Seguimiento</button>
       <div class="nav-section-label">REPORTES</div>
       <button data-tab="mensual" data-group="reportes">Reportes</button>
