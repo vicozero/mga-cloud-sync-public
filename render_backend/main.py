@@ -534,7 +534,12 @@ LUBRICANT_PRESENTATIONS_WEB = [
 LUBRICANT_PRESENTATION_FACTORS = {name.upper(): float(factor) for name, factor in LUBRICANT_PRESENTATIONS_WEB}
 
 
-engine = create_engine(database_url(), pool_pre_ping=True, poolclass=NullPool)
+engine = create_engine(
+    database_url(),
+    pool_pre_ping=True,
+    poolclass=NullPool,
+    connect_args={"connect_timeout": 10, "keepalives": 1, "keepalives_idle": 15, "keepalives_interval": 15, "keepalives_count": 3},
+)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
 
@@ -702,6 +707,15 @@ async def read_cache_middleware(request: Request, call_next):
                     body += chunk
                 _READ_CACHE[key] = (time.monotonic(), body)
                 return Response(content=body, media_type=resp.media_type or "application/json", headers={"Cache-Control": "no-store"})
+            if resp.status_code >= 500:
+                await asyncio.sleep(1.5)
+                resp = await call_next(request)
+                if resp.status_code == 200:
+                    body = b""
+                    async for chunk in resp.body_iterator:
+                        body += chunk
+                    _READ_CACHE[key] = (time.monotonic(), body)
+                    return Response(content=body, media_type=resp.media_type or "application/json", headers={"Cache-Control": "no-store"})
             return resp
     return await call_next(request)
 PRODUCT_CATALOG_PATH = STATIC_DIR / "productos_catalog.json"
