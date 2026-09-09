@@ -682,6 +682,7 @@ _READ_CACHE_PATHS = {
     "/api/tire-tracking",
     "/api/diesel",
     "/api/portal",
+    "/api/products",
     "/api/desktop/pending",
 }
 
@@ -700,7 +701,17 @@ async def read_cache_middleware(request: Request, call_next):
             hit = _READ_CACHE.get(key)
             if hit is not None and time.monotonic() - hit[0] < ttl:
                 return Response(content=hit[1], media_type="application/json", headers={"X-Cache": "HIT", "Cache-Control": "no-store"})
-            resp = await call_next(request)
+
+            async def _call_with_retry(req, nxt):
+                try:
+                    return await nxt(req)
+                except Exception as e:
+                    if "EMAXCONNSESSION" in str(e) or "OperationalError" in type(e).__name__:
+                        await asyncio.sleep(1.5)
+                        return await nxt(req)
+                    raise
+
+            resp = await _call_with_retry(request, call_next)
             if resp.status_code == 200:
                 body = b""
                 async for chunk in resp.body_iterator:
@@ -709,7 +720,7 @@ async def read_cache_middleware(request: Request, call_next):
                 return Response(content=body, media_type=resp.media_type or "application/json", headers={"Cache-Control": "no-store"})
             if resp.status_code >= 500:
                 await asyncio.sleep(1.5)
-                resp = await call_next(request)
+                resp = await _call_with_retry(request, call_next)
                 if resp.status_code == 200:
                     body = b""
                     async for chunk in resp.body_iterator:
