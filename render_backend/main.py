@@ -9432,7 +9432,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MGA Almacen de filtros</title>
+  <title>MGA Almacén de filtros</title>
   <style>
     :root { --blue:#2563eb; --blue2:#0ea5e9; --navy:#0f172a; --teal:#14b8a6; --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --muted:#64748b; --line:#d7e0ea; --bg:#f8fafc; --panel:#ffffff; --soft:#f8fafc; --shadow:0 18px 42px rgba(15,23,42,.10); --deep:#07162f; --steel:#334155; --cyan:#22d3ee; }
     * { box-sizing:border-box; }
@@ -10388,7 +10388,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div><h1>Mantenimiento MGA</h1><p>Control de mantenimiento, KPI, inventario, movimientos y disponibilidad</p></div>
     </div>
     <div class="hero-visual" aria-hidden="true">
-      <div class="ops-card"><span>Operacion</span><b>En vivo</b><i></i></div>
+      <div class="ops-card">Operación<b>En vivo</b><i></i></div>
       <div class="top-mine-anim" aria-label="Scooptram en operacion">
         <div class="warehouse-scoop">
           <div class="light"></div>
@@ -10408,31 +10408,31 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button class="active" data-tab="dashboard" data-group="fav" title="Dashboard principal">&#9632; Dashboard</button>
       <button data-tab="kanban" data-group="fav" title="Programacion semanal">&#9654; Kanban</button>
       <button data-tab="ordenesTrabajo" data-group="fav" title="Ordenes de trabajo">&#9998; OT</button>
-      <button data-tab="inventario" data-group="fav" title="Almacen">&#9881; Inventario</button>
+      <button data-tab="inventario" data-group="fav" title="Almacén">&#9881; Inventario</button>
       <button data-tab="catalogoEquipos" data-group="fav" title="Catalogo">&#9878; Equipos</button>
       <div class="nav-section-label">PLANEACION</div>
       <button data-tab="preventivos" data-group="planeacion">PR Preventivos</button>
       <button data-tab="backlog" data-group="planeacion">Backlog</button>
-      <button data-tab="ejecucionPreventivos" data-group="planeacion">Ejecucion PM</button>
+      Ejecución PM
       <button data-tab="fichaEquipo" data-group="planeacion">Ficha equipo</button>
       <div class="nav-section-label">MANTENIMIENTO</div>
-      <button data-tab="catalogoEquiposFull" data-group="mantto">Catalogo equipos</button>
+      Catálogo equipos
       <button data-tab="servicios" data-group="mantto">Servicios</button>
       <button data-tab="serviciosEspeciales" data-group="mantto">Serv. especiales</button>
       <button data-tab="captura" data-group="mantto">Captura diaria</button>
-      <button data-tab="bitacora" data-group="mantto">Bitacora</button>
+      Bitácora
       <button data-tab="disponibilidad" data-group="mantto">Disponibilidad</button>
-      <button data-tab="planInspeccion" data-group="mantto">Plan inspeccion</button>
+      Plan inspección
       <div class="nav-section-label">ALMACEN</div>
       <button data-tab="equipos" data-group="almacen">Filtros</button>
       <button data-tab="lubricantes" data-group="almacen">Lubricantes</button>
       <button data-tab="refacciones" data-group="almacen">Refacciones</button>
       <button data-tab="mangueras" data-group="almacen">Mangueras</button>
       <div class="nav-section-label">FLOTA</div>
-      <button data-tab="diesel" data-group="flota">Diesel</button>
+      <button data-tab="diesel" data-group="flota">Diésel</button>
       <button data-tab="llantasTrack" data-group="flota">Llantas</button>
       <div class="nav-section-label">COMPRAS</div>
-      <button data-tab="requisiciones" data-group="compras">Requisiciones</button>
+      Requisiciones
       <button data-tab="seguimientoReq" data-group="compras">Seguimiento</button>
       <div class="nav-section-label">REPORTES</div>
       <button data-tab="mensual" data-group="reportes">Reportes</button>
@@ -10478,20 +10478,20 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
       <div class="pin-tabs">
         <button class="pin-tab active" data-pin="plan">Plan semanal</button>
-        <button class="pin-tab" data-pin="registro">Registrar inspeccion</button>
+        <button class="pin-tab" data-pin="registro">Registrar inspección</button>
         <button class="pin-tab" data-pin="historial">Historial / Inspecciones</button>
         <button class="pin-tab" data-pin="predictivo">Predictivo / Semafaro</button>
-        <button class="pin-tab" data-pin="plantillas">Catalogo plantillas</button>
+        Catálogo plantillas</button>
       </div>
       <div class="panel pin-view active" id="pinPlan">
         <div id="pinPlanHeader" class="pin-subtitle"></div>
-        <div class="table-wrap"><table class="table compact"><thead><tr><th>Dia</th><th>Unidad</th><th>Equipo</th><th>Tipo</th><th>Estado</th><th>Inspecciones</th><th>Acciones</th></tr></thead><tbody id="pinPlanBody"></tbody></table></div>
+        <div class="table-wrap"><table class="table compact"><thead><tr><th>Día</th><th>Unidad</th><th>Equipo</th><th>Tipo</th><th>Estado</th><th>Inspecciones</th><th>Acciones</th></tr></thead><tbody id="pinPlanBody"></tbody></table></div>
       </div>
       <div class="panel pin-view" id="pinRegistro">
         <div class="form-grid">
           <label>Equipo</label><select id="pinEq"></select>
           <label>Fecha</label><input type="date" id="pinFecha" />
-          <label>Horometro</label><input type="text" id="pinHorometro" placeholder="ej. 12,450" />
+          <label>Horómetro</label><input type="text" id="pinHorometro" placeholder="ej. 12,450" />
           <label>Turno</label><select id="pinTurno"><option value="">Seleccionar</option><option>DIA</option><option>NOCHE</option></select>
           <label>Inspector</label><input type="text" id="pinInspector" placeholder="Nombre del inspector" />
           <label>Observaciones</label><input type="text" id="pinObs" placeholder="Notas generales" />
@@ -10499,7 +10499,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div id="pinPlantillaInfo" class="pin-subtitle"></div>
         <div id="pinChecklist" class="checklist"></div>
         <div class="toolbar-actions" style="margin-top:14px">
-          <button class="btn" id="pinGuardar">Guardar inspeccion</button>
+          <button class="btn" id="pinGuardar">Guardar inspección</button>
           <button type="button" class="btn secondary" id="pinLimpiar">Limpiar formulario</button>
           <span id="pinGuardarMsg" class="pin-msg"></span>
         </div>
@@ -10508,7 +10508,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="toolbar-actions">
           <select id="pinHistEq" style="min-width:220px"><option value="">Todas las unidades</option></select>
         </div>
-        <div class="table-wrap"><table class="table compact"><thead><tr><th>ID</th><th>Unidad</th><th>Fecha</th><th>Horometro</th><th>Turno</th><th>Inspector</th><th>Plan</th><th colspan="3">Acciones</th></tr></thead><tbody id="pinHistBody"></tbody></table></div>
+        <div class="table-wrap"><table class="table compact"><thead><tr><th>ID</th><th>Unidad</th><th>Fecha</th><th>Horómetro</th><th>Turno</th><th>Inspector</th><th>Plan</th><th colspan="3">Acciones</th></tr></thead><tbody id="pinHistBody"></tbody></table></div>
       </div>
       <div class="panel pin-view" id="pinPredictivo">
         <div class="toolbar-actions"><label>Equipo</label><select id="pinPredEq" style="min-width:240px"></select></div>
@@ -10531,7 +10531,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="table-wrap"><table class="table compact"><thead><tr><th>Sistema</th><th>Item</th><th>Eliminar</th></tr></thead><tbody id="pinPlantItems"></tbody></table></div>
         <div class="toolbar-actions">
           <select id="pinSistemaSel"><option value="Motor">Motor</option><option value="Sistema hidraulico">Sistema hidraulico</option><option value="Sistema electrico">Sistema electrico</option><option value="Tren de rodaje">Tren de rodaje</option><option value="Perforacion">Perforacion</option><option value="Seguridad">Seguridad</option></select>
-          <input type="text" id="pinNuevoItem" placeholder="Nuevo punto de inspeccion" style="min-width:280px" />
+          <input type="text" id="pinNuevoItem" placeholder="Nuevo punto de inspección" style="min-width:280px" />
           <button class="btn" id="pinItemAgregar">Agregar item</button>
           <span id="pinPlantMsg" class="pin-msg"></span>
         </div>
@@ -10585,7 +10585,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
             <button class="btn secondary" id="lubFormClearBtn">Limpiar</button>
             <button class="btn" id="lubSaveBtn">Guardar movimiento</button>
           </div>
-          <div class="subtle-title" style="margin-top:16px"><h3>Minimo de stock</h3><span class="muted">Configuracion por lubricante</span></div>
+          <div class="subtle-title" style="margin-top:16px"><h3>Minimo de stock</h3><span class="muted">Configuración por lubricante</span></div>
           <div class="movement-grid">
             <label>Lubricante<select id="lubConfigProduct"></select></label>
             <label>Nombre<input id="lubConfigName"></label>
@@ -10945,7 +10945,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <label>Desde<input id="backlogStart" type="date"></label>
         <label>Hasta<input id="backlogEnd" type="date"></label>
         <label>Nivel<select id="backlogLevel"><option value="">Todos</option><option>ALTA</option><option>MEDIA</option><option>BAJA</option></select></label>
-        <label>Origen<select id="backlogSource"><option value="">Todos</option><option>Preventivo</option><option>Captura</option><option>OT</option><option>Requisicion</option></select></label>
+        <label>Origen<select id="backlogSource"><option value="">Todos</option><option>Preventivo</option><option>Captura</option><option>OT</option><option>Requisición</option></select></label>
         <label>Estado<select id="backlogStatus"><option value="">Todos</option><option>Pendiente</option><option>En proceso</option><option>Atendido</option><option>Cancelado</option></select></label>
         <label>Buscar<input id="backlogSearch" placeholder="Equipo, sistema, detalle"></label>
         <button class="btn" id="renderBacklogBtn">Actualizar</button>
@@ -10967,7 +10967,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <div class="panel toolbar">
         <label>Buscar<input id="kanbanSearch" placeholder="Equipo, componente, sistema"></label>
         <label>Nivel<select id="kanbanLevel"><option value="">Todos</option><option>ALTA</option><option>MEDIA</option><option>BAJA</option></select></label>
-        <label>Origen<select id="kanbanSource"><option value="">Todos</option><option>Preventivo</option><option>Captura</option><option>OT</option><option>Requisicion</option></select></label>
+        <label>Origen<select id="kanbanSource"><option value="">Todos</option><option>Preventivo</option><option>Captura</option><option>OT</option><option>Requisición</option></select></label>
         <button class="btn" id="renderKanbanBtn">Actualizar</button>
       </div>
       <div class="panel" style="padding:12px;">
@@ -11545,7 +11545,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         <div class="warehouse-titlebar">
           <div>
             <div class="warehouse-breadcrumb">Inicio &gt; Almacen &gt; Filtros</div>
-            <h2>Almacen de Filtros</h2>
+            <h2>Almacén de Filtros</h2>
             <p>Vista operativa para controlar stock, bajas, entradas/salidas y exportacion.</p>
           </div>
           <button class="btn secondary" id="warehouseRefreshBtn">Actualizar tablero</button>
@@ -11564,7 +11564,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       </div>
       <div class="grid2">
         <div class="panel">
-          <div class="subtle-title"><h3>Catalogo de filtros</h3><span class="muted" id="warehouseInventoryCount"></span></div>
+          <div class="subtle-title"><h3>Catálogo de filtros</h3><span class="muted" id="warehouseInventoryCount"></span></div>
           <div class="toolbar" style="grid-template-columns:1fr 160px;">
             <label>Buscar<input id="inventorySearch" placeholder="No. parte o descripcion"></label>
             <button class="btn secondary" id="exportBtn">Exportar Excel</button>
@@ -11676,7 +11676,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
         </div>
       </div>
       <div class="panel">
-        <h3>Catalogo de trabajadores</h3>
+        <h3>Catálogo de trabajadores</h3>
         <div class="movement-grid">
           <label>No. empleado<input id="eppWorkerEmployee"></label>
           <label>Trabajador<input id="eppWorkerName"></label>
@@ -11908,7 +11908,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         ["Equipo", `${record.equipment_code || ""} ${record.equipment_description || ""}`.trim()],
         ["Servicio", preventive ? preventive.service_label : [record.service_type, record.service_name, record.stage, record.service_interval].filter(Boolean).join(" / ")],
         ["Componente", record.attribute_type || record.component || ""],
-        ["Horometro", record.completed_meter || ""],
+        ["Horómetro", record.completed_meter || ""],
         ["Supervisor", record.supervisor || ""],
         ["Mecanico", record.mechanic || ""],
         ["Refacciones/trabajo realizado", record.parts_used || record.filters_text || record.filters_used || "Sin captura manual"],
@@ -12632,7 +12632,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
           row.innerHTML =
             '<span>' + esc(item.item) + '</span>' +
             '<input class="pin-detalle" placeholder="Detalle / observacion" />' +
-            '<select class="pin-calif"><option value="NORMAL">Normal</option><option value="OBSERVACION">Observacion</option><option value="DESGASTE">Desgaste</option><option value="CRITICA">Falla critica</option><option value="NA">No aplica</option></select>' +
+            '<select class="pin-calif"><option value="NORMAL">Normal</option><option value="OBSERVACION">Observación</option><option value="DESGASTE">Desgaste</option><option value="CRITICA">Falla critica</option><option value="NA">No aplica</option></select>' +
             '<span></span>';
           ck.appendChild(row);
           PIN_STATE.checklist.push({sistema:g.sistema, item:item.item});
@@ -12657,7 +12657,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       if(!res.ok) throw new Error("No se pudo cargar la inspeccion");
       const data = await res.json();
       const ins = data.inspeccion || {};
-      const califLbl = {NORMAL:"Normal",OBSERVACION:"Observacion",DESGASTE:"Desgaste",CRITICA:"Falla critica",NA:"No aplica"};
+      const califLbl = {NORMAL:"Normal",OBSERVACION:"Observación",DESGASTE:"Desgaste",CRITICA:"Falla critica",NA:"No aplica"};
       const califColor = {NORMAL:"#16a34a",OBSERVACION:"#ca8a04",DESGASTE:"#ea580c",CRITICA:"#dc2626",NA:"#64748b"};
       const grupos = {};
       (Array.isArray(data.califs) ? data.califs : []).forEach(c => {
@@ -12676,11 +12676,11 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       const html =
         '<!doctype html><html><head><meta charset="utf-8"><title>Inspeccion #' + esc(num(ins.id)) + '</title>' +
         "<style>@page{size:letter;margin:.4in}body{font-family:Segoe UI,Arial,sans-serif;color:#0f172a;font-size:12px}h1{color:#0b2f6f;margin:0 0 2px;font-size:20px}.meta{color:#64748b;margin-bottom:8px}.box{border:1px solid #cbd5e1;border-radius:8px;padding:10px;margin-bottom:10px;break-inside:avoid}.meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px}.meta-grid b{color:#0b2f6f}table{width:100%;border-collapse:collapse}th{background:#e8eef7;color:#0b2f6f;text-align:left;text-transform:uppercase;font-size:10px;padding:5px 6px}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:28px}.line{border-top:1px solid #334155;text-align:center;padding-top:6px;font-weight:700}.legend{margin-top:10px;padding-top:8px;border-top:1px dashed #cbd5e1}</style></head><body>" +
-        "<h1>Plan semanal de inspeccion - Tarjeta de campo</h1>" +
+        "<h1>Plan semanal de inspección - Tarjeta de campo</h1>" +
         '<div class="meta">Inspector: <b>' + esc(ins.inspector || "") + '</b> | Fecha emision: ' + esc(ins.fecha || "") + '</div>' +
-        '<div class="box"><table><tr><th>Unidad</th><th>Horometro</th><th>Turno</th><th>Observaciones</th></tr>' +
+        '<div class="box"><table><tr><th>Unidad</th><th>Horómetro</th><th>Turno</th><th>Observaciones</th></tr>' +
         "<tr><td>" + esc(ins.equipo_id || "") + "</td><td>" + esc(ins.horometro || "") + "</td><td>" + esc(ins.turno || "") + "</td><td>" + esc(ins.observaciones || "") + "</td></tr></table></div>" +
-        '<div class="box"><table><tr><th>Punto de inspeccion</th><th>Calificacion</th><th>Detalle</th></tr>' + bodyRows + "</table>" +
+        '<div class="box"><table><tr><th>Punto de inspección</th><th>Calificación</th><th>Detalle</th></tr>' + bodyRows + "</table>" +
         '<div class="legend">' + califLegend + "</div></div>" +
         '<div class="sign"><div class="line">Inspector</div><div class="line">Supervisor</div></div>' +
         "</body></html>";
@@ -12725,7 +12725,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
           row.innerHTML =
             '<span>' + esc(c.item) + '</span>' +
             '<input class="pin-detalle" value="' + esc(c.detalle || "") + '" />' +
-            '<select class="pin-calif"><option value="NORMAL"' + (c.calif === "NORMAL" ? " selected" : "") + '>Normal</option><option value="OBSERVACION"' + (c.calif === "OBSERVACION" ? " selected" : "") + '>Observacion</option><option value="DESGASTE"' + (c.calif === "DESGASTE" ? " selected" : "") + '>Desgaste</option><option value="CRITICA"' + (c.calif === "CRITICA" ? " selected" : "") + '>Falla critica</option><option value="NA"' + (c.calif === "NA" ? " selected" : "") + '>No aplica</option></select>' +
+            '<select class="pin-calif"><option value="NORMAL"' + (c.calif === "NORMAL" ? " selected" : "") + '>Normal</option><option value="OBSERVACION"' + (c.calif === "OBSERVACION" ? " selected" : "") + '>Observación</option><option value="DESGASTE"' + (c.calif === "DESGASTE" ? " selected" : "") + '>Desgaste</option><option value="CRITICA"' + (c.calif === "CRITICA" ? " selected" : "") + '>Falla critica</option><option value="NA"' + (c.calif === "NA" ? " selected" : "") + '>No aplica</option></select>' +
             '<span></span>';
           ck.appendChild(row);
         });
@@ -12752,14 +12752,14 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       $("pinGuardarMsg").textContent = "Guardando...";
       const res = await fetch("/api/inspeccion/guardar", {method:"POST", headers:headers(true), body:JSON.stringify(bodyPayload)});
       const data = await res.json();
-      if(!res.ok) throw new Error((data && data.detail) || "No se pudo guardar la inspeccion");
+      if(!res.ok) throw new Error((data && data.detail) || "No se pudo guardar la inspección");
       $("pinGuardarMsg").textContent = "Inspeccion #" + data.id + " guardada.";
       showToast("Inspeccion guardada correctamente");
       PIN_STATE.inspeccionId = 0;
       loadInspeccionPlan().catch(showError);
     }
     async function eliminarInspeccion(id){
-      if(!window.confirm("Eliminar la inspeccion #" + id + " y sus hallazgos?")) return;
+      if(!window.confirm("Eliminar la inspección #" + id + " y sus hallazgos?")) return;
       const res = await fetch("/api/inspeccion/eliminar", {method:"POST", headers:headers(true), body:JSON.stringify({id})});
       const data = await res.json();
       if(!res.ok) throw new Error((data && data.detail) || "No se pudo eliminar");
@@ -13122,7 +13122,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       $("fichaAlertCount").textContent = `${alerts.length} alerta(s)`;
       $("fichaAlerts").innerHTML = alerts.length ? alerts.map(alert => `<div class="exec-alert ${alert.tone === "bad" ? "bad" : "warn"}"><b>${esc(alert.label)}</b><span>${esc(alert.text)}</span></div>`).join("") : `<div class="exec-alert"><b>OK</b><span>Sin alertas principales para este equipo.</span></div>`;
       $("fichaServiceCount").textContent = `${services.length} servicio(s)`;
-      $("fichaServicesTable").innerHTML = `<thead><tr><th>Fecha</th><th>Servicio</th><th>Componente</th><th>Horometro</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>` +
+      $("fichaServicesTable").innerHTML = `<thead><tr><th>Fecha</th><th>Servicio</th><th>Componente</th><th>Horómetro</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>` +
         (services.slice(0,30).map(row => `<tr><td>${esc(row.completed_date || "")}</td><td>${esc([row.service_name,row.service_interval].filter(Boolean).join(" / "))}</td><td>${esc(row.component || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${esc(row.status || "")}</td><td>${esc(shortText(row.notes || serviceOilsText(row) || serviceFiltersText(row), 120))}</td></tr>`).join("") || `<tr><td colspan="6">Sin servicios en el periodo.</td></tr>`) + `</tbody>`;
       $("fichaPreventiveCount").textContent = `${preventives.length} preventivo(s)`;
       $("fichaPreventivesTable").innerHTML = `<thead><tr><th>Servicio</th><th>Componente</th><th>Ultimo</th><th>Proximo</th><th>Hrs rest.</th><th>Estado</th></tr></thead><tbody>` +
@@ -13274,7 +13274,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
           "250H": {title: "Servicio 250H R1600G", tasks: [["Motor","Cambiar aceite motor y filtro segun condicion."],["Combustible","Drenar agua/sedimentos y revisar filtros."],["Hidraulico","Revisar filtros, respiraderos, fugas y presiones."],["Transmision/ejes","Revisar niveles y fugas en transmision, convertidor, diferenciales y mandos finales."],["Lubricacion","Engrasar articulacion central, bucket, cilindros, pasadores y cardanes."]], parts: ["ACEITE MOTOR 15W40 35 L","FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","GRASA EP2 3 KG"]},
           "500H": {title: "Servicio 500H R1600G", tasks: [["Motor","Servicio motor 500H; revisar admision, turbo, enfriamiento y soportes."],["Transmision","Cambiar/revisar filtros de transmision y verificar presiones."],["Hidraulico","Cambiar/revisar filtro retorno/presion; revisar cilindros y bomba."],["Frenos","Revisar sistema de frenos, acumuladores, fugas y desgaste."],["Estructura","Inspeccionar chasis, articulacion, bucket, soldaduras y fisuras."]], parts: ["FILTRO TRANSMISION 1 PZA","FILTRO HIDRAULICO RETORNO 1 PZA","ACEITE HIDRAULICO VG100 20 L","ACEITE TRANSMISION 30 L"]},
           "750H": {title: "Servicio 750H R1600G", tasks: [["Motor","Repetir servicio motor, combustible y aire; revisar condicion por analisis/operacion."],["Hidraulico","Revisar filtros, presiones, temperatura, respiraderos y contaminacion."],["Transmision/ejes","Revisar niveles, fugas, filtros y condicion de aceite."],["Frenos/direccion","Prueba funcional de frenos, direccion y acumuladores."],["Estructura","Inspeccion de chasis, articulacion, bucket, pasadores y soldaduras."]], parts: ["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE MOTOR 15W40 35 L"]},
-          "1000H": {title: "Servicio 1000H R1600G", tasks: [["Servicio mayor","Tomar analisis de aceites motor/transmision/hidraulico/ejes."],["Ejes/mandos","Cambio o inspeccion profunda de aceites en diferenciales y mandos finales."],["Hidraulico","Revision mayor de bomba, valvulas, acumuladores, cilindros y mangueras."],["Enfriamiento","Limpieza profunda de radiador/enfriadores y prueba de fugas."],["Liberacion","Prueba operativa con carga y cierre por supervisor."]], parts: ["KIT FILTROS 1000H 1 JGO","ACEITE 85W140 40 L","ACEITE HIDRAULICO VG100 80 L","REFRIGERANTE 20 L"]},
+          "1000H": {title: "Servicio 1000H R1600G", tasks: [["Servicio mayor","Tomar analisis de aceites motor/transmision/hidraulico/ejes."],["Ejes/mandos","Cambio o inspección profunda de aceites en diferenciales y mandos finales."],["Hidraulico","Revision mayor de bomba, valvulas, acumuladores, cilindros y mangueras."],["Enfriamiento","Limpieza profunda de radiador/enfriadores y prueba de fugas."],["Liberacion","Prueba operativa con carga y cierre por supervisor."]], parts: ["KIT FILTROS 1000H 1 JGO","ACEITE 85W140 40 L","ACEITE HIDRAULICO VG100 80 L","REFRIGERANTE 20 L"]},
         },
       },
       R1600H: {
@@ -13310,7 +13310,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         note: "Plan base para retroexcavadora Caterpillar 416. Ajustar con manual CAT por serie y aplicacion.",
         intervals: {
           TURNO: {title: "Inspeccion turno CAT 416", tasks: [["Seguridad","Revisar luces, claxon, alarma reversa, freno estacionamiento, cinturones y extintor."],["Motor","Revisar aceite, refrigerante, fugas, bandas, radiador y admision."],["Hidraulico","Revisar nivel, fugas, estabilizadores, brazo, cucharon y mangueras."],["Transmision/ejes","Revisar niveles, fugas, direccion y frenos."],["Rodaje","Revisar llantas, birlos, presion/condicion y tren delantero."]], parts: ["ACEITE MOTOR 15W40 3 L","REFRIGERANTE 3 L","GRASA EP2 1 KG"]},
-          "250H": {title: "Servicio 250H CAT 416", tasks: [["Motor","Cambiar aceite motor y filtro."],["Combustible","Cambiar/revisar filtro combustible y drenar separador."],["Aire","Limpiar/revisar filtro de aire e indicador de restriccion."],["Lubricacion","Engrasar puntos de cargador, retro, estabilizadores y direccion."],["Inspeccion","Revisar frenos, luces, fugas y aprietes generales."]], parts: ["ACEITE MOTOR 15W40 12 L","FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","GRASA EP2 2 KG"]},
+          "250H": {title: "Servicio 250H CAT 416", tasks: [["Motor","Cambiar aceite motor y filtro."],["Combustible","Cambiar/revisar filtro combustible y drenar separador."],["Aire","Limpiar/revisar filtro de aire e indicador de restriccion."],["Lubricacion","Engrasar puntos de cargador, retro, estabilizadores y direccion."],["Inspección","Revisar frenos, luces, fugas y aprietes generales."]], parts: ["ACEITE MOTOR 15W40 12 L","FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","GRASA EP2 2 KG"]},
           "500H": {title: "Servicio 500H CAT 416", tasks: [["Transmision","Revisar/cambiar filtro y aceite segun condicion."],["Hidraulico","Revisar filtro hidraulico, respiradero, fugas y presiones."],["Ejes","Revisar aceite ejes/diferenciales y mandos."],["Frenos","Prueba de frenos y estacionamiento."],["Estructura","Inspeccionar brazos, pasadores, bujes, cucharon y estabilizadores."]], parts: ["FILTRO HIDRAULICO 1 PZA","FILTRO TRANSMISION 1 PZA","ACEITE HIDRAULICO VG100 15 L","ATF 12 L"]},
           "750H": {title: "Servicio 750H CAT 416", tasks: [["Motor","Repetir servicio motor, combustible y aire; revisar fugas y parametros."],["Hidraulico","Revisar filtros, mangueras, estabilizadores, brazo y presiones."],["Transmision/ejes","Revisar filtros, niveles, diferenciales y mandos."],["Frenos","Prueba de frenos de servicio y estacionamiento."],["Estructura","Inspeccionar bujes, pasadores, cucharon, cargador y retro."]], parts: ["FILTRO ACEITE MOTOR 1 PZA","FILTRO COMBUSTIBLE 1 PZA","FILTRO AIRE 1 PZA","FILTRO HIDRAULICO 1 PZA","ACEITE MOTOR 15W40 12 L"]},
           "1000H": {title: "Servicio 1000H CAT 416", tasks: [["Servicio mayor","Muestreo/cambio de aceites motor, transmision, ejes e hidraulico."],["Enfriamiento","Limpieza y revision de sistema de enfriamiento completo."],["Hidraulico","Revision de bomba, valvulas, cilindros, mangueras y acoples."],["Estructura","Revision de bujes/pasadores, juego de brazo y chasis."],["Liberacion","Prueba funcional de cargador, retro, traslado y cierre supervisor."]], parts: ["KIT FILTROS 1000H 1 JGO","ACEITE 85W140 20 L","ACEITE HIDRAULICO VG100 45 L","REFRIGERANTE 12 L"]},
@@ -13320,7 +13320,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
     const jumboWorkOrderIntervals = {
       TURNO: {title:"Inspeccion turno jumbo", tasks:[["Seguridad","Revisar paro de emergencia, luces, alarma, claxon, extintor, guardas y condiciones de cable/traslado."],["Hidraulico","Revisar nivel, fugas, mangueras, cilindros, bombas, manifold, respiraderos y temperatura."],["Perforadora","Revisar shank, acoples, centralizador, mangueras, lubricacion, fugas y desgaste visible."],["Electrico","Revisar tablero, conectores, botoneras, cableado, protecciones, tierra fisica y humedad."],["Boom / estructura","Revisar pasadores, bujes, fisuras, soportes, pernos y holguras."]], parts:["ACEITE HIDRAULICO VG100 5 L","GRASA EP2 1 KG","LIMPIADOR DIELECTRICO 1 PZA"]},
       "250H": {title:"Servicio 250H jumbo", tasks:[["Hidraulico","Cambiar/revisar filtros hidraulicos, respiradero, fugas, presiones, temperatura y contaminacion."],["Perforadora","Inspeccionar shank, sellos, guias, acoples, mordazas, centralizadores y desgaste."],["Electrico","Limpiar tablero; revisar contactores, relevadores, cable, tierras, sensores y conectores."],["Lubricacion","Engrasar boom, articulaciones, perforadora, mesa de avance, cilindros y pivotes."],["Prueba","Probar traslado, posicionamiento, perforacion/empernado y registrar parametros."]], parts:["FILTRO HIDRAULICO RETORNO 1 PZA","FILTRO HIDRAULICO PRESION 1 PZA","FILTRO RESPIRADERO HIDRAULICO 1 PZA","ACEITE HIDRAULICO VG100 20 L","GRASA EP2 3 KG"]},
-      "500H": {title:"Servicio 500H jumbo", tasks:[["Hidraulico","Muestreo de aceite; revisar bombas, motores, valvulas, acumuladores, cilindros, presiones y fugas."],["Perforadora","Servicio de inspeccion mayor a perforadora, mangueras, sellos, fugas internas y componentes de desgaste."],["Electrico","Revision profunda de tablero, cable de poder, protecciones, aislamiento visible, tierra fisica y sensores."],["Estructura","Inspeccionar soldaduras, boom, chasis, bases, pernos, bujes y pasadores."],["Liberacion","Prueba bajo carga, registro de parametros y cierre por supervisor."]], parts:["KIT SELLOS PERFORADORA 1 PZA","KIT FILTROS HIDRAULICOS 1 JGO","ACEITE HIDRAULICO VG100 40 L","LIMPIADOR DIELECTRICO 1 PZA","GRASA EP2 4 KG"]},
+      "500H": {title:"Servicio 500H jumbo", tasks:[["Hidraulico","Muestreo de aceite; revisar bombas, motores, valvulas, acumuladores, cilindros, presiones y fugas."],["Perforadora","Servicio de inspección mayor a perforadora, mangueras, sellos, fugas internas y componentes de desgaste."],["Electrico","Revision profunda de tablero, cable de poder, protecciones, aislamiento visible, tierra fisica y sensores."],["Estructura","Inspeccionar soldaduras, boom, chasis, bases, pernos, bujes y pasadores."],["Liberacion","Prueba bajo carga, registro de parametros y cierre por supervisor."]], parts:["KIT SELLOS PERFORADORA 1 PZA","KIT FILTROS HIDRAULICOS 1 JGO","ACEITE HIDRAULICO VG100 40 L","LIMPIADOR DIELECTRICO 1 PZA","GRASA EP2 4 KG"]},
       "750H": {title:"Servicio 750H jumbo", tasks:[["Gama PM3","Ejecutar revision extendida de PM1 + PM2 y documentar parametros antes/despues."],["Hidraulico","Revisar filtros, aceite, presiones, temperatura, bombas, valvulas, acumuladores, cilindros y fugas bajo carga."],["Perforadora / empernador","Inspeccionar shank, sellos, guias, acoples, mordazas, alimentador, centralizadores y desgaste operativo."],["Electrico","Revisar tablero, protecciones, cableado, tierras, sensores, conectores y humedad/aislamiento visible."],["Estructura / boom","Inspeccionar fisuras, soldaduras, pasadores, bujes, pernos de fijacion, topes y holguras."],["Prueba y liberacion","Realizar prueba funcional de traslado, posicionamiento, perforacion/empernado y cierre por supervisor."]], parts:["FILTRO ACEITE MOTOR 1 PZA","FILTRO HIDRAULICO RETORNO 1 PZA","FILTRO HIDRAULICO PRESION 1 PZA","FILTRO RESPIRADERO HIDRAULICO 1 PZA","ACEITE HIDRAULICO VG100 40 L","GRASA EP2 4 KG"]},
       "1000H": {title:"Servicio 1000H jumbo", tasks:[["Servicio mayor","Inspeccion integral hidraulica, electrica, estructural, perforadora/empernador y traslado."],["Aceite hidraulico","Cambio/filtrado segun analisis; revisar contaminacion, temperatura, retorno y respiraderos."],["Componentes criticos","Revisar bombas, motores hidraulicos, cilindros, acumuladores, valvulas, perforadora y boom."],["Electrico","Prueba de protecciones, conexiones, cable de alimentacion, tierra fisica y tablero."],["Liberacion","Prueba integral operativa y validacion por supervisor."]], parts:["ACEITE HIDRAULICO VG100 80 L","KIT FILTROS HIDRAULICOS 1 JGO","KIT SELLOS CILINDROS 1 JGO","GRASA EP2 5 KG","LIMPIADOR DIELECTRICO 2 PZA"]},
     };
@@ -13386,7 +13386,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         "1000H":{
           title:"Servicio 1000H Freightliner M2 - M4/M5 base",
           tasks:[
-            ["Servicio mayor","Ejecutar inspeccion integral de motor, transmision, ejes, frenos/aire, suspension, direccion, electrico y sistema de volteo."],
+            ["Servicio mayor","Ejecutar inspección integral de motor, transmision, ejes, frenos/aire, suspension, direccion, electrico y sistema de volteo."],
             ["Analisis fluidos","Tomar muestra o revisar condicion de aceite motor, transmision, diferenciales y aceite hidraulico de volteo."],
             ["Transmision / ejes","Cambiar o revisar fluidos/filtros segun componente; revisar diferencial, respiraderos, retenes, cardanes y montaje."],
             ["Frenos / aire","Servicio mayor de frenos, secador de aire, compresor, valvulas, camaras, lineas y prueba de fugas/recuperacion de presion."],
@@ -13602,7 +13602,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       return [
         ["Hidraulico - seguridad", "Liberar presion residual, bloquear implementos/boom/bucket, limpiar conexiones antes de abrir lineas y proteger el area contra contaminacion."],
         ["Hidraulico - filtracion", "Revisar o cambiar filtros, respiraderos y sellos segun intervalo; inspeccionar indicador de restriccion y confirmar ausencia de fugas despues del arranque."],
-        ["Hidraulico - inspeccion", "Revisar nivel, temperatura, color/olor del aceite, bombas, valvulas, cilindros, mangueras, abrazaderas, rozamientos, acoples y acumuladores."],
+        ["Hidraulico - inspección", "Revisar nivel, temperatura, color/olor del aceite, bombas, valvulas, cilindros, mangueras, abrazaderas, rozamientos, acoples y acumuladores."],
         ["Hidraulico - prueba", "Probar funciones bajo carga, respuesta de mandos, tiempos de ciclo, ruidos, calentamiento y deriva de cilindros; registrar anomalias para seguimiento."],
         ...(severe ? [["Muestreo hidraulico", "Tomar muestra o revisar contaminacion si aplica; documentar condicion, horas del aceite, rellenos y recomendacion de cambio/filtrado."]] : []),
       ];
@@ -13848,7 +13848,7 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
       </style></head><body><div class="page">
         <div class="head">
           <div class="logoBox"><img src="/static/mga-corner-logo.jfif" alt="MGA"><div class="logoText"><b>MGA</b><span>Contratista Minera</span></div></div>
-          <div class="titleBlock"><h1>Orden de trabajo</h1><p>Servicio de mantenimiento / inspeccion</p></div>
+          <div class="titleBlock"><h1>Orden de trabajo</h1><p>Servicio de mantenimiento / inspección</p></div>
           <div class="folioBox"><span>Folio OT</span><b>${esc(record.folio || "PENDIENTE")}</b></div>
         </div>
         <div class="grid">
@@ -14813,7 +14813,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
         ["KPI", kpi, "Incluidos en indicadores"],
         ["Mostrados", rows.length, "Segun filtros"],
       ].map(([label,value,note]) => `<article class="exec-card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`).join("");
-      $("eqCatalogTable").innerHTML = `<thead><tr><th>Estado</th><th>Codigo</th><th>Descripcion</th><th>Tipo</th><th>Grupo KPI</th><th>Marca</th><th>Modelo</th><th>Serie</th><th>Horometro</th><th>KPI</th><th>Alta</th><th>Baja</th><th>Notas</th></tr></thead><tbody>` +
+      $("eqCatalogTable").innerHTML = `<thead><tr><th>Estado</th><th>Codigo</th><th>Descripcion</th><th>Tipo</th><th>Grupo KPI</th><th>Marca</th><th>Modelo</th><th>Serie</th><th>Horómetro</th><th>KPI</th><th>Alta</th><th>Baja</th><th>Notas</th></tr></thead><tbody>` +
         rows.map(row => {
           const stateText = normalizeState(row.status || "ACTIVO");
           const cls = equipmentIsActive(row) ? "ok" : "bad";
@@ -16044,7 +16044,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       ["prevExecAtf", "atf_liters", "ATF"],
     ];
     const preventiveChecklistInputs = [
-      ["prevChkInspection", "inspection", "Inspeccion"],
+      ["prevChkInspection", "inspection", "Inspección"],
       ["prevChkFilters", "filters", "Filtros/refacciones"],
       ["prevChkLubrication", "lubrication", "Lubricacion"],
       ["prevChkElectrical", "electrical", "Revision electrica"],
@@ -16055,7 +16055,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       PM1:["Inspeccion visual y seguridad","Filtros/refacciones PM1 aplicadas","Lubricacion general","Revision electrica basica","Prueba funcional","Validado por supervisor"],
       PM2:["Inspeccion PM2 completa","Filtros y refacciones PM2","Lubricacion y niveles","Revision electrica/hidraulica","Prueba final con horometro","Validado por supervisor"],
       PM3:["Inspeccion PM3 profunda","Filtros/refacciones PM3 aplicadas","Lubricacion completa","Revision electrica y transmision","Prueba operativa","Validado por supervisor"],
-      PM4:["Servicio mayor PM4 inspeccion","Filtros/refacciones servicio mayor","Lubricacion completa y fluidos","Revision electrica/hidraulica mayor","Prueba final documentada","Validado por supervisor"],
+      PM4:["Servicio mayor PM4 inspección","Filtros/refacciones servicio mayor","Lubricacion completa y fluidos","Revision electrica/hidraulica mayor","Prueba final documentada","Validado por supervisor"],
     };
     function updatePreventiveChecklistTemplate(){
       const service = $("prevExecServiceType").value || "PM1";
@@ -16322,7 +16322,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
           return `<div class="schedule-cell"><strong>${esc(day.slice(8,10))}</strong><em>${esc(day.slice(5,7))}</em>${chips}</div>`;
         }).join("");
       }
-      $("prTable").innerHTML = `<thead><tr><th>Origen</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horometro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
+      $("prTable").innerHTML = `<thead><tr><th>Origen</th><th>Equipo</th><th>Descripcion</th><th>Componente</th><th>Tipo hor.</th><th>Horómetro</th><th>Ultimo serv.</th><th>Prox. serv.</th><th>Hrs restantes</th><th>Fecha prog.</th><th>Estado</th></tr></thead><tbody>` +
         result.rows.map(row => {
           const hrs = Number(row.hours_remaining || 0);
           const st = String(row.status || "").toUpperCase();
@@ -16472,7 +16472,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
           detail: detail || "Captura con condicion de revision.", action:"Generar OT correctiva o validar cierre en bitacora.",
         });
       });
-      published.filter(row => ["OT", "Requisicion"].includes(String(row.source || ""))).forEach(row => addRow(row));
+      published.filter(row => ["OT", "Requisición"].includes(String(row.source || ""))).forEach(row => addRow(row));
       workOrderRows().filter(row => !workOrderClosed(row)).forEach(row => {
         const priority = String(row.priority || "").toUpperCase();
         addRow({
@@ -16496,7 +16496,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
         const items = Array.isArray(row.items) ? row.items.length : Number(row.items || 0);
         const urgent = String(row.priority || "").toUpperCase().includes("URG");
         addRow({
-          score: urgent ? 52 : 42, source:"Requisicion", equipment_code:row.equipment || "", equipment_description:"",
+          score: urgent ? 52 : 42, source:"Requisición", equipment_code:row.equipment || "", equipment_description:"",
           component:"Refacciones", system:"Refacciones", date:row.request_date || "", due_date:"", hours_remaining:null,
           detail:`${row.folio || ""} ${row.status || ""} con ${items || 0} partida(s).`,
           action:"Dar seguimiento a compra/surtido para liberar trabajos.",
@@ -16804,7 +16804,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
       const openBody = open.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(preventiveServiceLabel(row.service_type))}</td><td>${esc(row.attribute_type || "")}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td>${preventiveChecklistCount(row)}/6</td><td><span class="pill warn">${esc(row.status || "")}</span></td><td>${esc(shortText(row.notes || "", 90))}</td></tr>`).join("") || `<tr><td colspan="10">Sin servicios preventivos abiertos.</td></tr>`;
       $("prevExecOpenTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Supervisor</th><th>Mecanico</th><th>Checklist</th><th>Estatus</th><th>Notas</th></tr></thead><tbody>${openBody}</tbody>`;
       const closedBody = closed.map(row => `<tr data-prev-exec-id="${esc(row.id)}"><td>${esc(row.folio || "")}</td><td>${esc(row.close_date || row.service_date || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.service_type || "")}</td><td>${esc(row.attribute_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${preventiveChecklistCount(row)}/6</td><td>${esc(shortText(row.parts_used || "", 110))}</td><td>${esc(shortText(preventiveOilsText(row) || row.lubricants_used || "", 110))}</td><td><span class="pill ok">${esc(row.status || "CERRADO")}</span></td></tr>`).join("") || `<tr><td colspan="10">Sin servicios cerrados desde esta pestaña.</td></tr>`;
-      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha cierre</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Horometro</th><th>Checklist</th><th>Trabajo realizado</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
+      $("prevExecClosedTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha cierre</th><th>Equipo</th><th>Servicio</th><th>Atributo</th><th>Horómetro</th><th>Checklist</th><th>Trabajo realizado</th><th>Lubricantes</th><th>Estatus</th></tr></thead><tbody>${closedBody}</tbody>`;
       document.querySelectorAll("[data-prev-exec-id]").forEach(row => row.addEventListener("click", () => {
         const record = rows.find(item => String(item.id || "") === String(row.dataset.prevExecId || ""));
         if(record) fillPreventiveExecutionForm(record);
@@ -16958,7 +16958,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
             service:"PREVENTIVO",
             tasks:[
               ["Sistema hidraulico","Muestreo de aceite, revisar bombas, presiones, valvulas y acumuladores."],
-              ["Perforadora / bolter","Servicio mayor de inspeccion a perforadora, mangueras y sellos."],
+              ["Perforadora / bolter","Servicio mayor de inspección a perforadora, mangueras y sellos."],
               ["Estructura","Inspeccion de fisuras en boom, chasis, soldaduras y soportes."],
               ["Electrico","Revision de aislamiento, tablero, cable de alimentacion y protecciones."],
               ["Prueba final","Prueba bajo carga y registro de parametros."],
@@ -17300,7 +17300,7 @@ alert(`Requisicion ${result.requisition?.folio || result.folio || ""} generada c
         ["Perforadora", specialServiceRows().filter(row => row.module === "PERFORADORA").length, "Servicios jumbo"],
       ].map(([label,value,note]) => `<article class="exec-card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`).join("");
       renderSpecialMaintenancePlan();
-      $("specialSrvTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Modulo</th><th>Equipo</th><th>Componente</th><th>Tipo</th><th>Horometro</th><th>Hrs comp.</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Refacciones</th><th>Lubricantes</th><th>Notas</th></tr></thead><tbody>` +
+      $("specialSrvTable").innerHTML = `<thead><tr><th>Folio</th><th>Fecha</th><th>Modulo</th><th>Equipo</th><th>Componente</th><th>Tipo</th><th>Horómetro</th><th>Hrs comp.</th><th>Supervisor</th><th>Mecanico</th><th>Estatus</th><th>Refacciones</th><th>Lubricantes</th><th>Notas</th></tr></thead><tbody>` +
         rows.map(row => `<tr data-special-srv="${esc(row.id || "")}"><td>${esc(row.folio || "")}</td><td>${esc(row.service_date || "")}</td><td>${esc(row.module || "")}</td><td>${esc(row.equipment_code || "")}</td><td>${esc(row.component || "")}</td><td>${esc(row.service_type || "")}</td><td>${one(row.completed_meter || 0)}</td><td>${one(row.component_meter || 0)}</td><td>${esc(row.supervisor || "")}</td><td>${esc(row.mechanic || "")}</td><td><span class="pill ${specialServiceClosed(row) ? "ok" : "warn"}">${esc(row.status || "")}</span></td><td>${esc(shortText(row.parts_used || "", 90))}</td><td>${esc(shortText(row.lubricants_used || "", 90))}</td><td>${esc(shortText(row.notes || row.checklist || "", 120))}</td></tr>`).join("") + `</tbody>`;
       document.querySelectorAll("[data-special-srv]").forEach(row => row.addEventListener("click", () => {
         const record = specialServiceRows().find(item => String(item.id || "") === String(row.dataset.specialSrv || ""));
