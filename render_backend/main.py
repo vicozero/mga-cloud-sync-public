@@ -662,11 +662,19 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+print(f"[disponibilidad] PROJECT_ROOT={PROJECT_ROOT}", flush=True)
+print(f"[disponibilidad] sys.path[0:3]={sys.path[:3]}", flush=True)
+
 try:
     from app.main import app as disponibilidad_app
+    print("[disponibilidad] Import successful, mounting...", flush=True)
     app.mount("/disponibilidad", disponibilidad_app, name="disponibilidad")
-except Exception as exc:  # noqa: BLE001 - no debe tumbar el monolito
-    print(f"[disponibilidad] No se pudo montar el modulo: {exc!r}")
+    print("[disponibilidad] Mounted at /disponibilidad", flush=True)
+except Exception as exc:
+    import traceback
+    print(f"[disponibilidad] ERROR: {exc!r}", flush=True)
+    traceback.print_exc()
+
 
 _READ_CACHE: dict[str, tuple[float, bytes]] = {}
 _READ_CACHE_LOCKS: dict[str, asyncio.Lock] = {}
