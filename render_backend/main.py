@@ -654,6 +654,14 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+import sys
+from pathlib import Path
+
+# Ensure project root is in Python path for sub-app imports
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
     from app.main import app as disponibilidad_app
     app.mount("/disponibilidad", disponibilidad_app, name="disponibilidad")
