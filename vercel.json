@@ -3,9 +3,15 @@
     "mga-cloud-sync": {
       "root": ".",
       "framework": "fastapi",
-      "entrypoint": "api.index:app"
+      "entrypoint": "render_backend.main:app"
     }
   },
+  "routes": [
+    {
+      "src": "/disponibilidad/(.*)",
+      "dest": "/disponibilidad/$1"
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",
