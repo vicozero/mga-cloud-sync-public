@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repositorio de Reportes - Disponibilidad</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f2f6f9;color:#1c2b3a}
+  header{background:#0b2b34;color:#fff;padding:18px 22px}
+  header h1{margin:0;font-size:20px}
+  header p{margin:4px 0 0;font-size:13px;color:#b9d2dc}
+  main{max-width:980px;margin:22px auto;padding:0 14px}
+  .card{background:#fff;border:1px solid #dce6ec;border-radius:12px;padding:18px;margin-bottom:14px}
+  .card h2{margin:0 0 6px;font-size:16px;color:#0b2b34}
+  .card p{margin:0 0 12px;font-size:13px;color:#5b6b78}
+  .btn{display:inline-block;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:bold;color:#fff;cursor:pointer;margin:0 8px 0 0}
+  .btn:disabled{opacity:.5;cursor:wait}
+  .btn-xls{background:#1e6f3f}
+  .btn-pdf{background:#b23a2e}
+  .btn-key{background:#0b2b34;padding:10px 26px}
+  .btn-del{background:#d95b5b;margin:0}
+  input[type=password]{padding:10px 12px;font-size:14px;border:1px solid #c4d3dc;border-radius:8px;width:260px}
+  .keyrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .msg{font-size:13px}
+  .ok{color:#1e6f3f}
+  .err{color:#b23a2e}
+  table{width:100%;border-collapse:collapse;background:#fff}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #e3eaef;font-size:13px}
+  th{background:#0b2b34;color:#fff;font-size:12px}
+  tr:nth-child(even){background:#f7fafc}
+  a.dl{color:#1e6f3f;font-weight:bold;text-decoration:none}
+  a.dl:hover{text-decoration:underline}
+  footer{text-align:center;font-size:12px;color:#7c8b95;padding:18px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Repositorio de Reportes</h1>
+  <p>Genera y descarga los reportes de la base central desde la red</p>
+</header>
+<main>
+  <div class="card">
+    <h2>Generar reporte</h2>
+    <p>Ingresa la clave de API y elige qué reporte generar. El archivo queda guardado en el historial.</p>
+    <div class="keyrow">
+      <input type="password" id="keyInput" placeholder="Clave de API" autocomplete="off">
+      <button class="btn btn-key" id="saveBtn">Guardar clave</button>
+      <span class="msg" id="keyMsg"></span>
+    </div>
+  </div>
+  <div class="card" id="genCard">
+    <h2>Reportes</h2>
+    <div id="genButtons"></div>
+  </div>
+  <div class="card">
+    <h2>Historial de archivos</h2>
+    <div id="histWrap"><table><thead><tr><th>Archivo</th><th>Modificado</th><th>Tamaño</th><th>Descargar</th><th></th></tr></thead><tbody id="histBody"><tr><td>Sin archivos generados</td><td></td><td></td><td></td><td></td></tr></tbody></table></div>
+  </div>
+</main>
+<footer>Servidor: api.disponibilidad · respaldos automáticos diarios</footer>
+
+<script>
+var STORAGE='disponibilidad_api_key';
+var BASE=(location.pathname.indexOf('/disponibilidad')===0)?location.origin+'/disponibilidad':location.origin;
+var reports=[
+  {slug:'equipment-status', title:'Equipos (disponibilidad)', desc:'Catálogo de equipos con estado y observaciones'},
+  {slug:'consumptions', title:'Consumos de lubricantes', desc:'Registro de consumos por fecha, turno y equipo'},
+  {slug:'mechanic-reports', title:'Reportes mecánicos', desc:'Fallas, trabajos realizados y refacciones'},
+  {slug:'tire-inspections', title:'Inspecciones de llantas', desc:'Revisiones de llantas por equipo y fecha'}
+];
+var keyEl,msgEl;
+
+function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text)e.textContent=text;return e;}
+function setMsg(text,ok){msgEl.textContent=text||'';msgEl.className='msg '+(ok?'ok':'err');}
+function getKey(){return localStorage.getItem(STORAGE)||'';}
+function api(path,opts){
+  opts=opts||{};
+  opts.headers=Object.assign({'Authorization':'Bearer '+getKey()},opts.headers||{});
+  return fetch(BASE+'/api/v1'+path,opts);
+}
+
+function fmtSize(n){
+  if(n<1024)return n+' B';
+  if(n<1048576)return (n/1024).toFixed(1)+' KB';
+  return (n/1048576).toFixed(2)+' MB';
+}
+
+function buildGenerateButtons(){
+  var wrap=document.getElementById('genButtons');wrap.innerHTML='';
+  reports.forEach(function(r){
+    var row=el('p','');
+    row.appendChild(el('strong','',r.title+' — '));
+    var lab=el('em','',r.desc);lab.style.color='#5b6b78';row.appendChild(lab);
+    var ex=el('button','btn btn-xls','Generar Excel');ex.style.margin='10px 8px 0 0';
+    var pdf=el('button','btn btn-pdf','Generar PDF');pdf.style.margin='10px 0 0 0';
+    ex.addEventListener('click',function(){generate(r,'xlsx',ex,pdf);});
+    pdf.addEventListener('click',function(){generate(r,'pdf',ex,pdf);});
+    row.appendChild(ex);row.appendChild(pdf);
+    wrap.appendChild(row);
+  });
+}
+
+function generate(r,ext,exBtn,pdfBtn){
+  var key=getKey();
+  if(!key){setMsg('Guarda la clave antes de generar',false);return;}
+  [exBtn,pdfBtn].forEach(function(b){b.disabled=true;});
+  setMsg('Generando '+r.slug+'.'+(ext==='xlsx'?'xlsx':'pdf')+'…');
+  var fd=new FormData();fd.append('module',r.slug);fd.append('fmt',ext==='xlsx'?'xlsx':'pdf');
+  api('/reports/repositorio/generate?module='+encodeURIComponent(r.slug)+'&fmt='+(ext==='xlsx'?'xlsx':'pdf'),{method:'POST'})
+    .then(function(res){
+      if(!res.ok){return res.text().then(function(t){throw new Error(t||('HTTP '+res.status));});}
+      return res.json();
+    })
+    .then(function(j){
+      setMsg('Generado: '+j.name+' ('+fmtSize(j.size)+')',true);
+      loadHistory();
+    })
+    .catch(function(err){setMsg('Error: '+err.message.split('"').join(''),false);})
+    .then(function(){[exBtn,pdfBtn].forEach(function(b){b.disabled=false;});});
+}
+
+function loadHistory(){
+  api('/reports/repositorio').then(function(res){return res.json();}).then(function(list){
+    var tb=document.getElementById('histBody');tb.innerHTML='';
+    if(!list.length){
+      tb.innerHTML='<tr><td colspan="5">Sin archivos generados</td></tr>';return;
+    }
+    list.forEach(function(f){
+      var tr=document.createElement('tr');
+      var ext=f.name.split('.').pop().toUpperCase();
+      tr.appendChild(el('td','',f.name));
+      tr.appendChild(el('td','',f.modified));
+      tr.appendChild(el('td','',fmtSize(f.size)));
+      var a=el('a','dl','Descargar');a.href=BASE+'/repositorio/files/'+encodeURIComponent(f.name);a.setAttribute('download','');
+      var td=document.createElement('td');td.appendChild(a);tr.appendChild(td);
+      var del=el('button','btn btn-del','Eliminar');del.style.padding='5px 10px';del.style.fontSize='12px';
+      del.addEventListener('click',function(){removeFile(f.name,del);});
+      var tdd=document.createElement('td');tdd.appendChild(del);tr.appendChild(tdd);
+      tb.appendChild(tr);
+    });
+  }).catch(function(err){setMsg('Error al cargar historial',false);});
+}
+
+function removeFile(name,btn){
+  if(!confirm('¿Eliminar '+name+'?'))return;
+  btn.disabled=true;
+  api('/reports/repositorio/'+encodeURIComponent(name),{method:'DELETE'})
+    .then(function(res){
+      if(!res.ok)throw new Error('HTTP '+res.status);
+      setMsg('Eliminado: '+name,true);loadHistory();
+    })
+    .catch(function(){setMsg('No se pudo eliminar',false);btn.disabled=false;});
+}
+
+document.addEventListener('DOMContentLoaded',function(){
+  keyEl=document.getElementById('keyInput');
+  msgEl=document.getElementById('keyMsg');
+  keyEl.value=getKey();
+  document.getElementById('saveBtn').addEventListener('click',function(){
+    var key=keyEl.value.trim();
+    if(!key){setMsg('Escribe la clave de API',false);return;}
+    localStorage.setItem(STORAGE,key);
+    api('/projects').then(function(res){
+      if(res.ok){setMsg('Clave válida.',true);}
+      else{setMsg('La clave no es válida (HTTP '+res.status+')',false);}
+    }).catch(function(){setMsg('No se pudo contactar el servidor',false);});
+  });
+  buildGenerateButtons();
+  loadHistory();
+});
+</script>
+</body>
+</html>

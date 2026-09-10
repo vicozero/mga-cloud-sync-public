@@ -703,7 +703,7 @@ try:
     from fastapi.staticfiles import StaticFiles
     from pathlib import Path
     BASE_DIR = Path(__file__).resolve().parent.parent
-    PWA_DIR = BASE_DIR / "static" / "disponibilidad"
+    PWA_DIR = BASE_DIR.parent / "disponibilidad_pwa"
     if PWA_DIR.is_dir():
         app.mount("/disponibilidad", StaticFiles(directory=str(PWA_DIR), html=True), name="disponibilidad_pwa")
 

@@ -1,1 +1,1 @@
-from render_backend.main import app
+from app.main import app

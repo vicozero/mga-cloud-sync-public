@@ -1,0 +1,1263 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#071D34">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Disponibilidad de Equipos</title>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--navy:#071D34;--blue:#124478;--gold:#F5B942;--green:#14A36C;--amber:#EF9100;--red:#DA2330;--bg:#F2F6F9}
+body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:var(--bg);color:#1c2b3a;-webkit-user-select:none;user-select:none;padding-top:env(safe-area-inset-top)}
+.header{background:linear-gradient(135deg,var(--navy),var(--blue));color:#fff;padding:12px 16px;position:sticky;top:0;z-index:100}
+.header-top{display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:16px;font-weight:800;margin:0}
+.header .project{font-size:12px;color:var(--gold);font-weight:700;margin-top:2px}
+.header .date{font-size:10px;color:rgba(255,255,255,.7);margin-top:2px}
+.hamburger{background:none;border:none;color:#fff;font-size:22px;cursor:pointer;padding:4px 8px}
+.add-btn{background:var(--red);color:#fff;border:none;width:32px;height:32px;border-radius:50%;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.tabs-bar{display:flex;background:rgba(255,255,255,.1);margin-top:8px;border-radius:6px;overflow:hidden}
+.tab-btn{flex:1;padding:8px 4px;text-align:center;font-size:11px;font-weight:700;color:rgba(255,255,255,.5);background:none;border:none;cursor:pointer;transition:.2s}
+.tab-btn.active{background:rgba(255,255,255,.15);color:#fff}
+.subtabs{display:flex;background:#E8E8E8;margin-bottom:8px}
+.subtab-btn{flex:1;padding:8px;text-align:center;font-size:11px;font-weight:700;color:#888;background:none;border:none;cursor:pointer}
+.subtab-btn.active{background:#fff;color:var(--navy)}
+.content{padding:8px 12px 80px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.card{background:#fff;border-radius:8px;padding:10px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.kpi-row{display:flex;gap:6px;margin-bottom:8px}
+.kpi{flex:1;text-align:center;padding:8px 4px;background:#fff;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.kpi .val{font-size:20px;font-weight:800}
+.kpi .lbl{font-size:9px;color:#888;font-weight:600;margin-top:2px}
+.cat-header{display:flex;align-items:center;gap:0;margin:8px 0 4px;border-radius:4px;overflow:hidden}
+.cat-bar{width:4px;background:var(--red);align-self:stretch}
+.cat-name{font-size:12px;font-weight:700;color:var(--navy);padding:6px 8px;background:#F0F0F0;flex:1}
+.eq-card{background:#fff;border-radius:8px;padding:10px;margin-bottom:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+.eq-info .name{font-size:13px;font-weight:700;color:var(--navy)}
+.eq-info .eco{font-size:11px;color:#888}
+.eq-info .meta{font-size:10px;color:#aaa}
+.badge{display:inline-block;padding:3px 8px;border-radius:10px;font-size:10px;font-weight:700;color:#fff}
+.badge-green{background:var(--green)}.badge-amber{background:var(--amber)}.badge-red{background:var(--red)}.badge-gold{background:var(--gold)}
+.date-card{background:#fff;border-radius:8px;padding:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.date-card .lbl{font-size:10px;color:#888}.date-card .val{font-size:13px;font-weight:600;color:var(--navy)}
+.date-card .btn{font-size:11px;font-weight:700;color:var(--blue);background:none;border:none;cursor:pointer}
+.rec-card{background:#fff;border-radius:8px;padding:10px;margin-bottom:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);cursor:pointer}
+.rec-card .title{font-size:13px;font-weight:700;color:var(--navy)}
+.rec-card .sub{font-size:11px;color:#888;margin-top:2px}
+.rec-card .meta{font-size:10px;color:#aaa;margin-top:2px}
+.empty{text-align:center;padding:30px;color:#aaa;font-size:13px}
+.empty .icon{font-size:36px;margin-bottom:8px;opacity:.4}
+.section-title{display:flex;justify-content:space-between;align-items:center;margin:8px 0 4px}
+.section-title span{font-size:13px;font-weight:700;color:var(--navy)}
+.section-title .plus{color:var(--red);font-size:22px;background:none;border:none;cursor:pointer}
+.bottom-bar{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #E8E8E8;padding:8px 12px;padding-bottom:calc(8px + env(safe-area-inset-bottom));display:flex;gap:8px;z-index:100}
+.btn-report{flex:1;padding:10px;border:none;border-radius:8px;font-size:11px;font-weight:700;color:#fff;cursor:pointer}
+.btn-pdf{background:linear-gradient(135deg,var(--navy),var(--blue))}
+.btn-img{background:linear-gradient(135deg,var(--red),var(--gold))}
+.menu-overlay{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:200;display:none}
+.menu-overlay.show{display:block}
+.menu{position:fixed;top:0;left:0;width:280px;height:100%;background:#fff;z-index:201;transform:translateX(-100%);transition:transform .25s ease;overflow-y:auto}
+.menu.open{transform:translateX(0)}
+.menu-header{padding:16px;background:#F0F0F0;border-bottom:1px solid #E8E8E8}
+.menu-header .name{font-size:16px;font-weight:700;color:var(--navy)}
+.menu-header .ver{font-size:11px;color:#888}
+.menu-item{display:flex;align-items:center;gap:10px;padding:12px 16px;border:none;background:none;width:100%;text-align:left;font-size:13px;color:var(--navy);cursor:pointer;border-bottom:1px solid #F5F5F5}
+.menu-item:active{background:#F5F5F5}
+.menu-item .icon{font-size:16px;width:24px;text-align:center;color:var(--blue)}
+.menu-item.danger{color:var(--red)}.menu-item.danger .icon{color:var(--red)}
+.menu-divider{height:1px;background:#E8E8E8;margin:4px 0}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:300;display:none;align-items:flex-end;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:#fff;border-radius:16px 16px 0 0;width:100%;max-height:85vh;overflow-y:auto;padding:20px;padding-bottom:calc(20px + env(safe-area-inset-bottom))}
+.modal h2{font-size:16px;font-weight:700;color:var(--navy);margin-bottom:12px}
+.modal-sub{font-size:11px;font-weight:700;color:#5C6E7F;margin:-8px 0 12px}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:4px}
+.field input,.field select,.field textarea{width:100%;padding:10px;border:1px solid #DCE6EC;border-radius:8px;font-size:14px;background:#fff}
+.field textarea{min-height:60px;resize:vertical}
+.field-row{display:flex;gap:8px}
+.field-row .field{flex:1}
+.modal-actions{display:flex;gap:8px;margin-top:16px}
+.modal-actions button{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer}
+.btn-save{background:var(--blue);color:#fff}
+.btn-cancel{background:#E8E8E8;color:#333}
+.btn-danger{background:#E5484D;color:#fff}
+.btn-delete{background:var(--red);color:#fff}
+.supervisor-bar{background:#F0F0F0;padding:8px 12px;display:none;align-items:center;gap:8px}
+.supervisor-bar.show{display:flex}
+.supervisor-bar input{flex:1;padding:8px;border:1px solid #DCE6EC;border-radius:6px;font-size:13px}
+.supervisor-bar button{padding:8px 12px;background:var(--blue);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700}
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;z-index:400;display:none;white-space:nowrap}
+.toast.show{display:block}
+.spinner{position:fixed;inset:0;background:rgba(0,0,0,.2);display:none;align-items:center;justify-content:center;z-index:500}
+.spinner.show{display:flex}
+.spinner-inner{background:#fff;padding:20px 30px;border-radius:12px;text-align:center}
+.donut-wrap{display:flex;align-items:center;gap:12px;padding:12px;background:#fff;border-radius:8px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.donut{position:relative;width:80px;height:80px}
+.donut canvas{width:80px;height:80px}
+.donut-val{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;color:var(--navy)}
+</style>
+</head>
+<body>
+
+<div class="spinner" id="spinner"><div class="spinner-inner"><div class="icon">⏳</div><div>Cargando...</div></div></div>
+<div class="toast" id="toast"></div>
+
+<div class="menu-overlay" id="menuOverlay" onclick="closeMenu()"></div>
+<div class="menu" id="menu">
+  <div class="menu-header">
+    <div class="name" id="menuProject">Proyecto</div>
+    <div class="ver">v5.8.0 PWA</div>
+  </div>
+  <button class="menu-item" onclick="doSync()"><span class="icon">🔄</span>Sincronizar datos</button>
+  <button class="menu-item" onclick="checkForUpdate()"><span class="icon">📲</span>Buscar actualizaciones</button>
+  <button class="menu-item" onclick="showDownloadReports()"><span class="icon">📥</span>Descargar reportes (Excel/PDF)</button>
+  <div class="menu-divider"></div>
+  <button class="menu-item" onclick="showAccessConfig()"><span class="icon">🔑</span>Configurar acceso</button>
+  <button class="menu-item" onclick="showSwitchProject()"><span class="icon">📁</span>Cambiar proyecto</button>
+  <button class="menu-item" onclick="showNewProject()"><span class="icon">➕</span>Nuevo proyecto vacio</button>
+  <button class="menu-item" onclick="duplicateProject()"><span class="icon">📋</span>Duplicar proyecto actual</button>
+  <button class="menu-item" onclick="showRenameProject()"><span class="icon">✏️</span>Renombrar proyecto</button>
+  <div class="menu-divider"></div>
+  <button class="menu-item" onclick="clearProject()"><span class="icon">🗑️</span>Vaciar equipos del proyecto</button>
+  <button class="menu-item danger" onclick="deleteProject()"><span class="icon">❌</span>Eliminar proyecto actual</button>
+</div>
+
+<header class="header">
+  <div class="header-top">
+    <button class="hamburger" onclick="openMenu()">☰</button>
+    <div style="text-align:center">
+      <div class="project" id="headerProject">Proyecto</div>
+      <h1 id="headerTitle">DISPONIBILIDAD</h1>
+    </div>
+    <button class="add-btn" onclick="showAdd()">+</button>
+  </div>
+  <div class="tabs-bar" id="mainTabs">
+    <button class="tab-btn active" data-tab="0" onclick="setTab(0)">DISP.</button>
+    <button class="tab-btn" data-tab="1" onclick="setTab(1)">TURNO 1</button>
+    <button class="tab-btn" data-tab="2" onclick="setTab(2)">TURNO 2</button>
+    <button class="tab-btn" data-tab="3" onclick="setTab(3)">LLANTAS</button>
+  </div>
+</header>
+
+<div class="content" id="content"></div>
+<div class="supervisor-bar" id="supervisorBar">
+  <span style="font-weight:700;color:var(--navy);white-space:nowrap;font-size:12px">SUPERVISOR EN TURNO</span>
+  <input id="supBarInput" list="supListGlobal" placeholder="Nombre del supervisor">
+  <button onclick="setBarSup()">Guardar</button>
+</div>
+<datalist id="supListGlobal"></datalist>
+<div class="bottom-bar" id="bottomBar"></div>
+
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal()">
+  <div class="modal" id="modal" onclick="event.stopPropagation()"></div>
+</div>
+
+<script>
+const API='https://mga-cloud-sync.vercel.app/disponibilidad';
+const KEY='MTTOPROV';
+let loggedIn=false;
+function checkLogin(){
+  if(loggedIn)return;
+  const stored=localStorage.getItem('pwa_auth_token');
+  if(stored){
+    KEY=stored;
+    loggedIn=true;
+    api('/api/v1/verify',{method:'POST',body:JSON.stringify({token:stored})}).then(r=>r.json()).then(data=>{
+      if(data&&data.valid){
+        loggedIn=true;
+      }else{
+        loggedIn=false;
+        KEY='MTTOPROV';
+      }
+    }).catch(()=>{loggedIn=false;KEY='MTTOPROV';});
+  }
+}
+function saveToken(token){
+  localStorage.setItem('pwa_auth_token',token);
+  KEY=token;
+  loggedIn=true;
+}
+function clearAuth(){
+  localStorage.removeItem('pwa_auth_token');
+  KEY='MTTOPROV';
+  loggedIn=false;
+}
+let state={projects:[],current:0,supervisors:[],tab:0,subTab:0,date:new Date().toISOString().slice(0,10),lastSupervisor:'',editingConsumption:null,editingReport:null,editingTire:null};
+let remoteIds={equipment:{},consumption:{},mechanic:{},tire:{}};
+
+function loadLocal(){try{const d=JSON.parse(localStorage.getItem('pwa_projects'));if(d&&d.length){state.projects=d;state.current=parseInt(localStorage.getItem('pwa_current')||'0');}else{seed();}
+  ['equipment','consumptions1','consumptions2','mechanicReports1','mechanicReports2','tireInspections'].forEach(k=>{state.projects.forEach(pr=>{if(pr[k])(pr[k]).forEach(stampLid);});});
+  if(state.projects.length===1&&state.projects[0].id===null&&!state.projects[0].name.toUpperCase().includes('PROVIDENCIA')){state.projects[0].name='PROVIDENCIA';}
+  state.lastSupervisor=localStorage.getItem('pwa_supervisor')||'';}catch(e){seed();
+  ['equipment','consumptions1','consumptions2','mechanicReports1','mechanicReports2','tireInspections'].forEach(k=>{state.projects.forEach(pr=>{if(pr[k])(pr[k]).forEach(stampLid);});});
+  if(state.projects.length===1&&state.projects[0].id===null&&!state.projects[0].name.toUpperCase().includes('PROVIDENCIA')){state.projects[0].name='PROVIDENCIA';}
+  state.lastSupervisor=localStorage.getItem('pwa_supervisor')||'';}}
+function saveLocal(){localStorage.setItem('pwa_projects',JSON.stringify(state.projects));localStorage.setItem('pwa_current',String(state.current));if(state.lastSupervisor)localStorage.setItem('pwa_supervisor',state.lastSupervisor);}
+function project(){return state.projects[state.current]||null;}
+function api(path,opts){
+  const headers={'Content-Type':'application/json'};
+  if(KEY)headers['Authorization']='Bearer '+KEY;
+  return fetch(API+'/api/v1'+path,{headers:headers,...opts});
+}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500);}
+function spin(v){document.getElementById('spinner').classList.toggle('show',v);}
+
+function seed(){
+state.projects=[{name:'PROVIDENCIA',id:null,equipment:[
+    {category:'BARRENACION',name:'jumbo joy',eco:'JL-19',current_status:'FUERA DE SERVICIO'},
+    {category:'BARRENACION',name:'Jumbo Sandvik DD311',eco:'JL-15',current_status:'DISPONIBLE'},
+    {category:'BARRENACION',name:'Jumbo canon',eco:'JL-24',current_status:'FUERA DE SERVICIO'},
+    {category:'BARRENACION',name:'Jumbo Sandvik DD311',eco:'JL-25',current_status:'DISPONIBLE'},
+    {category:'ANCLAJE',name:'Anclador canon',eco:'JA-04',current_status:'FUERA DE SERVICIO'},
+    {category:'ANCLAJE',name:'Anclador Resemin',eco:'JA-07',current_status:'DISPONIBLE'},
+    {category:'SCOOP TRAM',name:'Caterpillar 1600',eco:'ST-25',current_status:'OPERATIVA'},
+    {category:'SCOOP TRAM',name:'Caterpillar 1300',eco:'ST-18',current_status:'DISPONIBLE'},
+    {category:'SCOOP TRAM',name:'Caterpillar R1600',eco:'ST-016',current_status:'DISPONIBLE'},
+    {category:'SCOOP TRAM',name:'Caterpillar 1300',eco:'ST-36',current_status:'DISPONIBLE'},
+    {category:'SCOOP TRAM',name:'Epiroc ST1030',eco:'ST-31',current_status:'FUERA DE SERVICIO'},
+    {category:'RETROEXCAVADORAS',name:'Caterpillar 416F2',eco:'RE-09',current_status:'DISPONIBLE'},
+    {category:'RETROEXCAVADORAS',name:'Caterpillar 416F2',eco:'RE-10',current_status:'DISPONIBLE'},
+    {category:'ACARREO',name:'Camion bajo perfil',eco:'CBP-01',current_status:'FUERA DE SERVICIO'},
+    {category:'ACARREO',name:'Camion convencional',eco:'MG-044',current_status:'DISPONIBLE'},
+    {category:'ACARREO',name:'Camion volteo',eco:'MG-054',current_status:'DISPONIBLE'},
+    {category:'ACARREO',name:'Camion polvorera',eco:'MG-085',current_status:'FUERA DE SERVICIO'},
+    {category:'ACARREO',name:'Camion de personal',eco:'MG-033',current_status:'DISPONIBLE'},
+    {category:'VEHICULOS LIGEROS',name:'Toyota Hilux',eco:'MG-113',current_status:'OPERATIVA'},
+    {category:'VEHICULOS LIGEROS',name:'Toyota Hilux',eco:'MG-121',current_status:'DISPONIBLE'}
+  ],consumptions1:[],consumptions2:[],mechanicReports1:[],mechanicReports2:[],tireInspections:[]}];
+  state.current=0;saveLocal();
+}
+
+function setTab(i){state.tab=i;state.subTab=0;render();}
+function setSubTab(i){state.subTab=i;render();}
+function setBarSup(){const v=document.getElementById('supBarInput').value;if(v&&v.trim()){state.lastSupervisor=v.trim();localStorage.setItem('pwa_supervisor',state.lastSupervisor);toast('Supervisor: '+state.lastSupervisor);}else{toast('Escribe el nombre del supervisor');}}
+function initSupBar(){const bar=document.getElementById('supervisorBar');if(!bar)return;const inp=document.getElementById('supBarInput');if(inp)inp.value=state.lastSupervisor||'';const dl=document.getElementById('supListGlobal');if(dl)dl.innerHTML=(state.supervisors||[]).map(s=>`<option>${s.name}</option>`).join('');bar.classList.add('show');}
+
+function render(){
+  const p=project();if(!p)return;
+  document.getElementById('headerProject').textContent=p.name;
+  document.getElementById('menuProject').textContent=p.name;
+  document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('active',i===state.tab));
+  document.getElementById('headerTitle').textContent=state.tab===3?'REVISIÓN LLANTAS':'DISPONIBILIDAD';
+  const c=document.getElementById('content');
+  if(state.tab===0)renderDisp(c,p);
+  else if(state.tab===1||state.tab===2)renderShift(c,p,state.tab);
+  else renderTires(c,p);
+  renderBottomBar();
+  initSupBar();
+}
+
+function renderDisp(c,p){
+  const eq=p.equipment||[];
+  const disp=eq.filter(e=>e.current_status==='DISPONIBLE').length;
+  const ops=eq.filter(e=>e.current_status==='OPERATIVA').length;
+  const fs=eq.filter(e=>e.current_status==='FUERA DE SERVICIO').length;
+  const total=eq.length;
+  const pct=total?Math.round((disp+ops)/total*100):0;
+  let h=`<div class="kpi-row">
+    <div class="kpi"><div class="val" style="color:var(--green)">${disp}</div><div class="lbl">DISPONIBLES</div></div>
+    <div class="kpi"><div class="val" style="color:var(--amber)">${ops}</div><div class="lbl">OPERATIVOS</div></div>
+    <div class="kpi"><div class="val" style="color:var(--red)">${fs}</div><div class="lbl">FUERA SERV.</div></div>
+  </div>
+  <div class="donut-wrap">
+    <div class="donut"><canvas id="donutC" width="160" height="160"></canvas><div class="donut-val">${pct}%</div></div>
+    <div><div style="font-size:12px;font-weight:600;color:var(--navy)">Disponibilidad operativa</div><div style="font-size:11px;color:#888">${total} equipos totales</div></div>
+  </div>`;
+  let lastCat=null;
+  eq.forEach(e=>{
+    if(e.category!==lastCat){
+      h+=`<div class="cat-header"><div class="cat-bar"></div><div class="cat-name">${e.category||'SIN CATEGORIA'}</div></div>`;
+      lastCat=e.category;
+    }
+    const sc=e.current_status==='DISPONIBLE'?'green':e.current_status==='OPERATIVA'?'amber':'red';
+    h+=`<div class="eq-card" onclick='editEquipment(${JSON.stringify(e).replace(/'/g,"&#39;")})'>
+      <div class="eq-info"><div class="name">${e.name}</div><div class="eco">ECO: ${e.eco}</div>
+      ${e.hour_meter?'<div class="meta">Horómetro: '+e.hour_meter+'</div>':''}
+      ${e.notes?'<div class="meta">'+e.notes+'</div>':''}</div>
+      <span class="badge badge-${sc}">${e.current_status}</span></div>`;
+  });
+  if(!eq.length)h+=`<div class="empty"><div class="icon">📦</div>No hay equipos<br><button class="btn-save" style="margin-top:8px;padding:8px 16px" onclick="showAddEquipment()">Agregar equipo</button></div>`;
+  c.innerHTML=h;
+  drawDonut(pct);
+}
+
+function drawDonut(pct){
+  const cv=document.getElementById('donutC');if(!cv)return;
+  const ctx=cv.getContext('2d');const cx=80,cy=80,r=65,lw=16;
+  ctx.clearRect(0,0,160,160);
+  ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.strokeStyle='#E8E8E8';ctx.lineWidth=lw;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+Math.PI*2*pct/100);ctx.strokeStyle='#14A36C';ctx.lineWidth=lw;ctx.lineCap='round';ctx.stroke();
+}
+
+function renderShift(c,p,shift){
+  const key=shift===1?'consumptions1':'consumptions2';
+  const mkey=shift===1?'mechanicReports1':'mechanicReports2';
+  const cons=(p[key]||[]).filter(r=>r.work_date===state.date);
+  const reps=(p[mkey]||[]).filter(r=>r.work_date===state.date);
+  let h=`<div class="subtabs"><button class="subtab-btn ${state.subTab===0?'active':''}" onclick="setSubTab(0)">LUBRICANTES</button><button class="subtab-btn ${state.subTab===1?'active':''}" onclick="setSubTab(1)">REPORTE MECÁNICO</button></div>`;
+  h+=`<div class="date-card"><div><div class="lbl">Fecha de trabajo</div><div class="val">${state.date}</div></div><button class="btn" onclick="pickDate()">CAMBIAR</button></div>`;
+  if(state.subTab===0){
+    const tl=cons.filter(x=>x.unit==='L').reduce((a,b)=>a+b.quantity,0);
+    const tg=cons.filter(x=>x.unit==='kg').reduce((a,b)=>a+b.quantity,0);
+    h+=`<div class="kpi-row"><div class="kpi"><div class="val" style="color:var(--blue)">${cons.length}</div><div class="lbl">REGISTROS</div></div><div class="kpi"><div class="val" style="color:var(--green)">${tl.toFixed(1)}</div><div class="lbl">TOTAL LITROS</div></div><div class="kpi"><div class="val" style="color:var(--amber)">${tg.toFixed(1)}</div><div class="lbl">TOTAL KG</div></div></div>`;
+    h+=`<div class="section-title"><span>Consumos de lubricantes</span><button class="plus" onclick="showAddConsumption(${shift})">⊕</button></div>`;
+    if(!cons.length)h+=`<div class="empty"><div class="icon">💧</div>No hay registros para esta fecha</div>`;
+    else cons.forEach(x=>{h+=`<div class="rec-card" onclick='editConsumption(${JSON.stringify(x).replace(/'/g,"&#39;")},${shift})'><div class="title">${x.lubricant}</div><div class="sub">${x.quantity} ${x.unit} · ECO: ${x.eco||''} · ${x.equipment_name||''}</div><div class="meta">Turno ${x.shift} · ${x.supervisor_name||''}</div></div>`;});
+  }else{
+    const cor=reps.filter(x=>x.service_type==='Correctivo').length;
+    const pen=reps.filter(x=>x.final_status==='Pendiente').length;
+    h+=`<div class="kpi-row"><div class="kpi"><div class="val" style="color:var(--blue)">${reps.length}</div><div class="lbl">REPORTES</div></div><div class="kpi"><div class="val" style="color:var(--red)">${cor}</div><div class="lbl">CORRECTIVOS</div></div><div class="kpi"><div class="val" style="color:var(--amber)">${pen}</div><div class="lbl">PENDIENTES</div></div></div>`;
+    h+=`<div class="section-title"><span>Reportes mecánicos</span><button class="plus" onclick="showAddReport(${shift})">⊕</button></div>`;
+    if(!reps.length)h+=`<div class="empty"><div class="icon">🔧</div>No hay reportes para esta fecha</div>`;
+    else reps.forEach(x=>{
+      const sc=x.final_status==='Disponible'?'green':x.final_status==='Operativa'?'amber':x.final_status==='Pendiente'?'gold':'red';
+      h+=`<div class="rec-card" onclick='editReport(${JSON.stringify(x).replace(/'/g,"&#39;")},${shift})'><div class="title">ECO: ${x.eco||''} · ${x.equipment_name||''}</div><div class="sub">${x.service_type} · ${x.mechanic_name} · HM: ${x.hour_meter||''}</div><div class="meta">${x.failure||''}</div><div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between"><span class="badge badge-${sc}">${x.final_status}</span>${x.supervisor_name?`<span style="font-size:11px;color:var(--blue);font-weight:700">Sup: ${x.supervisor_name}</span>`:''}</div></div>`;
+    });
+  }
+  c.innerHTML=h;
+}
+
+function renderTires(c,p){
+  const insps=(p.tireInspections||[]).filter(x=>x.work_date===state.date);
+  const total=insps.length;const tires=insps.reduce((a,b)=>a+(b.details||[]).length,0);
+  let buenas=0,acept=0,reg=0,malas=0;
+  insps.forEach(x=>(x.details||[]).forEach(d=>{if(d.status==='Bueno')buenas++;else if(d.status==='Aceptable')acept++;else if(d.status==='Regular')reg++;else malas++;}));
+  let h=`<div class="date-card"><div><div class="lbl">Fecha de revisión</div><div class="val">${state.date}</div></div><button class="btn" onclick="pickDate()">CAMBIAR</button></div>`;
+  h+=`<div class="kpi-row"><div class="kpi"><div class="val" style="color:var(--blue)">${total}</div><div class="lbl">EQUIPOS</div></div><div class="kpi"><div class="val" style="color:var(--green)">${tires}</div><div class="lbl">LLANTAS</div></div><div class="kpi"><div class="val" style="color:var(--red)">${malas}</div><div class="lbl">MALAS</div></div></div>`;
+  h+=`<div class="kpi-row"><div class="kpi"><div class="val" style="color:var(--green)">${buenas}</div><div class="lbl">BUENAS</div></div><div class="kpi"><div class="val" style="color:var(--gold)">${acept}</div><div class="lbl">ACEPT.</div></div><div class="kpi"><div class="val" style="color:var(--amber)">${reg}</div><div class="lbl">REG.</div></div><div class="kpi"><div class="val" style="color:var(--red)">${malas}</div><div class="lbl">MALAS</div></div></div>`;
+  h+=`<div class="section-title"><span>Inspecciónes de llantas</span><button class="plus" onclick="showAddTire()">⊕</button></div>`;
+  if(!insps.length)h+=`<div class="empty"><div class="icon">⭕</div>No hay inspecciones para esta fecha</div>`;
+  else insps.forEach(x=>{
+    const bc=(x.details||[]).filter(d=>d.status==='Bueno').length;
+    const ac=(x.details||[]).filter(d=>d.status==='Aceptable').length;
+    const rc=(x.details||[]).filter(d=>d.status==='Regular').length;
+    const mc=(x.details||[]).filter(d=>d.status==='Malo').length;
+    const dc=mc>0?'var(--red)':rc>0?'var(--amber)':ac>0?'var(--gold)':'var(--green)';
+    h+=`<div class="rec-card" style="border-left:4px solid ${dc}" onclick='editTire(${JSON.stringify(x).replace(/'/g,"&#39;")})'><div class="title">ECO: ${x.eco||''} · ${x.equipment_name||''}</div><div class="sub">HM: ${x.hour_meter||''} · ${x.location||''}${x.supervisor_name?` · Sup: ${x.supervisor_name}`:''}</div><div style="display:flex;gap:4px;margin-top:4px"><span style="background:var(--green);color:#fff;padding:2px 6px;border-radius:10px;font-size:10px;font-weight:700">${bc}</span><span style="background:var(--gold);color:#fff;padding:2px 6px;border-radius:10px;font-size:10px;font-weight:700">${ac}</span><span style="background:var(--amber);color:#fff;padding:2px 6px;border-radius:10px;font-size:10px;font-weight:700">${rc}</span><span style="background:var(--red);color:#fff;padding:2px 6px;border-radius:10px;font-size:10px;font-weight:700">${mc}</span></div></div>`;
+  });
+  c.innerHTML=h;
+}
+
+function renderBottomBar(){
+  const bb=document.getElementById('bottomBar');
+  if(state.tab===0)bb.innerHTML=`<button class="btn-report btn-pdf" onclick="safeGen(genDispPDF)">PDF DISPONIBILIDAD</button><button class="btn-report btn-img" onclick="shareDispWA()">WHATSAPP</button>`;
+  else if(state.tab===3)bb.innerHTML=`<button class="btn-report btn-pdf" onclick="safeGen(genTirePDF)">PDF LLANTAS</button><button class="btn-report btn-img" onclick="shareTireWA()">WHATSAPP</button>`;
+  else bb.innerHTML=`<button class="btn-report btn-pdf" onclick="safeGen(function(){genShiftPDF(${state.tab})})">PDF TURNO ${state.tab}</button><button class="btn-report btn-img" onclick="shareShiftWA(${state.tab})">WHATSAPP</button>`;
+}
+function safeGen(fn){try{fn();}catch(e){console.error('PDF error:',e);toast('Error: '+e.message);}}
+
+var MGA_LOGO_B64=null;
+var _jsPDF=null;
+(function(){fetch('/disponibilidad/icons/mga_logo.jpg').then(r=>r.blob()).then(b=>{const r2=new FileReader();r2.onload=()=>MGA_LOGO_B64=r2.result;r2.readAsDataURL(b);}).catch(()=>{});if(window.jspdf)_jsPDF=window.jspdf.jsPDF;})();
+
+var PK={navy:[7,29,52],blue:[18,68,120],gold:[245,185,66],green:[20,163,108],amber:[239,145,0],red:[218,35,48],dkgray:[68,68,68],gray:[128,128,128],rowAlt:[248,250,252],border:[225,231,237],catBg:[226,236,247],supBg:[247,239,214],cardBg:[244,247,251],footerBg:[238,242,246],kpiLabel:[104,119,134],mechBg:[247,249,252]};
+var PW=1240,PH=1754,MG=48,USABLE=PW-MG*2;
+
+function _pill(doc,x,y,w,h,r,g,b){
+  doc.setFillColor(r,g,b);doc.roundedRect(x,y,w,h,6,6,'F');
+}
+
+function drawLogo(doc,x,y,w,h){
+  if(!MGA_LOGO_B64)return;
+  try{doc.addImage(MGA_LOGO_B64,'JPEG',x,y,w,h);}catch(e){}
+}
+
+function drawHeader(doc,title,projectName,dateStr,hdrH){
+  hdrH=hdrH||185;
+  doc.setFillColor(...PK.navy);doc.rect(0,0,PW,hdrH,'F');
+  doc.setFillColor(...PK.blue);doc.rect(PW/2,0,PW/2,hdrH,'F');
+  doc.setFillColor(255,255,255,25);
+  doc.circle(PW-35,hdrH,150,'F');
+  doc.setFillColor(255,255,255);doc.roundedRect(48,22,120,120,16,16,'F');
+  drawLogo(doc,53,27,110,110);
+  doc.setFontSize(34);doc.setTextColor(255);doc.setFont('helvetica','bold');
+  doc.text(title,192,64);
+  doc.setFontSize(21);doc.setTextColor(...PK.gold);
+  doc.text(projectName||'',192,105);
+  doc.setFontSize(17);doc.setTextColor(218,229,239);doc.setFont('helvetica','normal');
+  doc.text('Fecha: '+dateStr+'  |  Generado: '+new Date().toLocaleDateString('es-MX'),192,145);
+  return hdrH;
+}
+
+function drawKPIs(doc,y,kpis,gap){
+  gap=gap||10;
+  var bandH=60,cardW=(USABLE-gap*(kpis.length-1))/kpis.length;
+  doc.setFillColor(...PK.cardBg);doc.rect(0,y,PW,bandH,'F');
+  kpis.forEach(function(k,i){
+    var cx=MG+i*(cardW+gap);
+    doc.setFillColor(255,255,255);doc.roundedRect(cx,y+6,cardW,bandH-12,9,9,'F');
+    doc.setFillColor(...k.color);doc.roundedRect(cx+5,y+6,5,bandH-12,4,4,'F');
+    doc.setFontSize(18);doc.setFont('helvetica','bold');doc.setTextColor(...PK.navy);
+    doc.text(k.val,cx+14,y+29);
+    doc.setFontSize(9);doc.setTextColor(...PK.kpiLabel);
+    doc.text(k.label,cx+14,y+bandH-13);
+  });
+  return y+bandH;
+}
+
+function drawTableHead(doc,y,headers,colWidths,corner){
+  corner=corner||10;
+  doc.setFillColor(...PK.navy);doc.roundedRect(MG,y,USABLE,34,corner,corner,'F');
+  doc.setFontSize(14);doc.setFont('helvetica','bold');doc.setTextColor(255);
+  var x=MG+10;
+  headers.forEach(function(h,i){doc.text(h,x,y+24);x+=colWidths[i];});
+  return y+34;
+}
+
+function drawDataRow(doc,y,vals,colWidths,fonts,rowH,isAlt){
+  rowH=rowH||46;
+  if(isAlt){doc.setFillColor(...PK.rowAlt);doc.rect(MG,y,USABLE,rowH,'F');}
+  doc.setFillColor(...PK.border);doc.rect(MG,y,USABLE,1,'F');
+  var x=MG+14;
+  vals.forEach(function(v,i){
+    var fn=fonts[i]||{sz:17,style:'normal',color:PK.dkgray};
+    doc.setFontSize(fn.sz);doc.setFont('helvetica',fn.style);doc.setTextColor(...fn.color);
+    var maxW=colWidths[i]-20;
+    if(doc.getTextWidth(v)>maxW){while(v.length>3&&doc.getTextWidth(v+'...')>maxW)v=v.slice(0,-1);v+='...';}
+    doc.text(v,x,y+rowH*0.6);
+    x+=colWidths[i];
+  });
+  return y+rowH;
+}
+
+function drawStatusPill(doc,x,y,status,cols){
+  var sc=statusColor(status);
+  var pw=Math.min(cols-14,170);
+  var faded=[Math.round(sc[0]*0.3+255*0.7),Math.round(sc[1]*0.3+255*0.7),Math.round(sc[2]*0.3+255*0.7)];
+  doc.setFillColor(...faded);doc.roundedRect(x,y+8,pw,22,9,9,'F');
+  doc.setFontSize(13);doc.setFont('helvetica','bold');doc.setTextColor(...sc);
+  doc.text((status||'').toUpperCase(),x+7,y+23);
+}
+
+function drawCatRow(doc,y,text){
+  doc.setFillColor(...PK.catBg);doc.roundedRect(MG,y,USABLE,42,8,8,'F');
+  doc.setFillColor(...PK.red);doc.roundedRect(MG,y,7,42,4,4,'F');
+  doc.setFontSize(18);doc.setFont('helvetica','bold');doc.setTextColor(...PK.blue);
+  doc.text(text,MG+20,y+28);
+  return y+42;
+}
+
+function drawSupRow(doc,y,name){
+  doc.setFillColor(...PK.supBg);doc.roundedRect(MG,y,USABLE,40,8,8,'F');
+  doc.setFillColor(...PK.gold);doc.roundedRect(MG,y,7,40,4,4,'F');
+  doc.setFontSize(17);doc.setFont('helvetica','bold');doc.setTextColor(...PK.blue);
+  doc.text('Supervisor: '+name,MG+20,y+26);
+  return y+40;
+}
+
+function drawFooter(doc,page,label){
+  doc.setFillColor(...PK.footerBg);doc.rect(0,PH-45,PW,45,'F');
+  doc.setFontSize(15);doc.setTextColor(...PK.gray);doc.setFont('helvetica','normal');
+  doc.text(label||'Generado desde PWA Disponibilidad',MG,PH-16);
+  doc.text('Página '+page,PW-MG-115,PH-16);
+}
+
+function drawMechCard(doc,y,r){
+  var sc=statusColor(r.final_status);
+  var cardH=250;
+  doc.setFillColor(255);doc.roundedRect(MG,y,USABLE,cardH,14,14,'F');
+  doc.setFillColor(...sc);doc.roundedRect(MG,y+3,7,cardH-6,4,4,'F');
+  doc.setFontSize(22);doc.setFont('helvetica','bold');doc.setTextColor(...PK.navy);
+  doc.text((r.eco||'')+' · '+(r.equipment_name||''),MG+24,y+38);
+  drawStatusPill(doc,USABLE+MG-170-16,y+12,(r.final_status||'').toUpperCase(),170);
+  doc.setFontSize(15);doc.setTextColor(75,91,107);doc.setFont('helvetica','normal');
+  doc.text('Mecánico: '+(r.mechanic_name||'')+'  ·  '+(r.service_type||'')+(r.hour_meter?'  ·  Horómetro: '+(r.hour_meter||''):'')+(r.supervisor_name?'  ·  Supervisor: '+(r.supervisor_name||''):''),MG+24,y+66);
+  var cy=y+100;
+  doc.setFontSize(14);doc.setFont('helvetica','bold');doc.setTextColor(...PK.blue);doc.text('FALLA REPORTADA',MG+24,cy);cy+=24;
+  doc.setFontSize(16);doc.setFont('helvetica','normal');doc.setTextColor(...PK.dkgray);
+  var fl=doc.splitTextToSize(r.failure||'',USABLE-40);fl.slice(0,3).forEach(function(l){doc.text(l,MG+24,cy);cy+=28;});cy+=10;
+  doc.setFontSize(14);doc.setFont('helvetica','bold');doc.setTextColor(...PK.blue);doc.text('TRABAJO REALIZADO',MG+24,cy);cy+=24;
+  doc.setFontSize(16);doc.setFont('helvetica','normal');doc.setTextColor(...PK.dkgray);
+  var wl=doc.splitTextToSize(r.work_done||'',USABLE-40);wl.slice(0,3).forEach(function(l){doc.text(l,MG+24,cy);cy+=28;});cy+=10;
+  doc.setFontSize(14);doc.setFont('helvetica','bold');doc.setTextColor(...PK.blue);doc.text('REFACCIONES',MG+24,cy);cy+=24;
+  doc.setFontSize(15);doc.setFont('helvetica','normal');doc.setTextColor(...PK.dkgray);
+  var partsTxt=(r.parts_used||'').trim()?r.parts_used:'Sin refacciones registradas';
+  var pl=doc.splitTextToSize(partsTxt,USABLE-40);pl.slice(0,3).forEach(function(l){doc.text(l,MG+24,cy);cy+=26;});
+  if(r.evidence&&r.evidence!==''){doc.setFontSize(12);doc.setFont('helvetica','bold');doc.setTextColor(...PK.blue);doc.text('EVIDENCIA FOTOGRÁFICA ADJUNTA',MG+24,cy+38);}
+  return y+cardH+16;
+}
+
+function statusColor(s){
+  var st=(s||'').toUpperCase();
+  if(st==='DISPONIBLE')return[25,169,116];
+  if(st==='OPERATIVA'||st==='ACEPTABLE')return[220,132,0];
+  if(st==='REGULAR')return PK.amber;
+  if(st.includes('FUERA')||st==='MALO')return[226,70,70];
+  if(st==='PENDIENTE')return PK.blue;
+  if(st==='BUENO')return PK.green;
+  return PK.dkgray;
+}
+
+function newDoc(){return new _jsPDF({orientation:'portrait',unit:'px',format:[PW,PH],hotfixes:['px_scaling']});}
+
+function colWidths(pcts){return pcts.map(function(p){return USABLE*p/100;});}
+
+function checkPage(doc,y,needed,pageN,title,projectName,dateStr,hdrH){
+  if(y+needed>PH-60){
+    doc.addPage();pageN.n++;
+    y=drawHeader(doc,title+' (cont.)',projectName,dateStr,hdrH);
+    return {y:y,newPage:true};
+  }
+  return {y:y,newPage:false};
+}
+
+function genDispPDF(){
+  var p=project();if(!p||!(p.equipment||[]).length){toast('No hay equipos');return;}
+  
+  var doc=newDoc();
+  var eq=p.equipment||[];
+  var disp=eq.filter(function(e){return e.current_status==='DISPONIBLE';}).length;
+  var ops=eq.filter(function(e){return e.current_status==='OPERATIVA';}).length;
+  var fs=eq.filter(function(e){return e.current_status==='FUERA DE SERVICIO';}).length;
+  var y=drawHeader(doc,'DISPONIBILIDAD DE EQUIPOS',p.name,state.date,185);
+  y=drawKPIs(doc,y+15,[
+    {val:String(disp),label:'DISPONIBLES',color:PK.green},
+    {val:String(ops),label:'OPERATIVOS',color:PK.amber},
+    {val:String(fs),label:'FUERA SERV.',color:PK.red},
+    {val:String(eq.length),label:'TOTAL',color:PK.blue}
+  ]);
+  var cw=colWidths([27,11,15,20,27]);
+  y=drawTableHead(doc,y+15,['EQUIPO','NO. ECO','HORÓMETRO','CONDICIÓN','OBSERVACIONES'],cw);
+  var pg={n:1};
+  var lastCat=null;
+  eq.forEach(function(e){
+    if(e.category!==lastCat){
+      var chk=checkPage(doc,y,88,pg,'DISPONIBILIDAD DE EQUIPOS',p.name,state.date,185);y=chk.y;
+      y=drawCatRow(doc,y,e.category||'SIN CATEGORIA');
+      lastCat=e.category;
+    }
+    var chk2=checkPage(doc,y,50,pg,'DISPONIBILIDAD DE EQUIPOS',p.name,state.date,185);y=chk2.y;
+    var sc=statusColor(e.current_status);
+    var fonts=[
+      {sz:20,style:'bold',color:PK.navy},
+      {sz:18,style:'normal',color:PK.dkgray},
+      {sz:14,style:'bold',color:PK.blue},
+      {sz:17,style:'normal',color:PK.dkgray},
+      {sz:17,style:'normal',color:PK.dkgray}
+    ];
+    var vals=[e.name||'',e.eco||'',e.hour_meter||'',e.current_status||'',e.notes||''];
+    y=drawDataRow(doc,y,vals,cw,fonts,46,y%2===0);
+    var pillX=MG+cw[0]+cw[1]+cw[2]+7;
+    drawStatusPill(doc,pillX,y-46,e.current_status,cw[3]-14);
+  });
+  drawFooter(doc,pg.n,'Disponibilidad de Equipos — '+p.name);
+  downloadPDF(doc,'Disponibilidad_'+state.date);
+}
+
+function genShiftPDF(shift){
+  
+  var p=project();if(!p)return;
+  var isT1=shift===1;
+  var doc=newDoc();
+  var cons=(isT1?p.consumptions1:p.consumptions2||[]).filter(function(r){return r.work_date===state.date;});
+  var reps=(isT1?p.mechanicReports1:p.mechanicReports2||[]).filter(function(r){return r.work_date===state.date;});
+  var titleL='CONSUMO DE LUBRICANTES - TURNO '+shift;
+  var y=drawHeader(doc,titleL,p.name,state.date,250);
+  var totalL=cons.filter(function(x){return x.unit==='L';}).reduce(function(a,b){return a+b.quantity;},0);
+  var totalK=cons.filter(function(x){return x.unit==='kg';}).reduce(function(a,b){return a+b.quantity;},0);
+  y=drawKPIs(doc,y+20,[
+    {val:String(cons.length),label:'REGISTROS',color:PK.blue},
+    {val:totalL.toFixed(1)+' L',label:'TOTAL LITROS',color:PK.green},
+    {val:totalK.toFixed(1)+' kg',label:'TOTAL KG',color:PK.amber}
+  ]);
+  var pg={n:1};
+  if(cons.length){
+    var cw=colWidths([25,30,16,29]);
+    y=drawTableHead(doc,y+20,['EQUIPO','LUBRICANTE','CANTIDAD','OBSERVACIONES'],cw);
+    var lastSup='';
+    cons.forEach(function(c){
+      var k=(c.supervisor_name||'').trim()||'SIN SUPERVISOR';
+      if(k!==lastSup){
+        var chk=checkPage(doc,y,50,pg,titleL,p.name,state.date,250);y=chk.y;
+        y=drawSupRow(doc,y,k);
+        lastSup=k;
+      }
+      var chk2=checkPage(doc,y,60,pg,titleL,p.name,state.date,250);y=chk2.y;
+      var qtyStr=parseFloat(c.quantity).toFixed(2)+' '+(c.unit||'');
+      var fonts=[
+        {sz:20,style:'bold',color:PK.navy},
+        {sz:20,style:'bold',color:PK.navy},
+        {sz:18,style:'bold',color:PK.green},
+        {sz:17,style:'normal',color:PK.dkgray}
+      ];
+      y=drawDataRow(doc,y,[c.eco+' '+(c.equipment_name||''),c.lubricant||'',qtyStr,c.notes||''],cw,fonts,50,y%2===0);
+      _pill(doc,MG+cw[0]+cw[1]+7,y-50,cw[2]-14,22,...PK.green);
+    });
+  }
+  drawFooter(doc,pg.n,'MGA — Control de lubricantes — Turno '+shift);
+  if(reps.length){
+    doc.addPage();pg.n=2;
+    var titleM='REPORTE MECÁNICO - TURNO '+shift;
+    y=drawHeader(doc,titleM,p.name,state.date,250);
+    var corr=reps.filter(function(x){return x.service_type==='Correctivo';}).length;
+    var pend=reps.filter(function(x){return x.final_status==='Pendiente';}).length;
+    y=drawKPIs(doc,y+20,[
+      {val:String(reps.length),label:'REPORTES',color:PK.blue},
+      {val:String(corr),label:'CORRECTIVOS',color:PK.amber},
+      {val:String(pend),label:'PENDIENTES',color:PK.red}
+    ]);
+    y+=15;
+    var lastSupM='';
+    reps.forEach(function(r){
+      var k=(r.supervisor_name||'').trim()||'SIN SUPERVISOR';
+      if(k!==lastSupM){
+        var chkS=checkPage(doc,y,50,pg,titleM,p.name,state.date,250);y=chkS.y;
+        y=drawSupRow(doc,y,k);
+        lastSupM=k;
+      }
+      var chk=checkPage(doc,y,270,pg,titleM,p.name,state.date,250);y=chk.y;
+      y=drawMechCard(doc,y,r);
+    });
+    drawFooter(doc,pg.n,'MGA — Reporte mecánico — Turno '+shift);
+  }
+  downloadPDF(doc,'Turno'+shift+'_'+state.date);
+}
+
+function genTirePDF(){
+  
+  var p=project();if(!p)return;
+  var insps=(p.tireInspections||[]).filter(function(x){return x.work_date===state.date;});
+  if(!insps.length){toast('No hay inspecciones');return;}
+  var doc=newDoc();
+  var totalT=0,buenas=0,acept=0,reg=0,malas=0;
+  insps.forEach(function(x){(x.details||[]).forEach(function(d){
+    totalT++;
+    if(d.status==='Bueno')buenas++;else if(d.status==='Aceptable')acept++;else if(d.status==='Regular')reg++;else malas++;
+  });});
+  var y=drawHeader(doc,'REPORTE GENERAL DE REVISIÓN DE LLANTAS',p.name,state.date,190);
+  var pctf=function(c){return totalT?c+' / '+Math.round(100*c/totalT)+'%':String(c);};
+  y=drawKPIs(doc,y+20,[
+    {val:String(insps.length),label:'EQUIPOS',color:PK.blue},
+    {val:String(totalT),label:'LLANTAS',color:PK.navy},
+    {val:pctf(buenas),label:'BUENAS',color:PK.green},
+    {val:pctf(acept),label:'ACEPTABLES',color:PK.gold},
+    {val:pctf(reg),label:'REGULARES',color:PK.amber},
+    {val:pctf(malas),label:'MALAS',color:PK.red}
+  ],12);
+  doc.setFontSize(18);doc.setFont('helvetica','bold');doc.setTextColor(...PK.navy);
+  doc.text('DETALLE POR EQUIPO',MG,y+24);y+=38;
+  var tcw=[240,260,160,USABLE-660];
+  y=drawTableHead(doc,y,['Posición','Estado','Vida Útil','Observaciones'],tcw,9);
+  var pg={n:1};
+  insps.forEach(function(x){
+    var chk=checkPage(doc,y,102,pg,'REPORTE DE LLANTAS',p.name,state.date,190);y=chk.y;
+    doc.setFillColor(235,240,246);doc.roundedRect(MG,y,USABLE,48,8,8,'F');
+    doc.setFillColor(...PK.blue);doc.roundedRect(MG,y,5,48,4,4,'F');
+    doc.setFontSize(16);doc.setFont('helvetica','bold');doc.setTextColor(...PK.navy);
+    doc.text(x.equipment_name||x.eco,MG+16,y+30);
+    doc.setFontSize(13);doc.setFont('helvetica','normal');doc.setTextColor(...PK.dkgray);
+    doc.text('ECO: '+(x.eco||''),MG+430,y+21);
+doc.text('Horómetro: '+(x.hour_meter||''),MG+430,y+38);
+  doc.text('Ubicación: '+(x.location||''),MG+700,y+21);
+    y+=56;
+    (x.details||[]).forEach(function(d,i){
+      var chk2=checkPage(doc,y,40,pg,'REPORTE DE LLANTAS',p.name,state.date,190);y=chk2.y;
+      if(i%2!==0){doc.setFillColor(...PK.rowAlt);doc.rect(MG,y,USABLE,36,'F');}
+      doc.setFillColor(...PK.border);doc.rect(MG,y+35,USABLE,1,'F');
+      doc.setFontSize(14);doc.setFont('helvetica','bold');doc.setTextColor(...PK.navy);
+      doc.text('Llanta '+(d.position||i+1),MG+8,y+24);
+      var sc=statusColor(d.status);
+      var faded=[Math.round(sc[0]*0.2+255*0.8),Math.round(sc[1]*0.2+255*0.8),Math.round(sc[2]*0.2+255*0.8)];
+      doc.setFillColor(...faded);doc.roundedRect(MG+tcw[0]+12,y+7,130,22,6,6,'F');
+      doc.setFontSize(12);doc.setTextColor(...sc);doc.setFont('helvetica','bold');
+      doc.text(d.status||'',MG+tcw[0]+18,y+24);
+      doc.setFontSize(14);doc.setFont('helvetica','bold');doc.setTextColor(...PK.navy);
+      doc.text(''+(d.vida_util||'')+(d.vida_util?' %':''),MG+tcw[0]+tcw[1]+10,y+24);
+      doc.setFontSize(12);doc.setFont('helvetica','normal');doc.setTextColor(...PK.dkgray);
+      var nt=d.notes||'';
+      if(nt.length>60)nt=nt.substring(0,57)+'...';
+      doc.text(nt,MG+tcw[0]+tcw[1]+tcw[2]+6,y+24);
+      y+=36;
+    });
+    y+=12;
+  });
+  drawFooter(doc,pg.n,'MGA — Revisión de llantas general');
+  downloadPDF(doc,'Llantas_'+state.date);
+}
+
+function downloadPDF(doc,name){
+  var blob=doc.output('blob');
+  var file=new File([blob],name+'.pdf',{type:'application/pdf'});
+  if(navigator.share){
+    navigator.share({title:name+'.pdf',files:[file]}).catch(function(){
+      fallbackDownload(blob,name);
+    });
+  }else{
+    fallbackDownload(blob,name);
+  }
+}
+function fallbackDownload(blob,name){
+  var url=URL.createObjectURL(blob);
+  var w=window.open(url);
+  if(!w||typeof w==='undefined'){
+    var a=document.createElement('a');
+    a.href=url;a.target='_blank';a.download=name+'.pdf';
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){document.body.removeChild(a);},500);
+  }
+  setTimeout(function(){URL.revokeObjectURL(url);},120000);
+}
+
+function shareDispWA(){
+  var p=project();if(!p)return;
+  var eq=p.equipment||[];
+  var disp=eq.filter(function(e){return e.current_status==='DISPONIBLE';}).length;
+  var ops=eq.filter(function(e){return e.current_status==='OPERATIVA';}).length;
+  var fs=eq.filter(function(e){return e.current_status==='FUERA DE SERVICIO';}).length;
+  var pct=eq.length?Math.round((disp+ops)/eq.length*100):0;
+  var msg='*DISPONIBILIDAD — '+p.name+'*\nFecha: '+state.date+'\n\n';
+  msg+='Total: '+eq.length+' equipos\nDisponibles: '+disp+'\nOperativos: '+ops+'\nFuera servicio: '+fs+'\n*% Operativo: '+pct+'%*\n\n';
+  var lastCat=null;
+  eq.forEach(function(e){
+    if(e.category!==lastCat){
+      msg+='*'+(e.category||'SIN CATEGORIA')+'*\n';
+      lastCat=e.category;
+    }
+    msg+='• '+e.eco+' — '+e.name+': '+e.current_status+'\n';
+  });
+  genDispPDF();
+  window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+}
+
+function shareShiftWA(shift){
+  const p=project();if(!p)return;
+  showModal(`<h2>Imprimir / compartir</h2><div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch">
+    <button class="btn-save" onclick="closeModal();shareShiftNow(${shift},false)">Turno ${shift} actual</button>
+    <button class="btn-save" onclick="closeModal();shareShiftNow(${shift},true)">Todos los turnos (1 y 2)</button>
+    <button class="btn-cancel" onclick="closeModal()">Cancelar</button></div>`);
+}
+function _allShiftData(p,shift){
+  const cons=(shift===1?p.consumptions1:p.consumptions2||[]).filter(r=>r.work_date===state.date);
+  const reps=(shift===1?p.mechanicReports1:p.mechanicReports2||[]).filter(r=>r.work_date===state.date);
+  return {cons,reps};
+}
+function shareShiftNow(shift,allTurns){
+  const p=project();if(!p)return;
+  const from=allTurns?1:shift,to=allTurns?(shift===1?2:1):shift;
+  const d1=_allShiftData(p,from),d2=from!==to?_allShiftData(p,to):{cons:[],reps:[]};
+  const cons=d1.cons.concat(d2.cons),reps=d1.reps.concat(d2.reps);
+  const title='*TURNO '+(from===to?from:'1 Y 2')+' — '+(p?p.name:'')+'*\nFecha: '+state.date+'\n\n';
+  let msg=title;
+  if(cons.length){msg+='*Lubricantes ('+cons.length+')*\n';cons.forEach(c=>{msg+='• '+c.eco+' '+c.lubricant+' '+c.quantity+c.unit+'\n';});msg+='\n';}
+  if(reps.length){msg+='*Reportes mecánicos ('+reps.length+')*\n';reps.forEach(r=>{msg+='• '+r.eco+' '+r.mechanic_name+' — '+r.failure+' ['+r.final_status+']\n';});msg+='\n';}
+  genShiftPDF(shift);
+  window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+}
+
+function shareTireWA(){
+  var p=project();if(!p)return;
+  var insps=(p.tireInspections||[]).filter(function(x){return x.work_date===state.date;});
+  var msg='*INSPECCIÓN LLANTAS — '+(p?p.name:'')+'*\nFecha: '+state.date+'\nEquipos: '+insps.length+'\n\n';
+  insps.forEach(function(x){
+    msg+='*'+x.eco+' — '+x.equipment_name+'*\n';
+    (x.details||[]).forEach(function(d){msg+='  Llanta '+d.position+': '+d.status+(d.vida_util?' ('+d.vida_util+'%)':'')+'\n';});
+    msg+='\n';
+  });
+  genTirePDF();
+  window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+}
+
+function openMenu(){document.getElementById('menuOverlay').classList.add('show');document.getElementById('menu').classList.add('open');}
+function closeMenu(){document.getElementById('menuOverlay').classList.remove('show');document.getElementById('menu').classList.remove('open');}
+function showModal(h){document.getElementById('modal').innerHTML=h;document.getElementById('modalOverlay').classList.add('show');}
+function closeModal(){document.getElementById('modalOverlay').classList.remove('show');}
+
+function pickDate(){
+  showModal(`<h2>Seleccionar fecha</h2><div class="field"><input type="date" id="datePick" value="${state.date}"></div><div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="state.date=document.getElementById('datePick').value;closeModal();render()">Listo</button></div>`);
+}
+
+function showAdd(){
+  if(state.tab===0)showAddEquipment();
+  else if(state.tab===1||state.tab===2)showAddConsumption(state.tab);
+  else showAddTire();
+}
+
+function showAddEquipment(){
+  showModal(`<h2>Nuevo equipo</h2>
+    <div class="field"><label>Area / Categoria</label><input id="fCat"></div>
+    <div class="field"><label>Nombre del equipo</label><input id="fName"></div>
+    <div class="field"><label>Numero ECO</label><input id="fEco"></div>
+    <div class="field"><label>Horómetro</label><input id="fHM"></div>
+    <div class="field"><label>Estado</label><select id="fStatus"><option>DISPONIBLE</option><option>OPERATIVA</option><option>FUERA DE SERVICIO</option></select></div>
+    <div class="field"><label>Observaciones</label><input id="fNotes"></div>
+    <div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="saveNewEquipment()">Guardar</button></div>`);
+}
+
+function saveNewEquipment(){
+  const p=project();if(!p)return;
+  const eq={category:g('fCat'),name:g('fName'),eco:g('fEco'),hour_meter:g('fHM'),current_status:g('fStatus'),notes:g('fNotes'),active:true};
+  if(!eq.name||!eq.eco){toast('Nombre y ECO son requeridos');return;}
+  if(p.id){
+    spin(true);
+    api('/equipment',{method:'POST',body:JSON.stringify({project_id:p.id,category:eq.category,name:eq.name,eco:eq.eco,hour_meter:eq.hour_meter,current_status:eq.current_status,notes:eq.notes,active:true})})
+      .then(r=>r.json()).then(created=>{
+        if(created.detail){throw new Error(created.detail);}
+        p.equipment.push(created);saveLocal();closeModal();render();toast('Equipo guardado en servidor');
+      }).catch(e=>toast('Error al guardar: '+e.message)).finally(()=>spin(false));
+  }else{
+    p.equipment.push(eq);saveLocal();closeModal();render();toast('Equipo guardado');
+  }
+}
+
+function editEquipment(eq){
+  showModal(`<h2>Editar equipo</h2>
+    <div class="field"><label>Area / Categoria</label><input id="fCat" value="${eq.category||''}"></div>
+    <div class="field"><label>Nombre del equipo</label><input id="fName" value="${eq.name||''}"></div>
+    <div class="field"><label>Numero ECO</label><input id="fEco" value="${eq.eco||''}"></div>
+    <div class="field"><label>Horómetro</label><input id="fHM" value="${eq.hour_meter||''}"></div>
+    <div class="field"><label>Estado</label><select id="fStatus">${['DISPONIBLE','OPERATIVA','FUERA DE SERVICIO'].map(s=>`<option${s===eq.current_status?' selected':''}>${s}</option>`).join('')}</select></div>
+    <div class="field"><label>Observaciones</label><input id="fNotes" value="${eq.notes||''}"></div>
+    <div class="modal-actions"><button class="btn-danger" onclick="deleteEquipment('${eq.eco}','${eq.category}')">Eliminar</button><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="updateEquipment('${eq.eco}','${eq.category}')">Guardar</button></div>`);
+}
+
+function updateEquipment(eco,cat){
+  const p=project();const eq=p.equipment.find(x=>x.eco===eco&&x.category===cat);if(!eq)return;
+  eq.category=g('fCat');eq.name=g('fName');eq.eco=g('fEco');eq.hour_meter=g('fHM');eq.current_status=g('fStatus');eq.notes=g('fNotes');
+  if(eq.id){
+    spin(true);
+    api('/equipment/'+eq.id,{method:'PUT',body:JSON.stringify({category:eq.category,name:eq.name,eco:eq.eco,hour_meter:eq.hour_meter,current_status:eq.current_status,notes:eq.notes})})
+      .then(r=>r.json()).then(updated=>{
+        if(updated.detail){throw new Error(updated.detail);}
+        Object.assign(eq,updated);saveLocal();closeModal();render();toast('Equipo actualizado en servidor');
+      }).catch(e=>toast('Error al actualizar: '+e.message)).finally(()=>spin(false));
+  }else{
+    saveLocal();closeModal();render();toast('Equipo actualizado');
+  }
+}
+
+function deleteEquipment(eco,cat){
+  const p=project();const idx=p.equipment.findIndex(x=>x.eco===eco&&x.category===cat);if(idx<0)return;
+  if(!confirm('Eliminar el equipo '+eco+'?'))return;
+  const eq=p.equipment[idx];
+  const remove=()=>{p.equipment.splice(idx,1);saveLocal();closeModal();render();};
+  if(eq.id){
+    spin(true);
+    api('/equipment/'+eq.id,{method:'DELETE'}).then(r=>{
+      if(!r.ok&&r.status!==204){return r.json().then(b=>{throw new Error(b.detail||'Error');});}
+      remove();toast('Equipo eliminado del servidor');
+    }).catch(e=>toast('Error al eliminar: '+e.message)).finally(()=>spin(false));
+  }else{remove();toast('Equipo eliminado');}
+}
+
+function eqByIdOrEco(v){
+  const p=project();return (p.equipment||[]).find(e=>String(e.id)===String(v)||String(e.eco)===String(v));
+}
+function stampLid(x){if(x&&!x._lid){x._lid=Date.now().toString(36)+Math.random().toString(36).slice(2,8);}return x;}
+function mergeLocalOnly(remote,local){
+  const out=[].concat(remote||[]);
+  (local||[]).forEach(l=>{
+    if(l.id)return;
+    if(!out.some(o=>o._lid&&o._lid===l._lid)){out.push(stampLid(l));}
+  });
+  return out;
+}
+function findEditIdx(arr,editing){
+  if(!editing||!arr)return -1;
+  for(let i=0;i<arr.length;i++){if(arr[i]&&(arr[i]._lid&&arr[i]._lid===editing._lid)||(editing.id&&arr[i].id===editing.id))return i;}
+  return -1;
+}
+function showAddConsumption(shift,item){
+  const p=project();const eqOpts=(p.equipment||[]).map(e=>`<option value="${e.id||e.eco}"${item&&item.eco===e.eco?' selected':''}>${e.eco} - ${e.name}</option>`).join('');
+  const it=item||{};
+  showModal(`<h2>${item?'Editar consumo':'Nuevo consumo'}</h2>
+    <div class="modal-sub">TURNO ${shift} • ${state.date}</div>
+    <div class="field"><label>Equipo</label><select id="fEq">${eqOpts}</select></div>
+    <div class="field"><label>Lubricante</label><input id="fLub" list="lubList" value="${(it.lubricant||'').replace(/"/g,'&quot;')}"><datalist id="lubList"><option>Aceite motor 15W40</option><option>Aceite hidraulico ISO 68</option><option>Aceite transmision TO-4</option><option>Aceite diferencial 80W90</option><option>Grasa EP2</option><option>Refrigerante</option></datalist></div>
+    <div class="field-row"><div class="field"><label>Cantidad</label><input id="fQty" type="number" step="0.1" value="${it.quantity||''}"></div><div class="field"><label>Unidad</label><select id="fUnit"><option>L</option><option>kg</option><option>cubeta</option><option>pieza</option></select></div></div>
+    <div class="field"><label>Observaciones</label><input id="fNotes" value="${(it.notes||'').replace(/"/g,'&quot;')}"></div>
+    <div class="field"><label>Supervisor en turno</label><input id="fSup" list="supList" value="${(it.supervisor_name||state.lastSupervisor||'').replace(/"/g,'&quot;')}" placeholder="Nombre del supervisor"><datalist id="supList">${state.supervisors.map(s=>`<option>${s.name}</option>`).join('')}</datalist></div>
+    <div class="modal-actions">${item?'<button class="btn-danger" onclick="deleteConsumption('+shift+')">Eliminar</button>':''}<button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="saveConsumption(${shift})">${item?'Guardar cambios':'Guardar'}</button></div>`);
+  if(item){const sel=document.getElementById('fUnit');Array.from(sel.options).forEach(o=>{if(o.value===item.unit)sel.value=item.unit;});}
+}
+
+function saveConsumption(shift){
+  const p=project();if(!p)return;
+  const pkey=shift===1?'consumptions1':'consumptions2';
+  const eq=eqByIdOrEco(document.getElementById('fEq').value);
+  const c={work_date:state.date,shift:shift,lubricant:g('fLub'),quantity:parseFloat(g('fQty'))||0,unit:g('fUnit'),notes:g('fNotes'),supervisor_name:g('fSup'),eco:eq?eq.eco:'',equipment_name:eq?eq.name:''};
+  if(!c.lubricant||c.quantity<=0){toast('Lubricante y cantidad son requeridos');return;}
+  rememberSupervisor(c.supervisor_name);
+  const editing=state.editingConsumption;
+  const arr=p[pkey]||[];p[pkey]=arr;
+  const idx=findEditIdx(arr,editing);
+  c._lid=(editing&&editing._lid)||Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+  if(idx>=0){Object.assign(p[pkey][idx],c);}
+  else{(p[pkey]=p[pkey]||[]).push(c);}
+  state.editingConsumption=null;
+  saveLocal();
+  const target=idx>=0?p[pkey][idx]:c;
+  persistConsumption(target,shift).then(saved=>{
+    closeModal();render();toast(saved?'Consumo '+((idx>=0)?'actualizado':'guardado')+(p.id?' en servidor':'')+((saved?'':' (sin conexion)')):'Consumo guardado');
+  }).catch(e=>{closeModal();render();toast('Error al guardar: '+e.message);});
+}
+
+function persistConsumption(item,shift){
+  const p=project();
+  if(!p.id)return Promise.resolve(false);
+  const eq=eqByIdOrEco(item.eco);
+  if(!eq||!eq.id){return Promise.resolve(false);}
+  const payload={project_id:p.id,equipment_id:eq.id,work_date:item.work_date,shift:shift,lubricant:item.lubricant,quantity:item.quantity,unit:item.unit,notes:item.notes,supervisor_name:item.supervisor_name};
+  const method=item.id?'PUT':'POST';
+  const url='/consumptions'+(item.id?'/'+item.id:'');
+  return api(url,{method:method,body:JSON.stringify(payload)}).then(r=>r.json()).then(res=>{
+    if(res.detail)throw new Error(res.detail);
+    item.id=res.id;return true;
+  });
+}
+
+function deleteConsumption(shift){
+  const p=project();if(!p)return;
+  const pkey=shift===1?'consumptions1':'consumptions2';
+  const editing=state.editingConsumption;if(!editing)return;
+  const arr=p[pkey]||[];const idx=findEditIdx(arr,editing);if(idx<0)return;
+  if(!confirm('Eliminar el consumo "'+arr[idx].lubricant+'"?'))return;
+  const target=arr[idx];const remove=()=>{arr.splice(idx,1);state.editingConsumption=null;saveLocal();closeModal();render();};
+  if(target.id&&p.id){
+    spin(true);
+    api('/consumptions/'+target.id,{method:'DELETE'}).then(r=>{
+      if(!r.ok&&r.status!==204){return r.json().then(b=>{throw new Error(b.detail||'Error');});}
+      remove();toast('Consumo eliminado del servidor');
+    }).catch(e=>toast('Error al eliminar: '+e.message)).finally(()=>spin(false));
+  }else{remove();toast('Consumo eliminado');}
+}
+
+function showAddReport(shift,item){
+  const p=project();const eqOpts=(p.equipment||[]).map(e=>`<option value="${e.id||e.eco}"${item&&item.eco===e.eco?' selected':''}>${e.eco} - ${e.name}</option>`).join('');
+  const it=item||{};
+  _reportEvidence=it.evidence||'';
+  const sel=(id,arr,val)=>arr.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('');
+  showModal(`<h2>${item?'Editar reporte mecánico':'Nuevo reporte mecánico'}</h2>
+    <div class="modal-sub">TURNO ${shift} • ${state.date}</div>
+    <div class="field"><label>Mecánico (nombre completo)</label><input id="fMech" value="${(it.mechanic_name||'').replace(/"/g,'&quot;')}"></div>
+    <div class="field"><label>Supervisor en turno</label><input id="fSup" list="supList" value="${(it.supervisor_name||state.lastSupervisor||'').replace(/"/g,'&quot;')}" placeholder="Nombre del supervisor"><datalist id="supList">${state.supervisors.map(s=>`<option>${s.name}</option>`).join('')}</datalist></div>
+    <div class="field"><label>Equipo</label><select id="fEq">${eqOpts}</select></div>
+    <div class="field-row"><div class="field"><label>Horómetro</label><input id="fHM" value="${(it.hour_meter||'').replace(/"/g,'&quot;')}" placeholder="Ej. 1,234.5"></div><div class="field"><label>Tipo de servicio</label><select id="fType">${sel('fType',['Correctivo','Preventivo','Inspección','Rescate'],it.service_type)}</select></div></div>
+    <div class="field"><label>Falla reportada</label><textarea id="fFail">${(it.failure||'').replace(/</g,'&lt;')}</textarea></div>
+    <div class="field"><label>Trabajo realizado</label><textarea id="fWork">${(it.work_done||'').replace(/</g,'&lt;')}</textarea></div>
+    <div class="field"><label>Refacciones utilizadas</label><textarea id="fParts">${(it.parts_used||'').replace(/</g,'&lt;')}</textarea></div>
+    <div class="field"><label>Estado final</label><select id="fStatus">${sel('fStatus',['Disponible','Operativa','Pendiente','Fuera de servicio'],it.final_status)}</select></div>
+    <div class="field"><label>Evidencia fotográfica</label><div id="evidenceThumb">${_reportEvidence?'<img src="'+_reportEvidence+'" style="max-width:120px;max-height:90px;border-radius:8px">':'Ninguna adjunta'}</div>
+      <div class="modal-actions" style="justify-content:flex-start;margin-top:4px">
+        <button class="btn-save" onclick="triggerEvidenceInput(true)">Tomar foto</button>
+        <button class="btn-cancel" onclick="triggerEvidenceInput(false)">Galería</button>
+      </div></div>
+    <div class="modal-actions">${item?'<button class="btn-danger" onclick="deleteReport('+shift+')">Eliminar</button>':''}<button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="saveReport(${shift})">${item?'Guardar cambios':'Guardar reporte'}</button></div>`);
+}
+
+function saveReport(shift){
+  const p=project();if(!p)return;
+  const mkey=shift===1?'mechanicReports1':'mechanicReports2';
+  const eq=eqByIdOrEco(document.getElementById('fEq').value);
+  const r={work_date:state.date,shift:shift,mechanic_name:g('fMech'),hour_meter:g('fHM'),service_type:g('fType'),failure:g('fFail'),work_done:g('fWork'),parts_used:g('fParts'),final_status:g('fStatus'),supervisor_name:g('fSup'),eco:eq?eq.eco:'',equipment_name:eq?eq.name:'',evidence:_reportEvidence||undefined};
+  if(!r.mechanic_name||!r.failure){toast('Mecánico y falla son requeridos');return;}
+  rememberSupervisor(r.supervisor_name);
+  const editing=state.editingReport;
+  const arr=p[mkey]||[];p[mkey]=arr;
+  const idx=findEditIdx(arr,editing);
+  r._lid=(editing&&editing._lid)||Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+  if(idx>=0){Object.assign(arr[idx],r);}
+  else{arr.push(r);}
+  state.editingReport=null;
+  saveLocal();
+  const target=idx>=0?arr[idx]:r;
+  persistReport(target,shift).then(saved=>{
+    closeModal();render();toast('Reporte '+((idx>=0)?'actualizado':'guardado')+(p.id&&saved?' en servidor':'')+(p.id&&!saved?' (sin conexion)':''));
+  }).catch(e=>{closeModal();render();toast('Error al guardar: '+e.message);});
+}
+
+function persistReport(item,shift){
+  const p=project();
+  if(!p.id)return Promise.resolve(false);
+  const eq=eqByIdOrEco(item.eco);
+  if(!eq||!eq.id){return Promise.resolve(false);}
+  const payload={project_id:p.id,equipment_id:eq.id,work_date:item.work_date,shift:shift,mechanic_name:item.mechanic_name,supervisor_name:item.supervisor_name,hour_meter:item.hour_meter,service_type:item.service_type,failure:item.failure,work_done:item.work_done,parts_used:item.parts_used,final_status:item.final_status};
+  if(item.evidence){payload.evidence_url=item.evidence;}
+  const method=item.id?'PUT':'POST';
+  const url='/mechanic-reports'+(item.id?'/'+item.id:'');
+  return api(url,{method:method,body:JSON.stringify(payload)}).then(r=>r.json()).then(res=>{
+    if(res.detail)throw new Error(res.detail);
+    item.id=res.id;
+    const e2=eqByIdOrEco(item.eco);
+    if(e2){e2.current_status={Disponible:'DISPONIBLE',Operativa:'OPERATIVA','Fuera de servicio':'FUERA DE SERVICIO'}[item.final_status]||e2.current_status;saveLocal();}
+    return true;
+  });
+}
+
+function deleteReport(shift){
+  const p=project();if(!p)return;
+  const mkey=shift===1?'mechanicReports1':'mechanicReports2';
+  const editing=state.editingReport;if(!editing)return;
+  const arr=p[mkey]||[];const idx=findEditIdx(arr,editing);if(idx<0)return;
+  if(!confirm('Eliminar el reporte de '+arr[idx].mechanic_name+'?'))return;
+  const target=arr[idx];const remove=()=>{arr.splice(idx,1);state.editingReport=null;saveLocal();closeModal();render();};
+  if(target.id&&p.id){
+    spin(true);
+    api('/mechanic-reports/'+target.id,{method:'DELETE'}).then(r=>{
+      if(!r.ok&&r.status!==204){return r.json().then(b=>{throw new Error(b.detail||'Error');});}
+      remove();toast('Reporte eliminado del servidor');
+    }).catch(e=>toast('Error al eliminar: '+e.message)).finally(()=>spin(false));
+  }else{remove();toast('Reporte eliminado');}
+}
+
+function showAddTire(item){
+  const p=project();const eqOpts=(p.equipment||[]).map(e=>`<option value="${e.eco}"${item&&item.eco===e.eco?' selected':''}>${e.eco} - ${e.name}</option>`).join('');
+  const it=item||{};
+  showModal(`<h2>${item?'Editar inspección de llantas':'Nueva inspección de llantas'}</h2>
+    <div class="modal-sub">Fecha: ${state.date}</div>
+    <div class="field"><label>Equipo</label><select id="fEq" onchange="updateTirePositions()">${eqOpts}</select></div>
+    <div class="field-row"><div class="field"><label>Horómetro</label><input id="fHM" value="${(it.hour_meter||'').replace(/"/g,'&quot;')}"></div><div class="field"><label>Ubicación</label><input id="fLoc" value="${(it.location||'').replace(/"/g,'&quot;')}"></div></div>
+    <div class="field"><label>Inspector</label><input id="fInsp" value="${(it.inspector_name||'').replace(/"/g,'&quot;')}"></div>
+    <div id="tireFields"></div>
+    <div class="field"><label>Supervisor en turno</label><input id="fSup" list="supList" value="${(it.supervisor_name||state.lastSupervisor||'').replace(/"/g,'&quot;')}" placeholder="Nombre del supervisor"><datalist id="supList">${state.supervisors.map(s=>`<option>${s.name}</option>`).join('')}</datalist></div>
+    <div class="field"><label>Observaciones generales</label><textarea id="fNotes">${(it.general_notes||'').replace(/</g,'&lt;')}</textarea></div>
+    <div class="modal-actions">${item?'<button class="btn-danger" onclick="deleteTire()">Eliminar</button>':''}<button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="saveTire()">${item?'Guardar cambios':'Guardar'}</button></div>`);
+  updateTirePositions(it.details||null,it.eco);
+}
+
+function tireCount(eco){
+  let n=4;if(eco==='MG-044'||eco==='MG-054')n=10;else if(eco==='MG-033')n=6;return n;
+}
+function updateTirePositions(details,eco){
+  const cur=document.getElementById('fEq')?.value||eco||'';
+  const n=details?details.length:tireCount(cur);
+  let h='';for(let i=1;i<=n;i++){
+    const d=details?details[i-1]||{}:{};
+    h+=`<div class="card"><div style="font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px">LLANTA ${i<=4?'POSICIÓN ':''}${i}</div>
+    <div class="field"><select id="tSt${i}"><option>Bueno</option><option>Aceptable</option><option>Regular</option><option>Malo</option></select></div>
+    <div class="field-row"><div class="field"><input id="tVU${i}" value="${(d.vida_util||'').replace(/"/g,'&quot;')}" placeholder="% Vida útil"></div><div class="field"><input id="tNt${i}" value="${(d.notes||'').replace(/"/g,'&quot;')}" placeholder="Observaciones"></div></div></div>`;
+  }
+  document.getElementById('tireFields').innerHTML=h;
+  if(details){for(let i=1;i<=n;i++){const d=details[i-1]||{};if(d.status){const s=document.getElementById('tSt'+i);if(s)Array.from(s.options).forEach(o=>{if(o.value===d.status)s.value=d.status;});}}}
+}
+
+function saveTire(){
+  const p=project();if(!p)return;
+  const eco=document.getElementById('fEq')?.value||'';
+  const n=tireCount(eco);
+  const details=[];for(let i=1;i<=n;i++){details.push({position:String(i),status:g('tSt'+i),vida_util:g('tVU'+i),notes:g('tNt'+i)});}
+  const eq=(p.equipment||[]).find(e=>e.eco===eco);
+  const insp={work_date:state.date,eco:eco,equipment_name:eq?eq.name:'',hour_meter:g('fHM'),location:g('fLoc'),inspector_name:g('fInsp'),supervisor_name:g('fSup'),general_notes:g('fNotes'),details:details};
+  rememberSupervisor(insp.supervisor_name);
+  const editing=state.editingTire;
+  const arr=p.tireInspections||[];p.tireInspections=arr;
+  const idx=findEditIdx(arr,editing);
+  insp._lid=(editing&&editing._lid)||Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+  if(idx>=0){Object.assign(arr[idx],insp);}
+  else{arr.push(insp);}
+  state.editingTire=null;
+  saveLocal();
+  const target=idx>=0?arr[idx]:insp;
+  persistTire(target).then(saved=>{
+    closeModal();render();toast('Inspección '+((idx>=0)?'actualizada':'guardada')+(p.id&&saved?' en servidor':'')+(p.id&&!saved?' (sin conexion)':''));
+  }).catch(e=>{closeModal();render();toast('Error al guardar: '+e.message);});
+}
+
+function persistTire(item){
+  const p=project();
+  if(!p.id)return Promise.resolve(false);
+  const eq=eqByIdOrEco(item.eco);
+  if(!eq||!eq.id)return Promise.resolve(false);
+  const payload={project_id:p.id,equipment_id:eq.id,work_date:item.work_date,hour_meter:item.hour_meter,location:item.location,inspector_name:item.inspector_name,supervisor_name:item.supervisor_name,general_notes:item.general_notes,details:item.details.map(d=>({position:d.position,status:d.status,vida_util:d.vida_util,notes:d.notes}))};
+  const method=item.id?'PUT':'POST';
+  const url='/tire-inspections'+(item.id?'/'+item.id:'');
+  return api(url,{method:method,body:JSON.stringify(payload)}).then(r=>r.json()).then(res=>{
+    if(res.detail)throw new Error(res.detail);
+    item.id=res.id;item.details=(res.details&&res.details.length?res.details:item.details).map(d=>({position:String(d.position),status:d.status,vida_util:d.vida_util,notes:d.notes}));return true;
+  });
+}
+
+function deleteTire(){
+  const p=project();if(!p)return;
+  const editing=state.editingTire;if(!editing)return;
+  const arr=p.tireInspections||[];const idx=findEditIdx(arr,editing);if(idx<0)return;
+  if(!confirm('Eliminar la inspección de '+arr[idx].eco+'?'))return;
+  const target=arr[idx];const remove=()=>{arr.splice(idx,1);state.editingTire=null;saveLocal();closeModal();render();};
+  if(target.id&&p.id){
+    spin(true);
+    api('/tire-inspections/'+target.id,{method:'DELETE'}).then(r=>{
+      if(!r.ok&&r.status!==204){return r.json().then(b=>{throw new Error(b.detail||'Error');});}
+      remove();toast('Inspección eliminada del servidor');
+    }).catch(e=>toast('Error al eliminar: '+e.message)).finally(()=>spin(false));
+  }else{remove();toast('Inspección eliminada');}
+}
+
+function doSync(silent){
+  if(!silent){closeMenu();spin(true);}
+  fetch(API+'/api/v1/projects',{headers:{'Authorization':'Bearer '+KEY}}).then(r=>r.json()).then(list=>{
+    list.forEach(rp=>{
+      let idx=state.projects.findIndex(p=>p.id===rp.id);
+      if(idx<0){state.projects.push({name:rp.name,id:rp.id,equipment:[],consumptions1:[],consumptions2:[],mechanicReports1:[],mechanicReports2:[],tireInspections:[]});idx=state.projects.length-1;}
+    });saveLocal();
+    const p=project();if(p&&p.id){
+      return Promise.all([
+        fetch(API+'/api/v1/equipment?project_id='+p.id,{headers:{'Authorization':'Bearer '+KEY}}).then(r=>r.json()),
+        fetch(API+'/api/v1/consumptions?project_id='+p.id,{headers:{'Authorization':'Bearer '+KEY}}).then(r=>r.json()),
+        fetch(API+'/api/v1/mechanic-reports?project_id='+p.id,{headers:{'Authorization':'Bearer '+KEY}}).then(r=>r.json()),
+        fetch(API+'/api/v1/tire-inspections?project_id='+p.id,{headers:{'Authorization':'Bearer '+KEY}}).then(r=>r.json()),
+        fetch(API+'/api/v1/supervisors?project_id='+p.id,{headers:{'Authorization':'Bearer '+KEY}}).then(r=>r.json())
+      ]).then(([eq,c,m,t,s])=>{
+        p.equipment=(eq||[]).filter(x=>x.active!==false);state.supervisors=s||[];
+        const enrich=x=>{const e=eqByIdOrEco(x.equipment_id);if(e){x.eco=e.eco;x.equipment_name=e.name;}return x;};
+        p.consumptions1=mergeLocalOnly((c||[]).filter(x=>x.shift===1).map(stampLid).map(enrich),p.consumptions1);
+        p.consumptions2=mergeLocalOnly((c||[]).filter(x=>x.shift===2).map(stampLid).map(enrich),p.consumptions2);
+        p.mechanicReports1=mergeLocalOnly((m||[]).filter(x=>x.shift===1).map(stampLid).map(enrich),p.mechanicReports1);
+        p.mechanicReports2=mergeLocalOnly((m||[]).filter(x=>x.shift===2).map(stampLid).map(enrich),p.mechanicReports2);
+        p.tireInspections=mergeLocalOnly((t||[]).map(stampLid).map(enrich),p.tireInspections);saveLocal();render();if(!silent)toast('Datos sincronizados');
+      });
+    }
+  }).catch(e=>toast('Error: '+e.message)).finally(()=>spin(false));
+}
+
+function showSwitchProject(){
+  closeMenu();let h='<h2>Cambiar proyecto</h2>';
+  state.projects.forEach((p,i)=>{
+    h+=`<button class="menu-item" onclick="state.current=${i};saveLocal();closeModal();render();closeMenu()">${i===state.current?'✅ ':' '}${p.name} <span style="color:#aaa;font-size:11px">(${(p.equipment||[]).length} eq)</span></button>`;
+  });h+=`<div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Cerrar</button></div>`;showModal(h);
+}
+
+function showNewProject(){closeMenu();showModal(`<h2>Nuevo proyecto</h2><div class="field"><label>Nombre</label><input id="fName"></div><div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="const n=g('fName');if(n){state.projects.push({name:n,id:null,equipment:[],consumptions1:[],consumptions2:[],mechanicReports1:[],mechanicReports2:[],tireInspections:[]});state.current=state.projects.length-1;saveLocal();closeModal();render();toast('Proyecto creado')}">Crear</button></div>`);}
+function duplicateProject(){closeMenu();const p=project();if(!p)return;const d=JSON.parse(JSON.stringify(p));d.id=null;d.name+=' (copia)';state.projects.push(d);state.current=state.projects.length-1;saveLocal();render();toast('Proyecto duplicado');}
+function showRenameProject(){closeMenu();showModal(`<h2>Renombrar proyecto</h2><div class="field"><label>Nombre</label><input id="fName" value="${project()?.name||''}"></div><div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="const n=g('fName');if(n&&project()){project().name=n;saveLocal();closeModal();render();toast('Renombrado')}">Guardar</button></div>`);}
+function clearProject(){closeMenu();if(!confirm('Se eliminaran todos los datos del proyecto.'))return;const p=project();if(!p)return;p.equipment=[];p.consumptions1=[];p.consumptions2=[];p.mechanicReports1=[];p.mechanicReports2=[];p.tireInspections=[];saveLocal();render();toast('Proyecto vaciado');}
+function deleteProject(){closeMenu();if(!confirm('Se eliminara el proyecto actual.'))return;state.projects.splice(state.current,1);state.current=Math.max(0,state.current-1);saveLocal();render();toast('Proyecto eliminado');}
+
+function showDownloadReports(){
+  closeMenu();
+  const mods=[['equipment-status','Estado de equipos'],['consumptions','Consumos'],['mechanic-reports','Reportes mecánicos'],['tire-inspections','Inspección de llantas']];
+  let h='<h2>Descargar reportes</h2>';
+  mods.forEach(m=>{
+    h+=`<div class="card" style="margin-bottom:8px"><div style="font-weight:700;margin-bottom:6px">${m[1]}</div>
+      <div class="modal-actions" style="justify-content:flex-start">
+        <button class="btn-save" onclick="downloadRepoFile('excel','${m[0]}')">Excel</button>
+        <button class="btn-save" onclick="downloadRepoFile('pdf','${m[0]}')">PDF</button>
+      </div></div>`;
+  });
+  h+=`<div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Cerrar</button></div>`;showModal(h);
+}
+function downloadRepoFile(fmt,module){
+  spin(true);toast('Generando '+fmt.toUpperCase()+'...');
+  api('/reports/'+fmt+'/'+module).then(r=>{
+    if(!r.ok)throw new Error('No se pudo generar el reporte');
+    return r.blob();
+  }).then(blob=>{
+    const a=document.createElement('a');
+    const ts=state.date.replace(/-/g,'');
+    const map={equipment-status:'equipos',consumptions:'consumos',mechanic-reports:'mecanicos',tire-inspections:'llantas'};
+    a.href=URL.createObjectURL(blob);
+    a.download=(map[module]||module)+'_'+ts+'.'+(fmt==='excel'?'xlsx':'pdf');
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+    toast('Reporte descargado');
+  }).catch(e=>toast('Error: '+e.message)).finally(()=>spin(false));
+}
+function checkForUpdate(){
+  closeMenu();spin(true);
+  api('/app-version').then(r=>r.json()).then(v=>{
+    const cur='5.8.0';
+    const latest=v&&v.version_name?v.version_name:'';
+    const isNew=latest&&latest!==cur;
+    toast('Version actual PWA: '+cur+(latest?' | Servidor: '+latest:''));
+    if(isNew&&confirm('Hay una version nueva ('+latest+'). ¿Descargar el APK?')){
+      const a=document.createElement('a');a.href=API+'/api/v1/app-download';a.click();
+    }
+  }).catch(()=>toast('No se pudo verificar version')).finally(()=>spin(false));
+}
+function showAccessConfig(){
+  closeMenu();
+  showModal(`<h2>Configurar acceso</h2>
+    <div class="field"><label>Clave de acceso (API key)</label><input id="fKey" value="${KEY.replace(/"/g,'&quot;')}" placeholder="MTTOPROV"></div>
+    <div class="field"><label>Servidor</label><input id="fServer" value="${API}"></div>
+    <div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-save" onclick="saveAccessConfig()">Guardar</button></div>`);
+}
+function saveAccessConfig(){
+  const k=g('fKey').trim();
+  const srv=g('fServer').trim();
+  if(!k){toast('La clave no puede estar vacía');return;}
+  if(!srv){toast('El servidor no puede estar vacío');return;}
+  localStorage.setItem('disponibilidad_api_key',k);
+  toast('Acceso configurado. Recarga para aplicar.');
+  closeModal();
+}
+  if(state.lastSupervisor&&state.lastSupervisor.trim())return;
+  const asked=sessionStorage.getItem('pwa_sup_prompted');
+  if(asked)return;
+  sessionStorage.setItem('pwa_sup_prompted','1');
+  showModal(`<h2>Supervisor en turno</h2>
+    <div class="field"><label>Escribe tu nombre (supervisor)</label><input id="fSupInit" placeholder="Nombre completo"></div>
+    <div class="modal-actions"><button class="btn-cancel" onclick="closeModal()">Ahora no</button><button class="btn-save" onclick="const s=document.getElementById('fSupInit').value;if(!s||!s.trim()){toast('Escribe tu nombre');return;}rememberSupervisor(s);document.getElementById('supBarInput').value=s;closeModal();toast('Supervisor: '+s)">Guardar</button></div>`);
+}
+
+function uploadImageFile(file,kind){
+  const fd=new FormData();fd.append('file',file);
+  return fetch(API+'/api/v1/uploads/'+kind,{method:'POST',headers:{'Authorization':'Bearer '+KEY},body:fd})
+    .then(r=>r.json()).then(res=>{
+      if(res.file_url)return res.file_url;
+      if(res.detail)throw new Error(res.detail);
+      throw new Error('No se pudo subir la imagen');
+    });
+}
+function compressImage(file,cb){
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      const MAX=900;let w=img.width,h=img.height;
+      if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+      const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+      cv.getContext('2d').drawImage(img,0,0,w,h);
+      cb(cv.toDataURL('image/jpeg',0.72));
+    };
+    img.onerror=function(){cb(null);};
+    img.src=e.target.result;
+  };
+  reader.onerror=function(){cb(null);};
+  reader.readAsDataURL(file);
+}
+let _reportEvidence=null;
+function openEvidencePicker(){
+  if(!navigator.mediaDevices&&!document.createElement('input').capture)return triggerEvidenceInput(false);
+  return true;
+}
+function triggerEvidenceInput(capture){
+  const inp=document.createElement('input');
+  inp.type='file';inp.accept='image/*';
+  if(capture)inp.setAttribute('capture','environment');
+  inp.style.display='none';
+  inp.onchange=function(){
+    const f=inp.files&&inp.files[0];inp.remove();
+    if(!f)return;
+    const p=project();
+    if(p&&p.id&&KEY){
+      uploadImageFile(f,'mechanic-evidence').then(url=>{
+        _reportEvidence=url;
+        document.getElementById('evidenceThumb')&&(document.getElementById('evidenceThumb').innerHTML='<img src="'+url+'" style="max-width:120px;max-height:90px;border-radius:8px">');
+        toast('Evidencia subida');
+      }).catch(e=>{
+        compressImage(f,function(d){if(d){_reportEvidence=d;document.getElementById('evidenceThumb')&&(document.getElementById('evidenceThumb').innerHTML='<img src="'+d+'" style="max-width:120px;max-height:90px;border-radius:8px">');}toast('Guardando local: '+e.message);});
+      });
+    }else{
+      compressImage(f,function(d){
+        if(d){_reportEvidence=d;document.getElementById('evidenceThumb')&&(document.getElementById('evidenceThumb').innerHTML='<img src="'+d+'" style="max-width:120px;max-height:90px;border-radius:8px">');toast('Evidencia guardada (local)');}
+      });
+    }
+  };
+  document.body.appendChild(inp);inp.click();
+}
+
+function g(id){const e=document.getElementById(id);return e?e.value:'';}
+function rememberSupervisor(name){if(name&&name.trim()){state.lastSupervisor=name.trim();localStorage.setItem('pwa_supervisor',state.lastSupervisor);}}
+function editConsumption(c,shift){state.editingConsumption=c;showAddConsumption(shift,c);}
+function editReport(r,shift){state.editingReport=r;showAddReport(shift,r);}
+function editTire(t){state.editingTire=t;showAddTire(t);}
+
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
+try{loadLocal();render();promptSupervisorIfMissing();const sp=document.getElementById('spinner');if(sp)sp.style.display='none';}catch(e){console.error('Init error:',e);try{seed();render();const sp2=document.getElementById('spinner');if(sp2)sp2.style.display='none';}catch(e2){console.error('Fallback failed:',e2);}}
+</script>
+</body>
+</html>
