@@ -534,11 +534,17 @@ LUBRICANT_PRESENTATIONS_WEB = [
 LUBRICANT_PRESENTATION_FACTORS = {name.upper(): float(factor) for name, factor in LUBRICANT_PRESENTATIONS_WEB}
 
 
+# Build connect_args only for PostgreSQL (psycopg) - SQLite doesn't support these
+db_url = database_url()
+connect_args = {}
+if db_url.startswith("postgresql"):
+    connect_args = {"connect_timeout": 10, "keepalives": 1, "keepalives_idle": 15, "keepalives_interval": 15, "keepalives_count": 3}
+
 engine = create_engine(
-    database_url(),
+    db_url,
     pool_pre_ping=True,
     poolclass=NullPool,
-    connect_args={"connect_timeout": 10, "keepalives": 1, "keepalives_idle": 15, "keepalives_interval": 15, "keepalives_count": 3},
+    connect_args=connect_args,
 )
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base.metadata.create_all(engine)
@@ -654,25 +660,57 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# Disponibilidad sub-app integration - include routers directly
 import sys
 from pathlib import Path
 
-# Ensure project root is in Python path for sub-app imports
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-print(f"[disponibilidad] PROJECT_ROOT={PROJECT_ROOT}", flush=True)
-print(f"[disponibilidad] sys.path[0:3]={sys.path[:3]}", flush=True)
-
 try:
-    from app.main import app as disponibilidad_app
-    print("[disponibilidad] Import successful, mounting...", flush=True)
-    app.mount("/disponibilidad", disponibilidad_app, name="disponibilidad")
-    print("[disponibilidad] Mounted at /disponibilidad", flush=True)
+    from app.api.auth import router as auth_router
+    from app.api.categories import router as categories_router
+    from app.api.projects import router as projects_router
+    from app.api.equipment import router as equipment_router
+    from app.api.consumptions import router as consumptions_router
+    from app.api.mechanic_reports import router as mechanic_reports_router
+    from app.api.tire_inspections import router as tire_inspections_router
+    from app.api.uploads import router as uploads_router
+    from app.api.reports import router as reports_router
+    from app.api.supervisors import router as supervisors_router
+    from app.api.users import router as users_router
+
+    # Include all routers with /disponibilidad prefix
+    app.include_router(auth_router, prefix="/disponibilidad/api/v1")
+    app.include_router(categories_router, prefix="/disponibilidad/api/v1")
+    app.include_router(projects_router, prefix="/disponibilidad/api/v1")
+    app.include_router(equipment_router, prefix="/disponibilidad/api/v1")
+    app.include_router(consumptions_router, prefix="/disponibilidad/api/v1")
+    app.include_router(mechanic_reports_router, prefix="/disponibilidad/api/v1")
+    app.include_router(tire_inspections_router, prefix="/disponibilidad/api/v1")
+    app.include_router(uploads_router, prefix="/disponibilidad/api/v1")
+    app.include_router(reports_router, prefix="/disponibilidad/api/v1")
+    app.include_router(supervisors_router, prefix="/disponibilidad/api/v1")
+    app.include_router(users_router, prefix="/disponibilidad/api/v1")
+
+    # Health endpoint
+    @app.get("/disponibilidad/health")
+    def disponibilidad_health():
+        return {"status": "healthy"}
+
+    # PWA static files
+    from fastapi.staticfiles import StaticFiles
+    from pathlib import Path
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    PWA_DIR = BASE_DIR / "static" / "disponibilidad"
+    if PWA_DIR.is_dir():
+        app.mount("/disponibilidad", StaticFiles(directory=str(PWA_DIR), html=True), name="disponibilidad_pwa")
+
+    print("[disponibilidad] All routers integrated with /disponibilidad prefix")
 except Exception as exc:
     import traceback
-    print(f"[disponibilidad] ERROR: {exc!r}", flush=True)
+    print(f"[disponibilidad] Integration error: {exc!r}", flush=True)
     traceback.print_exc()
 
 
