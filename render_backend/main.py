@@ -10416,7 +10416,7 @@ WAREHOUSE_HTML = r"""<!doctype html>
       <button data-tab="ejecucionPreventivos" data-group="planeacion">Ejecución PM</button>
       <button data-tab="fichaEquipo" data-group="planeacion">Ficha equipo</button>
       <div class="nav-section-label">MANTENIMIENTO</div>
-      Catálogo equipos
+      <button data-tab="catalogoEquipos" data-group="mantto">Catálogo equipos</button>
       <button data-tab="servicios" data-group="mantto">Servicios</button>
       <button data-tab="serviciosEspeciales" data-group="mantto">Serv. especiales</button>
       <button data-tab="captura" data-group="mantto">Captura diaria</button>
