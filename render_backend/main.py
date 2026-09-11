@@ -699,13 +699,49 @@ try:
     def disponibilidad_health():
         return {"status": "healthy"}
 
-    # PWA static files
+    # Shared paths for static mounts
     from fastapi.staticfiles import StaticFiles
     from pathlib import Path
     BASE_DIR = Path(__file__).resolve().parent.parent
-    PWA_DIR = BASE_DIR.parent / "disponibilidad_pwa"
+
+    # app-version (for APK update checks)
+    _APP_VERSION_PATH = BASE_DIR / "app" / "app_version.json"
+
+    @app.get("/disponibilidad/api/v1/app-version")
+    def disponibilidad_app_version():
+        import json as _json
+        if not _APP_VERSION_PATH.is_file():
+            raise HTTPException(status_code=404, detail="Version no configurada")
+        data = _json.loads(_APP_VERSION_PATH.read_text(encoding="utf-8"))
+        data["download_url"] = "/disponibilidad/api/v1/app-download"
+        data["version_code"] = data.get("versionCode")
+        data["version_name"] = data.get("versionName")
+        return data
+
+    # app-download (Android APK)
+    @app.get("/disponibilidad/api/v1/app-download")
+    def disponibilidad_app_download():
+        target = BASE_DIR / "static" / "app" / "MGA_Control_Equipos.apk"
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="APK no disponible")
+        from fastapi.responses import FileResponse
+        return FileResponse(target, media_type="application/vnd.android.package-archive", filename="MGA_Control_Equipos.apk")
+
+    # Admin static files (must come BEFORE PWA catch-all mount)
+    ADMIN_DIR = BASE_DIR / "static" / "admin"
+    if ADMIN_DIR.is_dir():
+        from fastapi.responses import RedirectResponse as _RR
+        @app.get("/disponibilidad/admin", include_in_schema=False)
+        def _redir_admin():
+            return _RR(url="/disponibilidad/admin/")
+        app.mount("/disponibilidad/admin", StaticFiles(directory=str(ADMIN_DIR), html=True), name="disponibilidad_admin")
+
+    # PWA static files
+    PWA_DIR = BASE_DIR / "disponibilidad_pwa"
     if PWA_DIR.is_dir():
         app.mount("/disponibilidad", StaticFiles(directory=str(PWA_DIR), html=True), name="disponibilidad_pwa")
+    else:
+        print(f"[disponibilidad] PWA dir not found at {PWA_DIR}", flush=True)
 
     print("[disponibilidad] All routers integrated with /disponibilidad prefix")
 except Exception as exc:
@@ -12560,13 +12596,15 @@ let lubricants = { start: "", end: "", catalog: [], movements: [] };
         </div>`;
     }
     function activateTab(tabId){
-      const viewId = tabId === "catalogoEquiposFull" ? "catalogoEquipos" : tabId;
+      const viewId = tabId === "catalogoEquiposFull" ? "catalogoEquipos" : tabId === "inspeccion" ? "planInspeccion" : tabId;
       const button = document.querySelector(`.tabs button[data-tab="${tabId}"]`);
       if(!button) return;
       document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       button.classList.add("active");
-      $(viewId).classList.add("active");
+      const viewEl = $(viewId);
+      if(!viewEl) return;
+      viewEl.classList.add("active");
       $("stats").style.display = viewId === "dashboard" ? "" : "none";
       if(viewId === "kanban") renderKanban();
       if(viewId === "lubricantes"){ loadLubricantes().catch(showError); loadLubricantCuts().catch(showError); }
