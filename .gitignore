@@ -6,6 +6,8 @@ snapshot_backups/
 .env*
 
 _uv/
+.venv/
+venv/
 pyproject.toml
 uv.lock
 .python-version
